@@ -8,7 +8,6 @@ services:
   - type: web
     name: milvanta-api
     runtime: node
-    rootDir: backend
     plan: starter
     buildCommand: npm ci
     startCommand: npm start
