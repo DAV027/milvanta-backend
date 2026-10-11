@@ -5,7 +5,8 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
 import Razorpay from 'razorpay';
-import { createHmac, createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import nodemailer from 'nodemailer';
+import { createHmac, createHash, randomBytes, randomInt, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 
 const { Pool } = pg;
@@ -16,6 +17,14 @@ const pool = process.env.DATABASE_URL
   : null;
 const razorpay = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
   ? new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET })
+  : null;
+const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && process.env.SMTP_FROM
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+    })
   : null;
 
 await app.register(helmet);
@@ -37,6 +46,7 @@ function cookieValue(request, name) {
   try { return decodeURIComponent(entry.slice(name.length + 1)); } catch { return ''; }
 }
 const digest = (value) => createHash('sha256').update(value).digest('hex');
+const otpDigest = (email, otp) => createHmac('sha256', process.env.SMTP_PASS || '').update(`${email}:${otp}`).digest('hex');
 function setSessionCookies(reply, token, csrf) {
   const base = 'Path=/; Secure; SameSite=None';
   reply.header('Set-Cookie', [
@@ -134,39 +144,86 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
 
 app.post('/api/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const body = request.body || {};
-  const fullName = String(body.fullName || '').trim();
-  const email = String(body.email || '').trim().toLowerCase();
-  const phone = normalizePhone(body.phone);
-  const password = String(body.password || '');
-  if (fullName.length < 2 || fullName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !/^[6-9]\d{9}$/.test(phone) || password.length < 12 || password.length > 128) {
-    return reply.code(400).send({ error: 'invalid_registration', message: 'Enter your name, valid email and Indian mobile number, and a password of at least 12 characters.' });
+  if (!mailer) return reply.code(503).send({ error: 'email_not_configured' });
+  const email = String(request.body?.email || '').trim().toLowerCase();
+  const password = String(request.body?.password || '');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || password.length < 12 || password.length > 128) {
+    return reply.code(400).send({ error: 'invalid_registration', message: 'Enter a valid email and a password of at least 12 characters.' });
   }
+  if ((await pool.query('SELECT 1 FROM customers WHERE email = $1', [email])).rowCount) return reply.code(409).send({ error: 'account_already_exists' });
   const salt = randomBytes(16).toString('hex');
   const passwordHash = (await scryptAsync(password, salt, 64)).toString('hex');
+  const existing = await pool.query('SELECT resend_after FROM email_registration_codes WHERE email = $1', [email]);
+  if (existing.rows[0] && new Date(existing.rows[0].resend_after) > new Date()) {
+    return reply.code(429).send({ error: 'otp_resend_too_soon' });
+  }
+  const otp = String(randomInt(0, 1_000_000)).padStart(6, '0');
+  await pool.query(
+    `INSERT INTO email_registration_codes (email, otp_hash, password_salt, password_hash, expires_at, resend_after, attempts)
+     VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes', NOW() + INTERVAL '60 seconds', 0)
+     ON CONFLICT (email) DO UPDATE SET otp_hash = EXCLUDED.otp_hash, password_salt = EXCLUDED.password_salt,
+       password_hash = EXCLUDED.password_hash, expires_at = EXCLUDED.expires_at,
+       resend_after = EXCLUDED.resend_after, attempts = 0`,
+    [email, otpDigest(email, otp), salt, passwordHash]
+  );
   try {
-    const result = await pool.query(
-      `INSERT INTO customers (full_name, phone, email, password_salt, password_hash)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, full_name, phone, email`,
-      [fullName, phone, email, salt, passwordHash]
+    await mailer.sendMail({
+      from: process.env.SMTP_FROM, to: email, subject: 'Your Milvanta verification code',
+      text: `Your Milvanta email verification code is ${otp}. It expires in 10 minutes.`,
+      html: `<p>Your Milvanta email verification code is:</p><p style="font-size:24px;font-weight:bold;letter-spacing:6px">${otp}</p><p>This code expires in 10 minutes. If you did not request it, ignore this email.</p>`
+    });
+  } catch (error) {
+    await pool.query('DELETE FROM email_registration_codes WHERE email = $1', [email]);
+    request.log.error({ err: error }, 'Email verification delivery failed');
+    return reply.code(502).send({ error: 'otp_delivery_failed' });
+  }
+  return reply.code(202).send({ verificationRequired: true, email });
+});
+
+app.post('/api/v1/auth/verify-email', { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const email = String(request.body?.email || '').trim().toLowerCase();
+  const otp = String(request.body?.otp || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^\d{6}$/.test(otp)) return reply.code(400).send({ error: 'invalid_verification_code' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT * FROM email_registration_codes WHERE email = $1 FOR UPDATE', [email]);
+    const pending = rows[0];
+    if (!pending || new Date(pending.expires_at) <= new Date() || pending.attempts >= 5) {
+      await client.query('DELETE FROM email_registration_codes WHERE email = $1', [email]);
+      await client.query('COMMIT');
+      return reply.code(400).send({ error: 'verification_expired_or_invalid' });
+    }
+    if (pending.otp_hash !== otpDigest(email, otp)) {
+      await client.query('UPDATE email_registration_codes SET attempts = attempts + 1 WHERE email = $1', [email]);
+      await client.query('COMMIT');
+      return reply.code(400).send({ error: 'verification_expired_or_invalid' });
+    }
+    const result = await client.query(
+      `INSERT INTO customers (full_name, email, password_salt, password_hash, email_verified)
+       VALUES ($1, $2, $3, $4, TRUE) RETURNING id, full_name, phone, email`,
+      [email.split('@')[0].slice(0, 100) || 'Customer', email, pending.password_salt, pending.password_hash]
     );
+    await client.query('DELETE FROM email_registration_codes WHERE email = $1', [email]);
+    await client.query('COMMIT');
     await createSession(result.rows[0].id, reply);
     return reply.code(201).send({ customer: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK');
     if (error.code === '23505') return reply.code(409).send({ error: 'account_already_exists' });
     throw error;
-  }
+  } finally { client.release(); }
 });
 
 app.post('/api/v1/auth/login', { config: { rateLimit: { max: 8, timeWindow: '10 minutes' } } }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const identity = String(request.body?.identity || '').trim().toLowerCase();
+  const identity = String(request.body?.email || request.body?.identity || '').trim().toLowerCase();
   const password = String(request.body?.password || '');
   if (identity.length > 254 || password.length < 12 || password.length > 128) return reply.code(401).send({ error: 'invalid_credentials' });
-  const phone = normalizePhone(identity);
   const { rows } = await pool.query(
-    'SELECT id, full_name, phone, email, password_salt, password_hash FROM customers WHERE email = $1 OR phone = $2 LIMIT 1',
-    [identity, phone]
+    'SELECT id, full_name, phone, email, password_salt, password_hash FROM customers WHERE email = $1 AND email_verified = TRUE LIMIT 1',
+    [identity]
   );
   const customer = rows[0];
   const salt = customer?.password_salt || 'invalid-account-salt';
@@ -181,6 +238,14 @@ app.get('/api/v1/auth/me', { preHandler: requireCustomer }, async (request) => (
   customer: { id: request.customer.id, full_name: request.customer.full_name, phone: request.customer.phone, email: request.customer.email },
   csrfToken: cookieValue(request, 'milvanta_csrf')
 }));
+
+app.patch('/api/v1/auth/me', { preHandler: requireCustomer }, async (request, reply) => {
+  if (requireCsrf(request, reply)) return;
+  const fullName = String(request.body?.fullName || '').trim();
+  if (fullName.length < 2 || fullName.length > 100) return reply.code(400).send({ error: 'invalid_customer_name' });
+  const { rows } = await pool.query('UPDATE customers SET full_name = $2 WHERE id = $1 RETURNING id, full_name, phone, email', [request.customer.id, fullName]);
+  return { customer: rows[0] };
+});
 
 app.get('/api/v1/addresses', { preHandler: requireCustomer }, async (request) => {
   const { rows } = await pool.query(
