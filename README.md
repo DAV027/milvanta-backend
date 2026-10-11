@@ -19,5 +19,10 @@ Use Node.js 22+, create a PostgreSQL database, copy `.env.example` to `.env` and
 
 - `GET /health`: service and optional database status.
 - `GET /api/v1/products`: active catalog records from PostgreSQL.
+- `POST /api/v1/payments/orders`: creates a Razorpay order from active database products and server-calculated prices.
+- `POST /api/v1/payments/verify`: verifies the checkout signature and fetches the payment/order from Razorpay before updating payment status.
+- `POST /api/v1/payments/webhook`: verifies Razorpay's raw-body signature, checks amount/currency, deduplicates event IDs, and records captured/failed/authorized states.
 
-Prices use integer paise. No credentials are committed. Authentication, order processing, inventory reservation, Razorpay, Zoho, image storage, admin APIs and customer APIs are not implemented yet. Do not accept live orders through this API until those flows are implemented and verified.
+Prices use integer paise. No credentials are committed. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET` in Render using Razorpay test credentials first. Run the updated `migrations/001_initial.sql` to create the payment tables. Configure the Razorpay webhook URL as `https://<service>.onrender.com/api/v1/payments/webhook` and subscribe to `payment.authorized`, `payment.captured`, and `payment.failed`.
+
+This is not a complete checkout integration yet: there is no authenticated customer identity, durable customer order/address model, stock reservation, receipt, or refund flow, and the current storefront still has a hard-coded catalog. The payment endpoints therefore are not connected to a public Pay button. Do not accept live orders/payments until the catalog, customer orders, fulfillment, and receipts are implemented and verified.

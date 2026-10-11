@@ -13,3 +13,19 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 CREATE INDEX IF NOT EXISTS products_active_category_idx ON products (active, category);
+
+CREATE TABLE IF NOT EXISTS payment_orders (
+  razorpay_order_id TEXT PRIMARY KEY,
+  razorpay_payment_id TEXT UNIQUE,
+  amount_paise INTEGER NOT NULL CHECK (amount_paise >= 100),
+  currency TEXT NOT NULL CHECK (currency = 'INR'),
+  items JSONB NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('created', 'authorized', 'captured', 'failed', 'refunded')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payment_webhook_events (
+  event_id TEXT PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
