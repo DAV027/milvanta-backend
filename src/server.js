@@ -182,6 +182,15 @@ app.get('/api/v1/auth/me', { preHandler: requireCustomer }, async (request) => (
   csrfToken: cookieValue(request, 'milvanta_csrf')
 }));
 
+app.get('/api/v1/addresses', { preHandler: requireCustomer }, async (request) => {
+  const { rows } = await pool.query(
+    `SELECT id, recipient_name AS name, phone, house, building, street, landmark, city, state, pincode, is_default, created_at
+     FROM customer_addresses WHERE customer_id = $1 ORDER BY is_default DESC, updated_at DESC`,
+    [request.customer.id]
+  );
+  return { addresses: rows };
+});
+
 app.post('/api/v1/auth/logout', { preHandler: requireCustomer }, async (request, reply) => {
   if (requireCsrf(request, reply)) return;
   await pool.query('DELETE FROM customer_sessions WHERE token_hash = $1', [digest(cookieValue(request, 'milvanta_session'))]);
@@ -266,6 +275,18 @@ app.post('/api/v1/orders', { preHandler: requireCustomer, config: { rateLimit: {
       [request.customer.id, idempotencyKey, JSON.stringify(address), JSON.stringify(orderItems), subtotal, deliveryCharge, total]
     );
     const row = inserted.rows[0];
+    const addressFingerprint = digest(JSON.stringify(address));
+    await client.query('UPDATE customer_addresses SET is_default = FALSE WHERE customer_id = $1 AND is_default', [request.customer.id]);
+    await client.query(
+      `INSERT INTO customer_addresses (customer_id, address_fingerprint, recipient_name, phone, house, building, street, landmark, city, state, pincode, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TRUE)
+       ON CONFLICT (customer_id, address_fingerprint) DO UPDATE SET
+         recipient_name = EXCLUDED.recipient_name, phone = EXCLUDED.phone, house = EXCLUDED.house,
+         building = EXCLUDED.building, street = EXCLUDED.street, landmark = EXCLUDED.landmark,
+         city = EXCLUDED.city, state = EXCLUDED.state, pincode = EXCLUDED.pincode,
+         is_default = TRUE, updated_at = NOW()`,
+      [request.customer.id, addressFingerprint, address.name, address.phone, address.house, address.building, address.street, address.landmark, address.city, address.state, address.pincode]
+    );
     const orderNumber = `MV-${new Date(row.created_at).toISOString().slice(0, 10).replaceAll('-', '')}-${String(row.id).padStart(6, '0')}`;
     for (const [productId, quantity] of quantities) await client.query(
       'UPDATE products SET reserved_stock = reserved_stock + $2, updated_at = NOW() WHERE id = $1', [productId, quantity]
