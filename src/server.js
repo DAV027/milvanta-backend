@@ -5,9 +5,11 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import pg from 'pg';
 import Razorpay from 'razorpay';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 
 const { Pool } = pg;
+const scryptAsync = promisify(scrypt);
 const app = Fastify({ logger: true, trustProxy: true, bodyLimit: 1_048_576 });
 const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false } })
@@ -29,6 +31,164 @@ await app.register(cors, {
 });
 await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
 
+function cookieValue(request, name) {
+  const entry = (request.headers.cookie || '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
+  if (!entry) return '';
+  try { return decodeURIComponent(entry.slice(name.length + 1)); } catch { return ''; }
+}
+const digest = (value) => createHash('sha256').update(value).digest('hex');
+function setSessionCookies(reply, token, csrf) {
+  const base = 'Path=/; Secure; SameSite=None';
+  reply.header('Set-Cookie', [
+    `milvanta_session=${encodeURIComponent(token)}; ${base}; HttpOnly; Max-Age=2592000`,
+    `milvanta_csrf=${encodeURIComponent(csrf)}; ${base}; Max-Age=2592000`
+  ]);
+}
+function clearSessionCookies(reply) {
+  reply.header('Set-Cookie', [
+    'milvanta_session=; Path=/; Secure; SameSite=None; HttpOnly; Max-Age=0',
+    'milvanta_csrf=; Path=/; Secure; SameSite=None; Max-Age=0'
+  ]);
+}
+async function createSession(customerId, reply) {
+  const token = randomBytes(32).toString('base64url');
+  const csrf = randomBytes(24).toString('base64url');
+  await pool.query(
+    `INSERT INTO customer_sessions (token_hash, customer_id, csrf_hash, expires_at)
+     VALUES ($1, $2, $3, NOW() + INTERVAL '30 days')`,
+    [digest(token), customerId, digest(csrf)]
+  );
+  setSessionCookies(reply, token, csrf);
+}
+async function requireCustomer(request, reply) {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const token = cookieValue(request, 'milvanta_session');
+  if (!token) return reply.code(401).send({ error: 'authentication_required' });
+  const { rows } = await pool.query(
+    `SELECT c.id, c.full_name, c.phone, c.email, s.csrf_hash
+     FROM customer_sessions s JOIN customers c ON c.id = s.customer_id
+     WHERE s.token_hash = $1 AND s.expires_at > NOW()`, [digest(token)]
+  );
+  if (!rows[0]) return reply.code(401).send({ error: 'session_expired' });
+  request.customer = rows[0];
+}
+function requireCsrf(request, reply) {
+  const cookie = cookieValue(request, 'milvanta_csrf');
+  const header = request.headers['x-csrf-token'];
+  const actual = Buffer.from(digest(cookie || ''));
+  const expected = Buffer.from(request.customer.csrf_hash);
+  if (typeof header !== 'string' || header !== cookie || actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    return reply.code(403).send({ error: 'csrf_validation_failed' });
+  }
+}
+function normalizePhone(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits.length === 12 && digits.startsWith('91') ? digits.slice(2) : digits;
+}
+function safeAddress(input) {
+  if (!input || typeof input !== 'object') return null;
+  const fields = ['name', 'phone', 'house', 'building', 'street', 'landmark', 'city', 'state', 'pincode'];
+  const address = Object.fromEntries(fields.map((key) => [key, String(input[key] || '').trim()]));
+  if (fields.some((key) => key !== 'landmark' && !address[key]) || fields.some((key) => address[key].length > 160)) return null;
+  address.phone = normalizePhone(address.phone);
+  if (!/^[6-9]\d{9}$/.test(address.phone) || !/^\d{6}$/.test(address.pincode)) return null;
+  return address;
+}
+async function applyPaymentStatus(client, orderId, paymentId, status, amount, currency) {
+  if (!['authorized', 'captured', 'failed'].includes(status)) return false;
+  const found = await client.query(
+    'SELECT customer_order_id, razorpay_payment_id, amount_paise, currency, status FROM payment_orders WHERE razorpay_order_id = $1 FOR UPDATE', [orderId]
+  );
+  const payment = found.rows[0];
+  if (!payment || Number(payment.amount_paise) !== Number(amount) || payment.currency !== currency) return false;
+  if (['captured', 'refunded'].includes(payment.status)) return payment.status === status && payment.razorpay_payment_id === paymentId;
+  await client.query('UPDATE payment_orders SET razorpay_payment_id = $2, status = $3, updated_at = NOW() WHERE razorpay_order_id = $1', [orderId, paymentId, status]);
+  if (!payment.customer_order_id) return true;
+  const orderResult = await client.query('SELECT items, payment_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE', [payment.customer_order_id]);
+  const order = orderResult.rows[0];
+  if (!order || ['paid', 'failed', 'expired'].includes(order.payment_status)) {
+    if (status === 'captured' && order?.payment_status === 'expired') {
+      await client.query("UPDATE customer_orders SET payment_status = 'paid', order_status = 'payment_review', updated_at = NOW() WHERE id = $1", [payment.customer_order_id]);
+    }
+    return true;
+  }
+  if (status === 'failed') return true;
+  if (status === 'captured') {
+    if (new Date(order.reservation_expires_at) > new Date()) {
+      for (const item of order.items) {
+        const changed = await client.query(
+          'UPDATE products SET stock_quantity = stock_quantity - $2, reserved_stock = reserved_stock - $2, updated_at = NOW() WHERE id = $1 AND stock_quantity >= $2 AND reserved_stock >= $2',
+          [item.productId, item.quantity]
+        );
+        if (!changed.rowCount) throw new Error('reserved_stock_invariant_failed');
+      }
+      await client.query("UPDATE customer_orders SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE id = $1", [payment.customer_order_id]);
+    } else {
+      await client.query("UPDATE customer_orders SET payment_status = 'paid', order_status = 'payment_review', updated_at = NOW() WHERE id = $1", [payment.customer_order_id]);
+    }
+  } else {
+    await client.query("UPDATE customer_orders SET payment_status = 'authorized', updated_at = NOW() WHERE id = $1 AND payment_status = 'pending'", [payment.customer_order_id]);
+  }
+  return true;
+}
+
+app.post('/api/v1/auth/register', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const body = request.body || {};
+  const fullName = String(body.fullName || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const phone = normalizePhone(body.phone);
+  const password = String(body.password || '');
+  if (fullName.length < 2 || fullName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 || !/^[6-9]\d{9}$/.test(phone) || password.length < 12 || password.length > 128) {
+    return reply.code(400).send({ error: 'invalid_registration', message: 'Enter your name, valid email and Indian mobile number, and a password of at least 12 characters.' });
+  }
+  const salt = randomBytes(16).toString('hex');
+  const passwordHash = (await scryptAsync(password, salt, 64)).toString('hex');
+  try {
+    const result = await pool.query(
+      `INSERT INTO customers (full_name, phone, email, password_salt, password_hash)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, full_name, phone, email`,
+      [fullName, phone, email, salt, passwordHash]
+    );
+    await createSession(result.rows[0].id, reply);
+    return reply.code(201).send({ customer: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') return reply.code(409).send({ error: 'account_already_exists' });
+    throw error;
+  }
+});
+
+app.post('/api/v1/auth/login', { config: { rateLimit: { max: 8, timeWindow: '10 minutes' } } }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const identity = String(request.body?.identity || '').trim().toLowerCase();
+  const password = String(request.body?.password || '');
+  if (identity.length > 254 || password.length < 12 || password.length > 128) return reply.code(401).send({ error: 'invalid_credentials' });
+  const phone = normalizePhone(identity);
+  const { rows } = await pool.query(
+    'SELECT id, full_name, phone, email, password_salt, password_hash FROM customers WHERE email = $1 OR phone = $2 LIMIT 1',
+    [identity, phone]
+  );
+  const customer = rows[0];
+  const salt = customer?.password_salt || 'invalid-account-salt';
+  const actual = await scryptAsync(password, salt, 64);
+  const expected = Buffer.from(customer?.password_hash || '0'.repeat(128), 'hex');
+  if (!customer || actual.length !== expected.length || !timingSafeEqual(actual, expected)) return reply.code(401).send({ error: 'invalid_credentials' });
+  await createSession(customer.id, reply);
+  return { customer: { id: customer.id, full_name: customer.full_name, phone: customer.phone, email: customer.email } };
+});
+
+app.get('/api/v1/auth/me', { preHandler: requireCustomer }, async (request) => ({
+  customer: { id: request.customer.id, full_name: request.customer.full_name, phone: request.customer.phone, email: request.customer.email },
+  csrfToken: cookieValue(request, 'milvanta_csrf')
+}));
+
+app.post('/api/v1/auth/logout', { preHandler: requireCustomer }, async (request, reply) => {
+  if (requireCsrf(request, reply)) return;
+  await pool.query('DELETE FROM customer_sessions WHERE token_hash = $1', [digest(cookieValue(request, 'milvanta_session'))]);
+  clearSessionCookies(reply);
+  return { loggedOut: true };
+});
+
 app.get('/health', async (_request, reply) => {
   let database = 'not_configured';
   if (pool) {
@@ -41,48 +201,112 @@ app.get('/health', async (_request, reply) => {
 app.get('/api/v1/products', async (_request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { rows } = await pool.query(
-    'SELECT id, name, description, category, price_paise, selling_unit, image_url, stock_quantity FROM products WHERE active = TRUE ORDER BY name'
+    'SELECT id, name, description, category, price_paise, selling_unit, image_url, GREATEST(0, stock_quantity - reserved_stock) AS stock_quantity FROM products WHERE active = TRUE ORDER BY name'
   );
   return { products: rows };
 });
 
-app.post('/api/v1/payments/orders', async (request, reply) => {
-  if (!pool || !razorpay) return reply.code(503).send({ error: 'payments_not_configured' });
+app.post('/api/v1/orders', { preHandler: requireCustomer, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } }, async (request, reply) => {
+  if (requireCsrf(request, reply)) return;
+  if (!pool || !razorpay) return reply.code(503).send({ error: 'checkout_not_configured' });
+  const serviceablePins = new Set((process.env.SERVICEABLE_PIN_CODES || '').split(',').map((pin) => pin.trim()).filter(Boolean));
+  if (!serviceablePins.size) return reply.code(503).send({ error: 'delivery_area_not_configured' });
+  const deliveryCharge = Number(process.env.DELIVERY_CHARGE_PAISE);
+  if (!Number.isSafeInteger(deliveryCharge) || deliveryCharge < 0) return reply.code(503).send({ error: 'delivery_charge_not_configured' });
+  const address = safeAddress(request.body?.address);
   const items = request.body?.items;
-  if (!Array.isArray(items) || items.length < 1 || items.length > 50) return reply.code(400).send({ error: 'invalid_items' });
-
+  if (!address || !Array.isArray(items) || items.length < 1 || items.length > 50) return reply.code(400).send({ error: 'invalid_checkout' });
+  const idempotencyKey = request.headers['idempotency-key'];
+  if (typeof idempotencyKey !== 'string' || !/^[0-9a-f-]{36}$/i.test(idempotencyKey)) return reply.code(400).send({ error: 'missing_idempotency_key' });
+  if (!serviceablePins.has(address.pincode)) return reply.code(422).send({ error: 'outside_delivery_area', message: 'We do not currently deliver to this PIN code.' });
   const quantities = new Map();
   for (const item of items) {
-    const id = Number(item?.productId);
-    const quantity = Number(item?.quantity);
-    if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25) {
-      return reply.code(400).send({ error: 'invalid_item' });
+    const productId = Number(item?.productId), quantity = Number(item?.quantity);
+    if (!Number.isSafeInteger(productId) || productId <= 0 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25) return reply.code(400).send({ error: 'invalid_item' });
+    quantities.set(productId, (quantities.get(productId) || 0) + quantity);
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [String(request.customer.id), idempotencyKey]);
+    const previous = await client.query(
+      `SELECT co.order_number, co.payment_status, co.reservation_expires_at, po.razorpay_order_id, po.amount_paise, po.currency
+       FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id
+       WHERE co.customer_id = $1 AND co.idempotency_key = $2`, [request.customer.id, idempotencyKey]
+    );
+    if (previous.rows[0]) {
+      const oldOrder = previous.rows[0];
+      if (new Date(oldOrder.reservation_expires_at) <= new Date() || ['expired', 'paid'].includes(oldOrder.payment_status)) {
+        await client.query('ROLLBACK'); return reply.code(409).send({ error: 'checkout_already_processed', orderNumber: oldOrder.order_number });
+      }
+      await client.query('COMMIT');
+      return { orderNumber: oldOrder.order_number, orderId: oldOrder.razorpay_order_id, amount: oldOrder.amount_paise, currency: oldOrder.currency, keyId: process.env.RAZORPAY_KEY_ID };
     }
-    quantities.set(id, (quantities.get(id) || 0) + quantity);
-  }
+    const ids = [...quantities.keys()];
+    const { rows: products } = await client.query(
+      'SELECT id, name, category, price_paise, selling_unit, stock_quantity, reserved_stock FROM products WHERE active = TRUE AND id = ANY($1::bigint[]) ORDER BY id FOR UPDATE', [ids]
+    );
+    if (products.length !== ids.length) { await client.query('ROLLBACK'); return reply.code(409).send({ error: 'product_unavailable' }); }
+    let subtotal = 0;
+    const orderItems = [];
+    for (const product of products) {
+      const quantity = quantities.get(Number(product.id));
+      if (Number(product.stock_quantity) - Number(product.reserved_stock) < quantity) { await client.query('ROLLBACK'); return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id) }); }
+      const unitPricePaise = Number(product.price_paise);
+      subtotal += unitPricePaise * quantity;
+      orderItems.push({ productId: Number(product.id), name: product.name, category: product.category, unit: product.selling_unit, quantity, unitPricePaise, lineTotalPaise: unitPricePaise * quantity });
+    }
+    const total = subtotal + deliveryCharge;
+    if (!Number.isSafeInteger(total) || total < 100 || total > 10_000_000) { await client.query('ROLLBACK'); return reply.code(400).send({ error: 'invalid_order_total' }); }
 
-  const ids = [...quantities.keys()];
-  const { rows } = await pool.query(
-    'SELECT id, price_paise, stock_quantity FROM products WHERE active = TRUE AND id = ANY($1::bigint[])', [ids]
-  );
-  if (rows.length !== ids.length) return reply.code(400).send({ error: 'product_unavailable' });
-  let amount = 0;
-  for (const product of rows) {
-    const quantity = quantities.get(Number(product.id));
-    if (product.stock_quantity < quantity) return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id) });
-    amount += Number(product.price_paise) * quantity;
-    if (!Number.isSafeInteger(amount) || amount > 10_000_000) return reply.code(400).send({ error: 'order_amount_limit' });
-  }
-  if (amount < 100) return reply.code(400).send({ error: 'amount_below_payment_minimum' });
+    const inserted = await client.query(
+      `INSERT INTO customer_orders (customer_id, idempotency_key, address, items, subtotal_paise, delivery_charge_paise, total_paise, reservation_expires_at)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, NOW() + INTERVAL '15 minutes') RETURNING id, created_at`,
+      [request.customer.id, idempotencyKey, JSON.stringify(address), JSON.stringify(orderItems), subtotal, deliveryCharge, total]
+    );
+    const row = inserted.rows[0];
+    const orderNumber = `MV-${new Date(row.created_at).toISOString().slice(0, 10).replaceAll('-', '')}-${String(row.id).padStart(6, '0')}`;
+    for (const [productId, quantity] of quantities) await client.query(
+      'UPDATE products SET reserved_stock = reserved_stock + $2, updated_at = NOW() WHERE id = $1', [productId, quantity]
+    );
 
-  const order = await razorpay.orders.create({ amount, currency: 'INR', receipt: `mv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` });
-  await pool.query(
-    `INSERT INTO payment_orders (razorpay_order_id, amount_paise, currency, items, status)
-     VALUES ($1, $2, 'INR', $3::jsonb, 'created')`,
-    [order.id, amount, JSON.stringify([...quantities].map(([productId, quantity]) => ({ productId, quantity })))]
-  );
-  return reply.code(201).send({ orderId: order.id, amount: order.amount, currency: order.currency, keyId: process.env.RAZORPAY_KEY_ID });
+    const gatewayOrder = await razorpay.orders.create({
+      amount: total, currency: 'INR', receipt: `mv-${row.id}-${randomBytes(4).toString('hex')}`,
+      notes: { order_number: orderNumber, customer_id: String(request.customer.id) }
+    });
+    await client.query('UPDATE customer_orders SET order_number = $2, razorpay_order_id = $3 WHERE id = $1', [row.id, orderNumber, gatewayOrder.id]);
+    await client.query(
+      `INSERT INTO payment_orders (razorpay_order_id, customer_order_id, amount_paise, currency, items, status)
+       VALUES ($1, $2, $3, 'INR', $4::jsonb, 'created')`,
+      [gatewayOrder.id, row.id, total, JSON.stringify(orderItems)]
+    );
+    await client.query('COMMIT');
+    return reply.code(201).send({ orderNumber, orderId: gatewayOrder.id, amount: gatewayOrder.amount, currency: gatewayOrder.currency, keyId: process.env.RAZORPAY_KEY_ID, subtotalPaise: subtotal, deliveryChargePaise: deliveryCharge });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
 });
+
+app.get('/api/v1/orders', { preHandler: requireCustomer }, async (request) => {
+  const { rows } = await pool.query(
+    `SELECT order_number, items, subtotal_paise, delivery_charge_paise, total_paise, order_status, payment_status, created_at
+     FROM customer_orders WHERE customer_id = $1 ORDER BY created_at DESC`, [request.customer.id]
+  );
+  return { orders: rows };
+});
+
+app.get('/api/v1/orders/:orderNumber', { preHandler: requireCustomer }, async (request, reply) => {
+  const { rows } = await pool.query(
+    `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise, order_status, payment_status, created_at
+     FROM customer_orders WHERE customer_id = $1 AND order_number = $2`, [request.customer.id, request.params.orderNumber]
+  );
+  if (!rows[0]) return reply.code(404).send({ error: 'order_not_found' });
+  return { order: rows[0] };
+});
+
+app.post('/api/v1/payments/orders', async (_request, reply) => reply.code(410).send({ error: 'use_authenticated_checkout', endpoint: '/api/v1/orders' }));
 
 app.post('/api/v1/payments/verify', async (request, reply) => {
   if (!process.env.RAZORPAY_KEY_SECRET) return reply.code(503).send({ error: 'payments_not_configured' });
@@ -103,13 +327,16 @@ app.post('/api/v1/payments/verify', async (request, reply) => {
   if (gatewayPayment.order_id !== orderId || gatewayOrder.amount !== Number(paymentOrder.rows[0].amount_paise)) {
     return reply.code(400).send({ verified: false, error: 'payment_details_mismatch' });
   }
-  const status = gatewayPayment.status;
-  await pool.query(
-    `UPDATE payment_orders SET razorpay_payment_id = $2, status = $3, updated_at = NOW()
-     WHERE razorpay_order_id = $1 AND status NOT IN ('captured', 'refunded')`,
-    [orderId, paymentId, status]
-  );
-  return { verified: true, orderId, paymentId, status };
+  if (gatewayPayment.amount !== Number(paymentOrder.rows[0].amount_paise) || gatewayPayment.currency !== 'INR') return reply.code(400).send({ verified: false, error: 'payment_details_mismatch' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    await client.query('COMMIT');
+    if (!applied) return reply.code(409).send({ verified: false, error: 'payment_state_not_applicable' });
+    return { verified: true, orderId, paymentId, status: gatewayPayment.status };
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 });
 
 app.post('/api/v1/payments/webhook', async (request, reply) => {
@@ -133,12 +360,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         const nextStatus = request.body.event === 'payment.captured' ? 'captured'
           : request.body.event === 'payment.failed' ? 'failed'
             : request.body.event === 'payment.authorized' ? 'authorized' : null;
-        if (nextStatus) await client.query(
-          `UPDATE payment_orders SET razorpay_payment_id = $2, status = $3, updated_at = NOW()
-           WHERE razorpay_order_id = $1 AND amount_paise = $4 AND currency = $5
-             AND status NOT IN ('captured', 'refunded')`,
-          [entity.order_id, entity.id, nextStatus, entity.amount, entity.currency]
-        );
+        if (nextStatus) await applyPaymentStatus(client, entity.order_id, entity.id, nextStatus, entity.amount, entity.currency);
       }
     }
     await client.query('COMMIT');
@@ -155,12 +377,38 @@ app.setErrorHandler((error, request, reply) => {
   reply.code(status).send({ error: status === 500 ? 'internal_server_error' : error.message });
 });
 
+async function releaseExpiredReservations() {
+  if (!pool) return;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT id, items FROM customer_orders
+       WHERE payment_status IN ('pending', 'authorized') AND reservation_expires_at <= NOW()
+       ORDER BY id LIMIT 50 FOR UPDATE SKIP LOCKED`
+    );
+    for (const order of rows) {
+      for (const item of order.items) await client.query(
+        'UPDATE products SET reserved_stock = GREATEST(0, reserved_stock - $2), updated_at = NOW() WHERE id = $1', [item.productId, item.quantity]
+      );
+      await client.query("UPDATE customer_orders SET payment_status = 'expired', order_status = 'cancelled', updated_at = NOW() WHERE id = $1", [order.id]);
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    app.log.error(error, 'Failed to release expired inventory reservations');
+  } finally { client.release(); }
+}
+
 const port = Number(process.env.PORT || 10000);
 const host = process.env.HOST || '0.0.0.0';
 await app.listen({ port, host });
+const reservationSweep = setInterval(releaseExpiredReservations, 60_000);
+reservationSweep.unref();
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, async () => {
+    clearInterval(reservationSweep);
     await app.close();
     await pool?.end();
     process.exit(0);
