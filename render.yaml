@@ -1,0 +1,26 @@
+databases:
+  - name: milvanta-db
+    plan: basic-256mb
+    databaseName: milvanta
+    user: milvanta
+
+services:
+  - type: web
+    name: milvanta-api
+    runtime: node
+    rootDir: backend
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: milvanta-db
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "false"
+      - key: ALLOWED_ORIGINS
+        value: https://milvanta.in,https://www.milvanta.in
