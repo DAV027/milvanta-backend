@@ -35,7 +35,7 @@ app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, bo
   catch (error) { done(error); }
 });
 await app.register(cors, {
-  origin: (process.env.ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean),
+  origin: (process.env.ALLOWED_ORIGINS || 'https://solitary-firefly-ef06.akhilrajuvarma.workers.dev,https://milvanta.in,https://www.milvanta.in').split(',').map((item) => item.trim()).filter(Boolean),
   credentials: true
 });
 await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });

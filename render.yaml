@@ -22,7 +22,7 @@ services:
       - key: DATABASE_SSL
         value: "false"
       - key: ALLOWED_ORIGINS
-        value: https://milvanta.in,https://www.milvanta.in
+        value: https://solitary-firefly-ef06.akhilrajuvarma.workers.dev,https://milvanta.in,https://www.milvanta.in
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
