@@ -276,7 +276,17 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
 
 // ---------- Routes ----------
 app.get('/health', async (request, reply) => {
-  if (!pool) return reply.code(503).send({ status: 'degraded', service: 'milvanta-api', database: 'not_configured' });
+  const dbEnvKeys = Object.keys(process.env).filter((k) => /DB|DATABASE|POSTGRES|RENDER/i.test(k));
+  if (!pool) {
+    return reply.code(503).send({
+      status: 'degraded',
+      service: 'milvanta-api',
+      database: 'not_configured',
+      deploy_version: '2026-10-13-v4',
+      detected_db_env_keys: dbEnvKeys,
+      message: 'DATABASE_URL environment variable is not set on the Render Web Service container.'
+    });
+  }
   try {
     const { rows } = await pool.query(
       `SELECT to_regclass('public.customers') AS customers,
