@@ -165,7 +165,7 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 39900,
     selling_unit: '250 g jar',
-    image_url: 'assets/milvanta-meat-pickles-menu.png',
+    image_url: 'assets/non-vegetarian-pickles-menu.jpg',
     stock_quantity: 50
   },
   {
