@@ -10,6 +10,7 @@ import nodemailer from 'nodemailer';
 import pg from 'pg';
 import Razorpay from 'razorpay';
 import { runMigrations } from './migrate.js';
+import { seedProducts } from './seed.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1008,11 +1009,20 @@ if (process.env.NODE_ENV !== 'test') {
   // Asynchronously apply database migrations on startup without delaying HTTP listener
   if (pool) {
     runMigrations(pool)
-      .then((applied) => {
+      .then(async (applied) => {
         if (applied && applied.length > 0) {
           app.log.info({ applied }, 'Database migrations applied successfully');
         } else {
           app.log.info('Database schema is up to date');
+        }
+        try {
+          const { rows } = await pool.query('SELECT COUNT(*) FROM products');
+          if (Number(rows[0].count) === 0) {
+            await seedProducts(pool);
+            app.log.info('Initial product catalog seeded into database');
+          }
+        } catch (err) {
+          app.log.error({ err }, 'Failed checking/seeding products catalog');
         }
       })
       .catch((err) => {
