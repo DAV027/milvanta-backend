@@ -29,9 +29,16 @@ app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, bo
   catch (error) { done(error); }
 });
 
-const pool = process.env.DATABASE_URL
+const rawDbUrl = (
+  process.env.DATABASE_URL ||
+  process.env.INTERNAL_DATABASE_URL ||
+  process.env.EXTERNAL_DATABASE_URL ||
+  process.env.POSTGRES_URL
+)?.trim().replace(/^["']|["']$/g, '');
+
+const pool = rawDbUrl
   ? new Pool({
-      connectionString: process.env.DATABASE_URL,
+      connectionString: rawDbUrl,
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
       connectionTimeoutMillis: 8000
     })
