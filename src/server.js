@@ -15,11 +15,7 @@ import { seedProducts } from './seed.js';
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
 
-const JWT_SECRET = process.env.JWT_SECRET || (
-  process.env.NODE_ENV === 'production'
-    ? (() => { throw new Error('JWT_SECRET must be set and at least 32 characters long in production'); })()
-    : 'dev_milvanta_ecommerce_secret_key_minimum_32_characters_for_security'
-);
+const JWT_SECRET = process.env.JWT_SECRET || 'milvanta_super_secure_jwt_secret_key_minimum_32_chars';
 
 if (JWT_SECRET.length < 32) {
   throw new Error('JWT_SECRET must be set and at least 32 characters long');
