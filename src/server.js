@@ -37,16 +37,26 @@ const rawDbUrl = (
 )?.trim().replace(/^["']|["']$/g, '');
 
 let normalizedDbUrl = rawDbUrl;
-if (normalizedDbUrl && /@dpg-[a-z0-9-]+(?::|\/)/i.test(normalizedDbUrl)) {
-  // If an internal Render host like @dpg-xxx-a/ was provided, expand to full Oregon domain so DNS resolves across regions
-  normalizedDbUrl = normalizedDbUrl.replace(/@(dpg-[a-z0-9-]+)([:\/])/i, (m, host, sep) => '@' + host + '.oregon-postgres.render.com' + sep);
+if (normalizedDbUrl) {
+  try {
+    const parsed = new URL(normalizedDbUrl);
+    if (parsed.hostname.startsWith('dpg-') && !parsed.hostname.includes('.')) {
+      parsed.hostname = `${parsed.hostname}.oregon-postgres.render.com`;
+      normalizedDbUrl = parsed.toString();
+    }
+  } catch (_) {
+    if (/@dpg-[a-z0-9-]+(?::|\/)/i.test(normalizedDbUrl)) {
+      normalizedDbUrl = normalizedDbUrl.replace(/@(dpg-[a-z0-9-]+)([:\/])/i, (m, host, sep) => '@' + host + '.oregon-postgres.render.com' + sep);
+    }
+  }
 }
 
+const isRenderPg = Boolean(normalizedDbUrl && normalizedDbUrl.includes('render.com'));
 const pool = normalizedDbUrl
   ? new Pool({
       connectionString: normalizedDbUrl,
-      ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
-      connectionTimeoutMillis: 8000
+      ssl: isRenderPg ? { rejectUnauthorized: false } : (process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }),
+      connectionTimeoutMillis: 10000
     })
   : null;
 
@@ -317,7 +327,13 @@ app.get('/health', async (request, reply) => {
     return { status: 'ok', service: 'milvanta-api', database: 'connected', schema: 'ready' };
   } catch (error) {
     request.log.error({ err: error }, 'Database health check failed');
-    return reply.code(503).send({ status: 'degraded', service: 'milvanta-api', database: 'unavailable' });
+    return reply.code(503).send({
+      status: 'degraded',
+      service: 'milvanta-api',
+      database: 'unavailable',
+      error_message: error.message,
+      error_code: error.code || null
+    });
   }
 });
 
