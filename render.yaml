@@ -35,3 +35,17 @@ services:
         sync: false
       - key: SMTP_FROM
         sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: SERVICEABLE_PIN_CODES
+        sync: false
+      - key: DELIVERY_CHARGE_PAISE
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
