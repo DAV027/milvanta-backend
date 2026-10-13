@@ -36,13 +36,25 @@ const rawDbUrl = (
   process.env.POSTGRES_URL
 )?.trim().replace(/^["']|["']$/g, '');
 
-const pool = rawDbUrl
+let normalizedDbUrl = rawDbUrl;
+if (normalizedDbUrl && /@dpg-[a-z0-9-]+(?::|\/)/i.test(normalizedDbUrl)) {
+  // If an internal Render host like @dpg-xxx-a/ was provided, expand to full Oregon domain so DNS resolves across regions
+  normalizedDbUrl = normalizedDbUrl.replace(/@(dpg-[a-z0-9-]+)([:\/])/i, (m, host, sep) => '@' + host + '.oregon-postgres.render.com' + sep);
+}
+
+const pool = normalizedDbUrl
   ? new Pool({
-      connectionString: rawDbUrl,
+      connectionString: normalizedDbUrl,
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
       connectionTimeoutMillis: 8000
     })
   : null;
+
+if (pool) {
+  pool.on('error', (err) => {
+    app.log.error({ err }, 'Unexpected error on idle database client');
+  });
+}
 
 const razorpay = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
   ? new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET })
@@ -981,8 +993,9 @@ app.setErrorHandler((error, request, reply) => {
 
 async function releaseExpiredReservations() {
   if (!pool) return;
-  const client = await pool.connect();
+  let client = null;
   try {
+    client = await pool.connect();
     await client.query('BEGIN');
     const { rows } = await client.query(
       `SELECT id, items FROM customer_orders
@@ -1003,10 +1016,14 @@ async function releaseExpiredReservations() {
     }
     await client.query('COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK');
-    app.log.error({ err: error }, 'Failed to release expired inventory reservations');
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
+    app.log.warn({ err: error?.message || error }, 'Failed to release expired inventory reservations');
   } finally {
-    client.release();
+    if (client) {
+      try { client.release(); } catch (_) {}
+    }
   }
 }
 
