@@ -438,7 +438,17 @@ app.patch('/api/v1/auth/me', { preHandler: app.authenticate }, async (request, r
 app.get('/api/v1/products', async (_request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { rows } = await pool.query(
-    'SELECT id, name, description, category, price_paise, selling_unit, image_url, GREATEST(0, stock_quantity - reserved_stock) AS stock_quantity FROM products WHERE active = TRUE ORDER BY name'
+    `SELECT id, name, description, category, price_paise, selling_unit, image_url, GREATEST(0, stock_quantity - reserved_stock) AS stock_quantity
+     FROM products WHERE active = TRUE
+     ORDER BY 
+       CASE category
+         WHEN 'Fresh Milk' THEN 1
+         WHEN 'Dairy Products' THEN 2
+         WHEN 'Baking Essentials' THEN 3
+         WHEN 'Healthy Living' THEN 4
+         WHEN 'Indian Pickles' THEN 5
+         ELSE 6
+       END, id ASC`
   );
   return { products: rows };
 });
