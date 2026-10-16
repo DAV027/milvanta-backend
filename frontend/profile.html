@@ -233,8 +233,8 @@
             <div class="profile-section-card">
               <div class="section-header-row">
                 <div>
-                  <h3 class="section-title">Order History &amp; Live Tracking</h3>
-                  <p class="section-subtitle">View past orders, track early morning deliveries, and reorder favorites</p>
+                  <h3 class="section-title">Order History</h3>
+                  <p class="section-subtitle">View past orders, item breakdown, and reorder your farm-fresh favorites</p>
                 </div>
                 <a href="index.html#products" class="address-card-btn" style="font-size: 0.88rem; font-weight: 700;">+ New Order</a>
               </div>
@@ -252,7 +252,7 @@
                   <h3 class="section-title">Saved Delivery Addresses</h3>
                   <p class="section-subtitle">Manage morning doorstep drops and pantry shipping locations</p>
                 </div>
-                <button type="button" class="btn-track-order" id="btnOpenAddAddress">
+                <button type="button" class="address-add-btn" id="btnOpenAddAddress">
                   <span>+ Add New Address</span>
                 </button>
               </div>
@@ -457,61 +457,7 @@
       </div>
     </nav>
 
-    <!-- Modal 1: Live Order Tracking -->
-    <div class="modal-overlay hidden" id="trackingModal" aria-hidden="true">
-      <div class="account-panel tracking-panel" role="dialog" aria-modal="true" aria-labelledby="trackingModalTitle">
-        <button type="button" class="modal-close" id="trackingModalClose" aria-label="Close tracking">×</button>
-        <p class="modal-kicker">LIVE MORNING DELIVERY STATUS</p>
-        <div class="tracking-header">
-          <div style="display:flex; justify-content:space-between; align-items:baseline;">
-            <h2 id="trackingModalOrderId" style="font-size: 1.4rem; margin: 0;">Order #MV-94821</h2>
-            <span id="trackingModalStatus" class="status-badge placed" style="background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; font-size: 0.78rem; font-weight: 700; padding: 3px 10px; border-radius: 9999px;">Out for Delivery</span>
-          </div>
-          <p id="trackingModalEst" style="font-size: 0.82rem; color: #64748b; margin: 4px 0 0;">Estimated delivery: Today by 7:00 AM</p>
-        </div>
-
-        <!-- 6-Stage Visual Stepper -->
-        <div class="tracking-stepper" style="margin: 24px 0;">
-          <div class="tracking-step completed" style="text-align: center;">
-            <div class="step-node" style="background: #047857; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700;">✓</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 600;">Placed</span>
-          </div>
-          <div class="tracking-step completed" style="text-align: center;">
-            <div class="step-node" style="background: #047857; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700;">✓</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 600;">Confirmed</span>
-          </div>
-          <div class="tracking-step completed" style="text-align: center;">
-            <div class="step-node" style="background: #047857; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700;">✓</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 600;">Bottled Fresh</span>
-          </div>
-          <div class="tracking-step completed" style="text-align: center;">
-            <div class="step-node" style="background: #047857; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700;">✓</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 600;">Chilled Hub</span>
-          </div>
-          <div class="tracking-step active" style="text-align: center;">
-            <div class="step-node" style="background: #2563eb; color: #fff; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700; box-shadow: 0 0 0 4px #dbeafe;">5</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 700; color: #2563eb;">Out for Delivery</span>
-          </div>
-          <div class="tracking-step" style="text-align: center;">
-            <div class="step-node" style="background: #e2e8f0; color: #94a3b8; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 6px; font-weight: 700;">6</div>
-            <span class="step-label" style="font-size: 0.74rem; font-weight: 600; color: #94a3b8;">Delivered</span>
-          </div>
-        </div>
-
-        <div style="background: #f8fafc; border: 1px solid #eef2f6; border-radius: 12px; padding: 14px 18px; font-size: 0.85rem; line-height: 1.6;">
-          <div style="display:flex; justify-content:space-between; margin-bottom: 4px;">
-            <span style="color: #64748b;">Delivery Route:</span>
-            <strong id="trackingModalCourier" style="color: #0f172a;">Milvanta Cold-Chain Express (Madhapur Route)</strong>
-          </div>
-          <div style="display:flex; justify-content:space-between;">
-            <span style="color: #64748b;">Drop Note:</span>
-            <span style="color: #0f172a;">Left in chilled milk basket with silent morning bell</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Modal 1B: View Full Order Details & Invoice -->
+    <!-- Modal 1: View Full Order Details & Invoice -->
     <div class="modal-overlay hidden" id="orderDetailsModal" aria-hidden="true">
       <div class="account-panel order-details-panel" role="dialog" aria-modal="true" aria-labelledby="orderModalId" style="max-width: 620px;">
         <button type="button" class="modal-close" id="closeOrderDetailsModal" aria-label="Close order details">×</button>
@@ -571,11 +517,8 @@
 
         <!-- Modal Actions -->
         <div style="display: flex; gap: 10px; justify-content: flex-end;">
-          <button type="button" class="btn-track-order" id="orderModalTrackBtn" style="flex: 1; justify-content: center;">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-            <span>Track Delivery</span>
-          </button>
-          <button type="button" class="btn-reorder" id="orderModalReorderBtn" style="flex: 1; justify-content: center; background: #f1f5f9; font-weight: 700;">
+          <button type="button" class="btn-sub-pause" id="closeOrderModalBtn" style="padding: 10px 18px; font-weight: 600;">Close</button>
+          <button type="button" class="btn-reorder" id="orderModalReorderBtn" style="flex: 1; justify-content: center; background: #0a3d66; color: #ffffff; border-color: #0a3d66; font-weight: 700;">
             <span>+ Re-order Items</span>
           </button>
         </div>
@@ -717,7 +660,7 @@
       );
       window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
     </script>
-    <script src="js/delivery.js?v=20261016-2"></script>
-    <script src="js/profile.js?v=20261016-2"></script>
+    <script src="js/delivery.js?v=20261016-3"></script>
+    <script src="js/profile.js?v=20261016-3"></script>
   </body>
 </html>

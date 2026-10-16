@@ -340,7 +340,9 @@
     try {
       const data = await apiRequest('/api/v1/orders');
       if (data && Array.isArray(data.orders)) {
-        loadedOrders = data.orders.map(formatOrderRow);
+        loadedOrders = data.orders
+          .filter((o) => String(o.order_status || o.status || '').toLowerCase() !== 'cancelled')
+          .map(formatOrderRow);
       }
     } catch (err) {
       console.warn('Backend orders fetch failed, reading from local cache:', err);
@@ -351,6 +353,8 @@
       const localOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
       if (Array.isArray(localOrders) && localOrders.length > 0) {
         localOrders.forEach((lo) => {
+          const loStatus = String(lo.order_status || lo.status || '').toLowerCase();
+          if (loStatus === 'cancelled') return;
           const loId = lo.id || lo.order_number;
           if (!loadedOrders.some((o) => o.id === loId)) {
             loadedOrders.push(formatOrderRow(lo));
@@ -358,6 +362,9 @@
         });
       }
     } catch {}
+
+    // Exclude any cancelled order
+    loadedOrders = loadedOrders.filter((o) => String(o.status || '').toLowerCase() !== 'cancelled');
 
     // Sort by date descending
     loadedOrders.sort((a, b) => new Date(b.rawDate || b.date) - new Date(a.rawDate || a.date));
@@ -503,7 +510,10 @@
     const container = $('#ordersListContainer');
     if (!container) return;
 
-    if (!state.orders.length) {
+    // Filter out any cancelled orders
+    const activeOrders = state.orders.filter((order) => String(order.status || '').toLowerCase() !== 'cancelled');
+
+    if (!activeOrders.length) {
       container.innerHTML = `
         <div style="text-align: center; padding: 48px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
           <div style="font-size: 2.8rem; margin-bottom: 12px;">🧺</div>
@@ -515,7 +525,7 @@
       return;
     }
 
-    container.innerHTML = state.orders.map((order) => {
+    container.innerHTML = activeOrders.map((order) => {
       const itemsHtml = order.items.length > 0
         ? order.items.map((item) => `
             <div class="order-item-detailed-row">
@@ -599,10 +609,6 @@
               <button type="button" class="btn-order-details" data-details-id="${order.id}">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                 <span>View Details</span>
-              </button>
-              <button type="button" class="btn-track-order" data-track-id="${order.id}">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-                <span>Track Order</span>
               </button>
               <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
                 <span>+ Re-order</span>
@@ -709,7 +715,7 @@
       container.innerHTML = `
         <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
           <p style="font-size: 1rem; color: #64748b; margin-bottom: 14px;">No saved delivery addresses found.</p>
-          <button type="button" class="btn-track-order" onclick="document.getElementById('btnOpenAddAddress')?.click()">
+          <button type="button" class="address-add-btn" onclick="document.getElementById('btnOpenAddAddress')?.click()">
             <span>+ Add Your First Address</span>
           </button>
         </div>
@@ -1033,19 +1039,12 @@
       });
     });
 
-    // Orders Actions (Details, Track & Reorder)
+    // Orders Actions (Details & Reorder)
     $('#ordersListContainer')?.addEventListener('click', (e) => {
       const detailsBtn = e.target.closest('[data-details-id]');
       if (detailsBtn) {
         const orderId = detailsBtn.dataset.detailsId;
         openOrderDetailsModal(orderId);
-        return;
-      }
-
-      const trackBtn = e.target.closest('[data-track-id]');
-      if (trackBtn) {
-        const orderId = trackBtn.dataset.trackId;
-        openTrackingModal(orderId);
         return;
       }
 
@@ -1059,6 +1058,7 @@
 
     // Close Order Details Modal
     $('#closeOrderDetailsModal')?.addEventListener('click', closeOrderDetailsModal);
+    $('#closeOrderModalBtn')?.addEventListener('click', closeOrderDetailsModal);
     $('#orderDetailsModal')?.addEventListener('click', (e) => {
       if (e.target.id === 'orderDetailsModal') closeOrderDetailsModal();
     });
@@ -1248,11 +1248,6 @@
       }
     });
 
-    // Tracking Modal Close
-    $('#trackingModalClose')?.addEventListener('click', () => {
-      $('#trackingModal')?.classList.add('hidden');
-    });
-
     // Edit Profile Modal & Handler
     $('#btnEditProfile')?.addEventListener('click', () => {
       if ($('#editProfileName')) $('#editProfileName').value = state.customer?.name || '';
@@ -1301,83 +1296,6 @@
       btn.addEventListener('click', () => openPolicyModal(btn.dataset.policy));
     });
     $('#policyClose')?.addEventListener('click', closePolicyModal);
-  }
-
-  // Tracking Modal with Visual Stepper
-  async function openTrackingModal(orderId) {
-    const modal = $('#trackingModal');
-    if (!modal) return;
-
-    const order = state.orders.find((o) => o.id === orderId) || { id: orderId };
-    $('#trackingModalOrderId').textContent = `#${order.id}`;
-    $('#trackingModalStatus').textContent = order.statusLabel || 'Out for Delivery';
-    $('#trackingModalCourier').textContent = order.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)';
-    $('#trackingModalEst').textContent = order.estDelivery || 'Today by 7:00 AM';
-
-    // Fetch live tracking from API if available
-    try {
-      const data = await apiRequest(`/api/v1/orders/${order.id}/track`);
-      if (data && data.order) {
-        const live = data.order;
-        const statusMap = {
-          placed: 'Order Placed',
-          confirmed: 'Confirmed',
-          bottled: 'Bottled Fresh',
-          hub: 'At Cold Hub',
-          out_for_delivery: 'Out for Delivery',
-          delivered: 'Delivered'
-        };
-        $('#trackingModalStatus').textContent = statusMap[live.orderStatus] || live.orderStatus;
-        if (live.courierName) $('#trackingModalCourier').textContent = live.courierName;
-        if (live.estimatedDelivery) $('#trackingModalEst').textContent = live.estimatedDelivery;
-        updateTrackingModalStepper(live.orderStatus);
-      } else {
-        updateTrackingModalStepper(order.status || 'placed');
-      }
-    } catch {
-      updateTrackingModalStepper(order.status || 'placed');
-    }
-
-    modal.classList.remove('hidden');
-  }
-
-  function updateTrackingModalStepper(status) {
-    const stages = ['placed', 'confirmed', 'bottled', 'hub', 'out_for_delivery', 'delivered'];
-    const currentIdx = stages.indexOf(String(status).toLowerCase());
-    const steps = $$('.tracking-stepper .tracking-step');
-
-    steps.forEach((step, idx) => {
-      const node = step.querySelector('.step-node');
-      const label = step.querySelector('.step-label');
-      step.classList.remove('completed', 'active');
-      if (idx < currentIdx) {
-        step.classList.add('completed');
-        if (node) {
-          node.style.background = '#047857';
-          node.style.color = '#fff';
-          node.style.boxShadow = 'none';
-          node.textContent = '✓';
-        }
-        if (label) label.style.color = '#0f172a';
-      } else if (idx === currentIdx) {
-        step.classList.add('active');
-        if (node) {
-          node.style.background = '#2563eb';
-          node.style.color = '#fff';
-          node.style.boxShadow = '0 0 0 4px #dbeafe';
-          node.textContent = String(idx + 1);
-        }
-        if (label) label.style.color = '#2563eb';
-      } else {
-        if (node) {
-          node.style.background = '#e2e8f0';
-          node.style.color = '#94a3b8';
-          node.style.boxShadow = 'none';
-          node.textContent = String(idx + 1);
-        }
-        if (label) label.style.color = '#94a3b8';
-      }
-    });
   }
 
   // Order Details Modal with Full Tax Invoice and Items Breakdown
@@ -1430,14 +1348,6 @@
     }
 
     // Modal action buttons
-    const trackBtn = $('#orderModalTrackBtn');
-    if (trackBtn) {
-      trackBtn.onclick = () => {
-        closeOrderDetailsModal();
-        openTrackingModal(order.id);
-      };
-    }
-
     const reorderBtn = $('#orderModalReorderBtn');
     if (reorderBtn) {
       reorderBtn.onclick = () => {

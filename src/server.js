@@ -855,7 +855,9 @@ app.get('/api/v1/orders', { preHandler: app.authenticate }, async (request) => {
   const { rows } = await pool.query(
     `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise,
             order_status, payment_status, courier_name, tracking_number, estimated_delivery, created_at
-     FROM customer_orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 50`,
+     FROM customer_orders
+     WHERE customer_id = $1 AND order_status != 'cancelled'
+     ORDER BY created_at DESC LIMIT 50`,
     [request.customer.id]
   );
   return { orders: rows };
