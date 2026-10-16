@@ -572,12 +572,6 @@
                   <strong>Delivering to:</strong> ${escapeHtml(order.address)}
                 </div>
               </div>
-              <div class="order-info-line" style="margin-top: 4px;">
-                <span class="order-info-icon">🕒</span>
-                <div class="order-info-text">
-                  <strong>Delivery Window:</strong> ${escapeHtml(order.estDelivery)}
-                </div>
-              </div>
             </div>
 
             <div class="order-bill-summary-bar">
@@ -1317,7 +1311,6 @@
     if ($('#orderModalContact')) {
       $('#orderModalContact').textContent = `${order.recipientName || state.customer?.name || 'Customer'}${order.recipientPhone ? ' · +91 ' + order.recipientPhone : ''}`;
     }
-    if ($('#orderModalWindow')) $('#orderModalWindow').textContent = order.estDelivery;
     if ($('#orderModalCourier')) $('#orderModalCourier').textContent = order.courier;
     if ($('#orderModalPayment')) $('#orderModalPayment').textContent = `✓ ${order.paymentMethod || 'Paid Online (Razorpay)'}`;
 

@@ -721,10 +721,6 @@
           <span class="recap-val">${escapeHtml(addr.house)}, ${escapeHtml(addr.building)}, ${escapeHtml(addr.street)}${addr.landmark ? `, ${escapeHtml(addr.landmark)}` : ''}, ${escapeHtml(addr.city)} - ${escapeHtml(addr.pincode)}</span>
           <button type="button" class="recap-edit-btn" id="editAddrBtn">Edit</button>
         </div>
-        <div class="recap-row">
-          <span class="recap-label">Delivery Slot</span>
-          <span class="recap-val" style="color: #15803d; font-weight: 600;">Tomorrow Morning · 6:00 AM – 7:00 AM Direct Doorstep Drop</span>
-        </div>
       </div>
 
       <div class="payment-method-card">
