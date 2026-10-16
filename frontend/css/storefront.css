@@ -2981,30 +2981,84 @@ body.cart-open .cart-scrim {
   text-decoration: underline;
 }
 
-.footer-whatsapp-link {
-  display: inline-flex;
+/* Sticky Floating WhatsApp Widget (Bottom-Right Corner) */
+.whatsapp-sticky-widget {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 990;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none !important;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.whatsapp-sticky-bubble {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: #25D366;
+  box-shadow: 0 6px 20px rgba(37, 211, 102, 0.42), 0 2px 6px rgba(0, 0, 0, 0.12);
+  display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 6px;
-  border-radius: 6px;
-  background: rgba(37, 211, 102, 0.12);
-  color: #25D366;
-  text-decoration: none !important;
-  transition: all 0.2s ease;
-  line-height: 1;
-  margin-left: 6px;
-  vertical-align: middle;
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease;
 }
 
-.footer-whatsapp-link:hover {
-  background: rgba(37, 211, 102, 0.25);
-  transform: scale(1.1);
-  text-decoration: none !important;
-}
-
-.footer-whatsapp-link svg {
+.whatsapp-sticky-svg {
   display: block;
   flex-shrink: 0;
+}
+
+.whatsapp-sticky-tooltip {
+  display: inline-block;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 20px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(8px);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  order: -1;
+}
+
+.whatsapp-sticky-widget:hover .whatsapp-sticky-bubble {
+  transform: scale(1.1) translateY(-2px);
+  box-shadow: 0 10px 24px rgba(37, 211, 102, 0.55), 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.whatsapp-sticky-widget:hover .whatsapp-sticky-tooltip {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.whatsapp-sticky-widget:active .whatsapp-sticky-bubble {
+  transform: scale(0.95);
+}
+
+@media (max-width: 640px) {
+  .whatsapp-sticky-widget {
+    bottom: 20px;
+    right: 18px;
+  }
+  .whatsapp-sticky-bubble {
+    width: 52px;
+    height: 52px;
+  }
+  .whatsapp-sticky-svg {
+    width: 30px;
+    height: 30px;
+  }
+  .whatsapp-sticky-tooltip {
+    display: none;
+  }
 }
 
 .footer-social-links {
