@@ -655,12 +655,10 @@ function updateSubscriptionSummary() {
   const periodDaysBadge = $('#subPeriodDaysBadge');
   const periodStartDate = $('#subPeriodStartDate');
   const periodEndDate = $('#subPeriodEndDate');
-  const periodBreakdownText = $('#subPeriodBreakdownText');
 
   if (periodDaysBadge) periodDaysBadge.textContent = `${days} Mornings`;
   if (periodStartDate) periodStartDate.textContent = dateInfo.startLabel;
   if (periodEndDate) periodEndDate.textContent = dateInfo.endLabel;
-  if (periodBreakdownText) periodBreakdownText.textContent = breakdownText || `${days} Days`;
 
   const subTotal = days * rates.dailyRate;
   const regularTotal = days * rates.oneTimeRate;
