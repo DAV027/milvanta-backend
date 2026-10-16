@@ -288,7 +288,7 @@
                   <p style="font-size: 0.82rem; color: #64748b; margin: 2px 0 0;">Early morning doorstep delivery</p>
                 </div>
               </div>
-              <div class="calendar-days-track">
+              <div class="calendar-days-track" id="profileCalendarDaysTrack">
                 <div class="calendar-day-box">
                   <span class="calendar-day-name">Mon</span>
                   <span class="calendar-day-num">13</span>
@@ -682,6 +682,27 @@
             </div>
           </div>
 
+          <!-- Dedicated Delivery Period & Schedule Card -->
+          <div class="sub-period-card" id="profileSubPeriodCard">
+            <div class="sub-period-top">
+              <span class="sub-period-kicker">📅 Delivery Period</span>
+              <span class="sub-period-total-pill" id="profileSubPeriodDaysBadge">31 Mornings</span>
+            </div>
+            <div class="sub-period-timeline">
+              <div class="sub-timeline-box start">
+                <span class="sub-timeline-tag">START DATE</span>
+                <span class="sub-timeline-date" id="profileSubPeriodStartDate">Tomorrow, 17 Oct 2026</span>
+              </div>
+              <div class="sub-timeline-arrow">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+              </div>
+              <div class="sub-timeline-box end">
+                <span class="sub-timeline-tag">END DATE</span>
+                <span class="sub-timeline-date" id="profileSubPeriodEndDate">16 Nov 2026</span>
+              </div>
+            </div>
+          </div>
+
           <!-- Dynamic Price Card -->
           <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px;">
             <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #475569; margin-bottom: 6px;">
@@ -776,7 +797,8 @@
       );
       window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
     </script>
-    <script src="js/delivery.js?v=20261016-4"></script>
-    <script src="js/profile.js?v=20261016-4"></script>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="js/delivery.js?v=20261016-5"></script>
+    <script src="js/profile.js?v=20261016-5"></script>
   </body>
 </html>

@@ -857,7 +857,14 @@
       return;
     }
 
-    container.innerHTML = state.subscriptions.map((sub) => `
+    container.innerHTML = state.subscriptions.map((sub) => {
+      const isBuffalo = (sub.product || '').toLowerCase().includes('buffalo');
+      const is1L = (sub.quantity || sub.product || '').toLowerCase().includes('1');
+      const rate = sub.costPerDay || sub.dailyRate || (isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55));
+      const fallbackTotal = (sub.days || 30) * rate;
+      const totalDisplay = sub.totalAmount ? Number(sub.totalAmount).toLocaleString('en-IN') : fallbackTotal.toLocaleString('en-IN');
+
+      return `
       <div class="subscription-card" data-sub-id="${sub.id}">
         <div>
           <div class="subscription-item-header">
@@ -875,7 +882,7 @@
             </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Daily Rate</span>
-              <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${sub.costPerDay || sub.dailyRate}/day</span>
+              <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${rate}/day</span>
             </div>
             ${sub.durationLabel ? `
               <div class="sub-detail-row">
@@ -884,6 +891,10 @@
               </div>
             ` : ''}
             <div class="sub-detail-row">
+              <span class="sub-detail-label">Total Plan Value</span>
+              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 800;">₹${totalDisplay}</span>
+            </div>
+            <div class="sub-detail-row">
               <span class="sub-detail-label">Status</span>
               <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
                 ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
@@ -891,7 +902,7 @@
             </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Next Scheduled Delivery</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">${escapeHtml(sub.nextDelivery)}</span>
+              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
             </div>
           </div>
         </div>
@@ -907,7 +918,57 @@
           </button>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
+  }
+
+  // Dynamic 7-Day Morning Calendar Strip
+  function renderCalendarDays() {
+    const track = $('#profileCalendarDaysTrack');
+    if (!track) return;
+
+    const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const now = new Date();
+    const daysHtml = [];
+    for (let offset = -2; offset <= 4; offset++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+      const isToday = offset === 0;
+      const isPast = offset < 0;
+      const dayName = daysOfWeek[d.getDay()];
+      const dayNum = d.getDate();
+
+      let statusBadge = '';
+      if (isPast) {
+        statusBadge = `<span class="calendar-status-dot" style="background: #f1f5f9; color: #64748b;">Delivered</span>`;
+      } else if (isToday) {
+        statusBadge = `<span class="calendar-status-dot">Today</span>`;
+      } else {
+        statusBadge = `<span class="calendar-status-dot">Scheduled</span>`;
+      }
+
+      daysHtml.push(`
+        <div class="calendar-day-box ${isToday ? 'is-today' : ''}">
+          <span class="calendar-day-name">${dayName}</span>
+          <span class="calendar-day-num">${dayNum}</span>
+          ${statusBadge}
+        </div>
+      `);
+    }
+
+    track.innerHTML = daysHtml.join('');
+  }
+
+  // Check Return from Razorpay Subscription Checkout
+  function checkSubscriptionReturn() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('subscription') === 'success' || urlParams.get('sub_success') === '1' || urlParams.get('sub_success') === 'true') {
+      switchTab('subscription');
+      const cleanUrl = `${window.location.pathname}?tab=subscription`;
+      window.history.replaceState({}, document.title, cleanUrl);
+      setTimeout(() => {
+        showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
+      }, 500);
+    }
   }
 
   // ==========================================
@@ -1337,6 +1398,60 @@
     $('#policyClose')?.addEventListener('click', closePolicyModal);
   }
 
+  // Razorpay Script Injection
+  async function ensureRazorpayScript() {
+    if (window.Razorpay) return;
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Razorpay Checkout failed to load.'));
+      document.head.append(script);
+    });
+  }
+
+  // Continuous Months calculation helper
+  function getContinuousMonthsDetails(startOffset = 0, count = 1) {
+    const now = new Date();
+    let totalDays = 0;
+    const mList = [];
+
+    let startDate;
+    if (startOffset === 0) {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    } else {
+      startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
+    }
+
+    for (let i = 0; i < count; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
+      const y = d.getFullYear();
+      const m = d.getMonth();
+      const daysInMonth = new Date(y, m + 1, 0).getDate();
+      const sName = d.toLocaleString('en-IN', { month: 'short' });
+      const lName = d.toLocaleString('en-IN', { month: 'long' });
+
+      mList.push({ year: y, month: m, sName, lName, days: daysInMonth });
+      totalDays += daysInMonth;
+    }
+
+    const endDate = new Date(startDate.getTime() + (totalDays - 1) * 24 * 60 * 60 * 1000);
+
+    const startFormatted = startOffset === 0
+      ? `Tomorrow, ${startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
+      : startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const endFormatted = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+    let rangeLabel = '';
+    if (count === 1) {
+      rangeLabel = `${mList[0].lName} ${mList[0].year} (${totalDays} Days)`;
+    } else {
+      rangeLabel = `${mList[0].sName} ${mList[0].year} – ${mList[mList.length - 1].sName} ${mList[mList.length - 1].year} (${count} Months · ${totalDays} Days)`;
+    }
+
+    return { totalDays, startDate, endDate, startFormatted, endFormatted, rangeLabel, mList };
+  }
+
   // Create Subscription Modal Logic & Dynamic Pricing
   function setupCreateSubscriptionModal() {
     const modal = $('#createSubscriptionModal');
@@ -1401,32 +1516,19 @@
 
       let days = 30;
       let planLabel = '';
+      let startFormatted = '';
+      let endFormatted = '';
 
       if (subState.planType === 'month') {
         const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
         const count = Math.max(1, Math.min(12, subState.monthsCount || 1));
         subState.monthsCount = count;
 
-        const now = new Date();
-        let totalDays = 0;
-        const mList = [];
-        for (let i = 0; i < count; i++) {
-          const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
-          const y = d.getFullYear();
-          const m = d.getMonth();
-          const dCount = new Date(y, m + 1, 0).getDate();
-          const sName = d.toLocaleString('en-IN', { month: 'short' });
-          const lName = d.toLocaleString('en-IN', { month: 'long' });
-          mList.push({ year: y, month: m, sName, lName, days: dCount });
-          totalDays += dCount;
-        }
-
-        days = totalDays;
-        if (count === 1) {
-          planLabel = `${mList[0].lName} ${mList[0].year} (1 Month · ${days} Days)`;
-        } else {
-          planLabel = `${mList[0].sName} ${mList[0].year} – ${mList[mList.length - 1].sName} ${mList[mList.length - 1].year} (${count} Mos · ${days} Days)`;
-        }
+        const details = getContinuousMonthsDetails(startOffset, count);
+        days = details.totalDays;
+        planLabel = details.rangeLabel;
+        startFormatted = details.startFormatted;
+        endFormatted = details.endFormatted;
 
         const valElem = $('#profileSubMonthsVal');
         const unitElem = $('#profileSubMonthsUnit');
@@ -1436,9 +1538,9 @@
         const hintElem = $('#profileSubMonthHint');
         if (hintElem) {
           if (count === 1) {
-            hintElem.textContent = `Period: ${mList[0].lName} ${mList[0].year} (${days} Days). Price adapts automatically to exact days.`;
+            hintElem.textContent = `Period: ${details.mList[0].lName} ${details.mList[0].year} (${days} Days). Price adapts automatically to exact days.`;
           } else {
-            const bTxt = mList.map((m) => `${m.sName}: ${m.days}d`).join(' + ');
+            const bTxt = details.mList.map((m) => `${m.sName}: ${m.days}d`).join(' + ');
             hintElem.textContent = `Period: ${bTxt} = ${days} Continuous Days across ${count} months.`;
           }
         }
@@ -1454,7 +1556,21 @@
         const input = $('#profileSubDaysInput');
         days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
         if (input) input.value = days;
-        planLabel = `${days} Days Plan`;
+        planLabel = `${days} Days Custom Plan`;
+
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        const endDate = new Date(startDate.getTime() + (days - 1) * 24 * 60 * 60 * 1000);
+        startFormatted = `Tomorrow, ${startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+        endFormatted = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+        document.querySelectorAll('[data-profile-days]').forEach((pill) => {
+          const pDays = parseInt(pill.dataset.profileDays, 10);
+          const isAct = pDays === days;
+          pill.style.background = isAct ? '#0a3d66' : '#f1f5f9';
+          pill.style.color = isAct ? '#ffffff' : '#334155';
+          pill.style.borderColor = isAct ? '#0a3d66' : '#cbd5e1';
+        });
       }
 
       subState.days = days;
@@ -1462,12 +1578,28 @@
       const regularTotal = days * oneTimeRate;
       const savings = days * (oneTimeRate - dailyRate);
 
+      // Update Delivery Period Card
+      if ($('#profileSubPeriodDaysBadge')) $('#profileSubPeriodDaysBadge').textContent = `${days} Mornings`;
+      if ($('#profileSubPeriodStartDate')) $('#profileSubPeriodStartDate').textContent = startFormatted;
+      if ($('#profileSubPeriodEndDate')) $('#profileSubPeriodEndDate').textContent = endFormatted;
+
+      // Update Price Summary Card
       if ($('#profileSubSummaryPlanText')) $('#profileSubSummaryPlanText').textContent = planLabel;
       if ($('#profileSubSummaryRateText')) $('#profileSubSummaryRateText').textContent = `₹${dailyRate} / day`;
       if ($('#profileSubSavingsText')) $('#profileSubSavingsText').textContent = `Save ₹${savings.toLocaleString('en-IN')} vs one-time order`;
       if ($('#profileSubFinalTotal')) $('#profileSubFinalTotal').textContent = `₹${totalAmount.toLocaleString('en-IN')}`;
 
-      return { dailyRate, oneTimeRate, days, totalAmount, savings, planLabel };
+      // Update Action Button
+      const submitBtn = $('#profileSubmitSubBtn');
+      if (submitBtn) {
+        if (subState.planType === 'custom') {
+          submitBtn.innerHTML = `<span>Add to Cart · ₹${totalAmount.toLocaleString('en-IN')}</span>`;
+        } else {
+          submitBtn.innerHTML = `<span>Subscribe &amp; Pay · ₹${totalAmount.toLocaleString('en-IN')}</span>`;
+        }
+      }
+
+      return { dailyRate, oneTimeRate, days, totalAmount, savings, planLabel, startFormatted, endFormatted };
     }
 
     openBtn?.addEventListener('click', () => {
@@ -1624,53 +1756,181 @@
       const productName = isBuffalo ? 'Pure Buffalo Milk' : 'Pure Fresh Cow Milk';
       const sizeLabel = is1L ? '1 Litre' : '500 ml';
       const imageUrl = isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg';
+      const submitBtn = $('#profileSubmitSubBtn');
 
-      const newSub = {
+      // 1. CUSTOM DAYS PLAN -> Regular Cart Checkout
+      if (subState.planType === 'custom') {
+        const customPlanVariant = {
+          size: `${sizeLabel} (${calc.days} Days · ₹${calc.dailyRate}/day)`,
+          price: calc.totalAmount,
+          customDays: calc.days,
+          dailyRate: calc.dailyRate,
+          isCustomDaysPlan: true
+        };
+
+        const cartItem = {
+          id: isBuffalo ? 102 : 101,
+          name: productName,
+          price: calc.totalAmount,
+          size: customPlanVariant.size,
+          image: imageUrl,
+          quantity: 1,
+          customDays: calc.days,
+          dailyRate: calc.dailyRate,
+          isCustomDaysPlan: true
+        };
+
+        let cart = [];
+        try {
+          cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
+          if (!Array.isArray(cart)) cart = [];
+        } catch {
+          cart = [];
+        }
+
+        const existingIdx = cart.findIndex((item) => item.id === cartItem.id && item.size === cartItem.size);
+        if (existingIdx > -1) {
+          cart[existingIdx].quantity = (cart[existingIdx].quantity || 1) + 1;
+        } else {
+          cart.push(cartItem);
+        }
+
+        try {
+          localStorage.setItem('milvanta-cart', JSON.stringify(cart));
+        } catch {}
+
+        updateCartBadge();
+        closeModal();
+        showToast(`Added ${calc.days}-Day Fresh Milk plan (₹${calc.totalAmount.toLocaleString('en-IN')}) to Cart!`);
+        return;
+      }
+
+      // 2. CONTINUOUS MONTHS PLAN -> Razorpay Subscription Checkout
+      const originalBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span>Setting Up Subscription...</span>';
+      }
+
+      const subItem = {
         id: 'sub-' + Date.now().toString(36),
         product: `${productName} (${sizeLabel})`,
+        productName: productName,
+        productId: isBuffalo ? 102 : 101,
         image: imageUrl,
+        size: sizeLabel,
+        planType: 'month',
+        durationLabel: calc.planLabel,
+        days: calc.days,
+        dailyRate: calc.dailyRate,
+        totalAmount: calc.totalAmount,
+        savings: calc.savings,
         frequency: 'Daily (Every Morning)',
         timeSlot: '6:00 AM - 7:00 AM',
         quantity: sizeLabel,
         qtyNum: 1,
         costPerDay: calc.dailyRate,
-        dailyRate: calc.dailyRate,
-        days: calc.days,
-        planType: subState.planType,
-        durationLabel: calc.planLabel,
-        totalAmount: calc.totalAmount,
-        savings: calc.savings,
         status: 'active',
         nextDelivery: 'Tomorrow'
       };
 
+      let subs = [];
       try {
-        await apiRequest('/api/v1/subscriptions', {
-          method: 'POST',
-          body: JSON.stringify({
-            productName: newSub.product,
-            imageUrl: newSub.image,
-            frequency: newSub.frequency,
-            timeSlot: newSub.timeSlot,
-            quantity: newSub.quantity,
-            quantityNum: 1,
-            costPerDayPaise: calc.dailyRate * 100,
-            daysCount: calc.days,
-            totalAmountPaise: calc.totalAmount * 100
-          })
-        }).then((res) => {
-          if (res?.subscription?.id) newSub.id = res.subscription.id;
-        }).catch(() => {});
+        subs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+        if (!Array.isArray(subs)) subs = [];
+      } catch {
+        subs = [];
+      }
+      subs.unshift(subItem);
+      state.subscriptions = subs;
+      try {
+        localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs));
       } catch {}
 
-      state.subscriptions.unshift(newSub);
       try {
-        localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
-      } catch {}
+        await ensureRazorpayScript();
+
+        const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
+        const res = await apiRequest('/api/v1/subscriptions/razorpay-checkout', {
+          method: 'POST',
+          body: JSON.stringify({
+            productId: isBuffalo ? 2 : 1,
+            productName: productName,
+            size: sizeLabel,
+            monthsCount: subState.monthsCount,
+            daysCount: calc.days,
+            totalAmountPaise: calc.totalAmount * 100,
+            dailyRatePaise: calc.dailyRate * 100,
+            startOffset
+          })
+        });
+
+        if (res?.subscriptionId) {
+          subItem.id = res.subscriptionId;
+          subItem.razorpaySubscriptionId = res.subscriptionId;
+          try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+        }
+
+        const returnEndpoint = `${API_URL}/api/v1/subscriptions/callback?return_url=${encodeURIComponent(window.location.origin + '/profile.html?tab=subscription')}`;
+
+        if (window.Razorpay && res?.subscriptionId) {
+          const rzpOptions = {
+            key: res.keyId || window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX',
+            subscription_id: res.subscriptionId,
+            name: 'Milvanta',
+            description: `${productName} (${sizeLabel}) · ${calc.planLabel}`,
+            image: imageUrl,
+            callback_url: returnEndpoint,
+            prefill: {
+              name: state.customer?.name || '',
+              email: state.customer?.email || '',
+              contact: state.customer?.phone || ''
+            },
+            theme: {
+              color: '#0a3d66'
+            },
+            handler: function (response) {
+              closeModal();
+              subItem.status = 'active';
+              subItem.paymentId = response.razorpay_payment_id;
+              try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+              renderSubscriptions();
+              showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
+              window.history.replaceState({}, document.title, 'profile.html?tab=subscription');
+            },
+            modal: {
+              ondismiss: function () {
+                if (submitBtn) {
+                  submitBtn.disabled = false;
+                  if (originalBtnHtml) submitBtn.innerHTML = originalBtnHtml;
+                }
+              }
+            }
+          };
+
+          const checkout = new window.Razorpay(rzpOptions);
+          checkout.open();
+          closeModal();
+          return;
+        }
+
+        if (res?.shortUrl) {
+          showToast('Opening Razorpay Subscription Checkout...');
+          window.location.href = res.shortUrl;
+          return;
+        }
+      } catch (err) {
+        console.warn('Razorpay subscription checkout notice:', err.message);
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          calculateProfileRates();
+        }
+      }
 
       renderSubscriptions();
       closeModal();
-      showToast(`🥛 ${newSub.product} morning subscription active!`);
+      showToast(`🥛 ${subItem.product} morning subscription active!`);
       switchTab('subscription');
     });
   }
@@ -1848,6 +2108,8 @@
     const initialTab = params.get('tab') || 'profile';
 
     setupListeners();
+    renderCalendarDays();
+    checkSubscriptionReturn();
     switchTab(initialTab);
     updateCartBadge();
 
