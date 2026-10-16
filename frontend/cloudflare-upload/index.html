@@ -461,21 +461,43 @@
               <!-- Plan Duration Type Tabs -->
               <div class="sub-duration-tabs" role="tablist">
                 <button type="button" class="sub-duration-tab active" id="subTabMonth" data-plan="month">
-                  <span>Full Month Plan</span>
+                  <span>Continuous Months</span>
                 </button>
                 <button type="button" class="sub-duration-tab" id="subTabCustom" data-plan="custom">
                   <span>Custom Days (Min 2)</span>
                 </button>
               </div>
 
-              <!-- Month Selection Controls -->
+              <!-- Continuous Months Controls -->
               <div class="sub-month-controls" id="subMonthControls">
-                <label class="sub-input-label">Select Month
-                  <select id="subMonthSelect" class="sub-select-input">
-                    <!-- Populated dynamically via JS: Current month, Next month, etc. with exact days -->
+                <div class="sub-start-month-row" style="margin-bottom: 12px;">
+                  <label class="sub-input-label" for="subStartMonthSelect">Starting Month</label>
+                  <select id="subStartMonthSelect" class="sub-select-input">
+                    <!-- Populated dynamically via JS: October 2026 (Starts Now), November 2026, etc. -->
                   </select>
-                </label>
-                <p class="sub-month-hint" id="subMonthHint">Price dynamically adjusts to the exact days in month (28, 29, 30, or 31 days).</p>
+                  <select id="subMonthSelect" style="display: none;"></select>
+                </div>
+
+                <div class="sub-months-counter-block">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <label class="sub-input-label" style="margin-bottom: 0;">Number of Months (Continuous)</label>
+                    <span class="sub-plan-badge" style="font-size: 0.70rem; color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 8px; border-radius: 9999px; font-weight: 700;">Continuous Sequence</span>
+                  </div>
+                  <div class="sub-days-counter-row">
+                    <button type="button" class="sub-day-stepper-btn" id="subMonthsDec" aria-label="Decrease months">−</button>
+                    <div style="flex: 1; text-align: center; font-weight: 800; font-size: 1.15rem; color: var(--text);">
+                      <span id="subMonthsVal">1</span> <span id="subMonthsUnit">Month</span>
+                    </div>
+                    <button type="button" class="sub-day-stepper-btn" id="subMonthsInc" aria-label="Increase months">+</button>
+                  </div>
+                  <div class="sub-quick-day-pills" id="subMonthQuickPills" style="margin-top: 8px;">
+                    <button type="button" class="sub-quick-pill active" data-months="1">1 Month</button>
+                    <button type="button" class="sub-quick-pill" data-months="2">2 Months</button>
+                    <button type="button" class="sub-quick-pill" data-months="3">3 Months</button>
+                    <button type="button" class="sub-quick-pill" data-months="6">6 Months</button>
+                  </div>
+                </div>
+                <p class="sub-month-hint" id="subMonthHint" style="margin-top: 8px;">Price dynamically adjusts to the exact total days across continuous months.</p>
               </div>
 
               <!-- Custom Days Selection Controls -->

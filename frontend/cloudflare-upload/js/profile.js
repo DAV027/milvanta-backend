@@ -1352,7 +1352,8 @@
       milk: 'cow',
       size: '500ml',
       planType: 'month',
-      days: 30
+      days: 30,
+      monthsCount: 1
     };
 
     function populateProfileMonths() {
@@ -1366,8 +1367,8 @@
         const monthName = d.toLocaleString('en-IN', { month: 'long' });
         const days = new Date(y, m + 1, 0).getDate();
         const opt = document.createElement('option');
-        opt.value = `${y}-${m}-${days}`;
-        opt.textContent = `${monthName} ${y} (${days} Days)`;
+        opt.value = String(i);
+        opt.textContent = i === 0 ? `${monthName} ${y} (Starts Now · ${days} Days)` : `${monthName} ${y} (${days} Days)`;
         if (i === 0) opt.selected = true;
         monthSelect.appendChild(opt);
       }
@@ -1402,15 +1403,53 @@
       let planLabel = '';
 
       if (subState.planType === 'month') {
-        if (monthSelect && monthSelect.value) {
-          const parts = monthSelect.value.split('-');
-          days = parseInt(parts[2], 10) || 30;
-          planLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days`;
-        } else {
-          const now = new Date();
-          days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-          planLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
+        const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
+        const count = Math.max(1, Math.min(12, subState.monthsCount || 1));
+        subState.monthsCount = count;
+
+        const now = new Date();
+        let totalDays = 0;
+        const mList = [];
+        for (let i = 0; i < count; i++) {
+          const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
+          const y = d.getFullYear();
+          const m = d.getMonth();
+          const dCount = new Date(y, m + 1, 0).getDate();
+          const sName = d.toLocaleString('en-IN', { month: 'short' });
+          const lName = d.toLocaleString('en-IN', { month: 'long' });
+          mList.push({ year: y, month: m, sName, lName, days: dCount });
+          totalDays += dCount;
         }
+
+        days = totalDays;
+        if (count === 1) {
+          planLabel = `${mList[0].lName} ${mList[0].year} (1 Month · ${days} Days)`;
+        } else {
+          planLabel = `${mList[0].sName} ${mList[0].year} – ${mList[mList.length - 1].sName} ${mList[mList.length - 1].year} (${count} Mos · ${days} Days)`;
+        }
+
+        const valElem = $('#profileSubMonthsVal');
+        const unitElem = $('#profileSubMonthsUnit');
+        if (valElem) valElem.textContent = count;
+        if (unitElem) unitElem.textContent = count === 1 ? 'Month' : 'Months';
+
+        const hintElem = $('#profileSubMonthHint');
+        if (hintElem) {
+          if (count === 1) {
+            hintElem.textContent = `Period: ${mList[0].lName} ${mList[0].year} (${days} Days). Price adapts automatically to exact days.`;
+          } else {
+            const bTxt = mList.map((m) => `${m.sName}: ${m.days}d`).join(' + ');
+            hintElem.textContent = `Period: ${bTxt} = ${days} Continuous Days across ${count} months.`;
+          }
+        }
+
+        document.querySelectorAll('#profileSubMonthQuickPills .sub-quick-pill').forEach((pill) => {
+          const pMonths = parseInt(pill.dataset.profileMonths, 10);
+          const isAct = pMonths === count;
+          pill.style.background = isAct ? '#0a3d66' : '#f1f5f9';
+          pill.style.color = isAct ? '#ffffff' : '#334155';
+          pill.style.borderColor = isAct ? '#0a3d66' : '#cbd5e1';
+        });
       } else {
         const input = $('#profileSubDaysInput');
         days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
@@ -1517,6 +1556,23 @@
     });
 
     monthSelect?.addEventListener('change', calculateProfileRates);
+
+    $('#profileSubMonthsDec')?.addEventListener('click', () => {
+      subState.monthsCount = Math.max(1, (subState.monthsCount || 1) - 1);
+      calculateProfileRates();
+    });
+
+    $('#profileSubMonthsInc')?.addEventListener('click', () => {
+      subState.monthsCount = Math.min(12, (subState.monthsCount || 1) + 1);
+      calculateProfileRates();
+    });
+
+    document.querySelectorAll('#profileSubMonthQuickPills .sub-quick-pill').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        subState.monthsCount = parseInt(pill.dataset.profileMonths, 10) || 1;
+        calculateProfileRates();
+      });
+    });
 
     $('#profileSubDaysDec')?.addEventListener('click', () => {
       const input = $('#profileSubDaysInput');

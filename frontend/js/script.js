@@ -514,6 +514,50 @@ function getMilkSubscriptionRates(product, variantSize) {
   }
 }
 
+function getContinuousMonthsDetails(startOffset = 0, count = 1) {
+  const now = new Date();
+  let totalDays = 0;
+  const monthList = [];
+
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const shortName = d.toLocaleString('en-IN', { month: 'short' });
+    const longName = d.toLocaleString('en-IN', { month: 'long' });
+    monthList.push({
+      year: y,
+      month: m,
+      shortName,
+      longName,
+      days: daysInMonth
+    });
+    totalDays += daysInMonth;
+  }
+
+  const firstMonth = monthList[0];
+  const lastMonth = monthList[monthList.length - 1];
+
+  let rangeLabel = '';
+  if (count === 1) {
+    rangeLabel = `${firstMonth.longName} ${firstMonth.year} (${totalDays} Days)`;
+  } else {
+    rangeLabel = `${firstMonth.shortName} ${firstMonth.year} – ${lastMonth.shortName} ${lastMonth.year} (${count} Mos · ${totalDays} Days)`;
+  }
+
+  const breakdownText = monthList.map((m) => `${m.shortName} (${m.days}d)`).join(' + ');
+
+  return {
+    totalDays,
+    rangeLabel,
+    breakdownText,
+    monthList,
+    firstMonth,
+    lastMonth
+  };
+}
+
 function populateSubscriptionMonths(selectElem) {
   if (!selectElem) return;
   const now = new Date();
@@ -525,8 +569,8 @@ function populateSubscriptionMonths(selectElem) {
     const monthName = d.toLocaleString('en-IN', { month: 'long' });
     const days = new Date(y, m + 1, 0).getDate();
     const opt = document.createElement('option');
-    opt.value = `${y}-${m}-${days}`;
-    opt.textContent = `${monthName} ${y} (${days} Days)`;
+    opt.value = String(i);
+    opt.textContent = i === 0 ? `${monthName} ${y} (Starts Now · ${days} Days)` : `${monthName} ${y} (${days} Days)`;
     if (i === 0) opt.selected = true;
     selectElem.appendChild(opt);
   }
@@ -543,16 +587,35 @@ function updateSubscriptionSummary() {
   let planLabel = '';
 
   if (state.subPlanType === 'month') {
-    const monthSelect = $('#subMonthSelect');
-    if (monthSelect && monthSelect.value) {
-      const parts = monthSelect.value.split('-');
-      days = parseInt(parts[2], 10) || 30;
-      planLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days`;
-    } else {
-      const now = new Date();
-      days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      planLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
+    const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
+    const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+    const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
+    state.subMonthsCount = monthsCount;
+    state.subStartMonthOffset = startOffset;
+
+    const details = getContinuousMonthsDetails(startOffset, monthsCount);
+    days = details.totalDays;
+    planLabel = details.rangeLabel;
+
+    const hintElem = $('#subMonthHint');
+    if (hintElem) {
+      if (monthsCount === 1) {
+        hintElem.textContent = `Period: ${details.firstMonth.longName} ${details.firstMonth.year} (${days} Days). Price is calculated from exact days in this month.`;
+      } else {
+        hintElem.textContent = `Period: ${details.breakdownText} = ${days} Continuous Days across ${monthsCount} months.`;
+      }
     }
+
+    const valElem = $('#subMonthsVal');
+    const unitElem = $('#subMonthsUnit');
+    if (valElem) valElem.textContent = monthsCount;
+    if (unitElem) unitElem.textContent = monthsCount === 1 ? 'Month' : 'Months';
+
+    // Update active quick pills
+    document.querySelectorAll('#subMonthQuickPills .sub-quick-pill').forEach((pill) => {
+      const pMonths = parseInt(pill.dataset.months, 10);
+      pill.classList.toggle('active', pMonths === monthsCount);
+    });
   } else {
     const input = $('#subDaysInput');
     days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
@@ -614,6 +677,7 @@ function setPurchaseMode(mode) {
   const modeSwitch = $('#modalPurchaseModeWrap');
   const subPlanner = $('#modalSubscriptionPlanWrap');
   const qtyRow = $('.modal-action-bar .quantity-row');
+  const actionBar = $('.modal-action-bar');
 
   if (modeSwitch) {
     modeSwitch.querySelectorAll('.purchase-mode-tab').forEach((tab) => {
@@ -625,10 +689,12 @@ function setPurchaseMode(mode) {
   if (mode === 'subscription') {
     if (subPlanner) subPlanner.classList.remove('hidden');
     if (qtyRow) qtyRow.style.display = 'none';
+    if (actionBar) actionBar.style.justifyContent = 'flex-end';
     updateSubscriptionSummary();
   } else {
     if (subPlanner) subPlanner.classList.add('hidden');
     if (qtyRow) qtyRow.style.display = '';
+    if (actionBar) actionBar.style.justifyContent = 'space-between';
     updateModalAddToCartBtn();
   }
 }
@@ -641,16 +707,12 @@ function handleStartSubscription(p) {
   let durationLabel = '';
 
   if (state.subPlanType === 'month') {
-    const monthSelect = $('#subMonthSelect');
-    if (monthSelect && monthSelect.value) {
-      const parts = monthSelect.value.split('-');
-      days = parseInt(parts[2], 10) || 30;
-      durationLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days Plan`;
-    } else {
-      const now = new Date();
-      days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-      durationLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
-    }
+    const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
+    const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+    const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
+    const details = getContinuousMonthsDetails(startOffset, monthsCount);
+    days = details.totalDays;
+    durationLabel = details.rangeLabel;
   } else {
     const input = $('#subDaysInput');
     days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
@@ -1571,7 +1633,8 @@ function openProductModal(id, initialMode = 'onetime') {
 
   if (isMilk) {
     if (modeSwitch) modeSwitch.classList.remove('hidden');
-    populateSubscriptionMonths($('#subMonthSelect'));
+    state.subMonthsCount = 1;
+    populateSubscriptionMonths($('#subStartMonthSelect') || $('#subMonthSelect'));
     setPurchaseMode(initialMode === 'subscription' ? 'subscription' : 'onetime');
   } else {
     if (modeSwitch) modeSwitch.classList.add('hidden');
@@ -2614,6 +2677,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#subMonthSelect')?.addEventListener('change', () => {
     updateSubscriptionSummary();
+  });
+
+  $('#subStartMonthSelect')?.addEventListener('change', () => {
+    updateSubscriptionSummary();
+  });
+
+  $('#subMonthsDec')?.addEventListener('click', () => {
+    state.subMonthsCount = Math.max(1, (state.subMonthsCount || 1) - 1);
+    updateSubscriptionSummary();
+  });
+
+  $('#subMonthsInc')?.addEventListener('click', () => {
+    state.subMonthsCount = Math.min(12, (state.subMonthsCount || 1) + 1);
+    updateSubscriptionSummary();
+  });
+
+  document.querySelectorAll('#subMonthQuickPills .sub-quick-pill').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      state.subMonthsCount = parseInt(pill.dataset.months, 10) || 1;
+      updateSubscriptionSummary();
+    });
   });
 
   $('#subDaysDec')?.addEventListener('click', () => {

@@ -3096,8 +3096,10 @@ body.cart-open .cart-scrim {
 }
 
 .modal-action-bar .modal-submit-btn {
-  flex: 1;
-  max-width: 340px;
+  flex: 0 1 auto;
+  min-width: 260px;
+  max-width: 420px;
+  margin-left: auto;
   height: 44px;
   padding: 0 24px;
   font-size: 0.95rem;
@@ -3113,6 +3115,7 @@ body.cart-open .cart-scrim {
   box-shadow: 0 4px 14px rgba(10, 61, 102, 0.22);
   transition: all 0.2s ease;
   box-sizing: border-box;
+  white-space: nowrap;
 }
 
 .modal-action-bar .modal-submit-btn:hover {
