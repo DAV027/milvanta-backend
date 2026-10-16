@@ -437,12 +437,17 @@ let products = [
 ];
 
 // Session token handling
-let authToken = (() => { try { return sessionStorage.getItem('milvanta-auth-token') || ''; } catch { return ''; } })();
+let authToken = (() => { try { return sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || ''; } catch { return ''; } })();
 function setAuthToken(token) {
   authToken = token || '';
   try {
-    if (authToken) sessionStorage.setItem('milvanta-auth-token', authToken);
-    else sessionStorage.removeItem('milvanta-auth-token');
+    if (authToken) {
+      sessionStorage.setItem('milvanta-auth-token', authToken);
+      localStorage.setItem('milvanta-auth-token', authToken);
+    } else {
+      sessionStorage.removeItem('milvanta-auth-token');
+      localStorage.removeItem('milvanta-auth-token');
+    }
   } catch (error) {
     console.error('Unable to persist the sign-in token:', error);
   }

@@ -1,6 +1,13 @@
 /**
  * Milvanta Profile Page Logic
  * Handles Profile, Orders, Addresses, and Subscription management.
+ * 
+ * Rules:
+ * - User info fetches live from /api/v1/auth/me (synced with milvanta-user in localStorage).
+ * - Removed account membership and preferred delivery slot.
+ * - My Orders fetches live from /api/v1/orders (with formatted items, status, live tracking, and reorder).
+ * - Saved Addresses fetches live from /api/v1/addresses (add, set default, delete).
+ * - Subscriptions fetches live from /api/v1/subscriptions (pause, resume, modify quantity).
  */
 
 (function () {
@@ -11,344 +18,55 @@
 
   const API_URL = (window.MILVANTA_API_URL || 'https://milvanta-backend.onrender.com').replace(/\/$/, '');
 
-  // State
+  // Session token handling
+  let authToken = (() => {
+    try {
+      return sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || '';
+    } catch {
+      return '';
+    }
+  })();
+
+  function setAuthToken(token) {
+    authToken = token || '';
+    try {
+      if (authToken) {
+        sessionStorage.setItem('milvanta-auth-token', authToken);
+        localStorage.setItem('milvanta-auth-token', authToken);
+      } else {
+        sessionStorage.removeItem('milvanta-auth-token');
+        localStorage.removeItem('milvanta-auth-token');
+      }
+    } catch {}
+  }
+
+  // App State
   const state = {
     activeTab: 'profile',
-    customer: {
-      name: 'Akhil',
-      phone: '6305974564',
-      email: 'akhil@milvanta.in',
-      city: 'Hyderabad',
-      pincode: '500081'
-    },
-    orders: [
-      {
-        id: 'MV-94821',
-        date: 'Today, 6:15 AM',
-        status: 'out_for_delivery',
-        statusLabel: 'Out for Delivery',
-        items: [
-          { name: 'Pure Fresh Milk (1 Litre)', qty: 2, price: 150 },
-          { name: 'Artisanal Walnut Raagi Brownie', qty: 1, price: 130 }
-        ],
-        total: 280,
-        address: 'Flat 402, Greenwood Heights, Madhapur, Hyderabad - 500081',
-        courier: 'Milvanta Cold-Chain Express',
-        trackingNum: 'MLV-HYD-94821',
-        estDelivery: 'Today by 7:00 AM'
-      },
-      {
-        id: 'MV-89102',
-        date: '12 Oct 2026, 6:45 AM',
-        status: 'delivered',
-        statusLabel: 'Delivered',
-        items: [
-          { name: 'Spicy Gongura Chicken Pickle (250g)', qty: 1, price: 260 },
-          { name: 'Farm Fresh Malai Paneer (200g)', qty: 1, price: 110 }
-        ],
-        total: 370,
-        address: 'Flat 402, Greenwood Heights, Madhapur, Hyderabad - 500081',
-        courier: 'Milvanta Morning Route #4',
-        trackingNum: 'MLV-HYD-89102',
-        estDelivery: 'Delivered at 6:45 AM'
-      }
-    ],
-    addresses: [
-      {
-        id: 1,
-        type: 'Home',
-        isDefault: true,
-        name: 'Akhil',
-        phone: '6305974564',
-        house: 'Flat 402, Greenwood Heights',
-        street: 'Madhapur Main Road, Near Cyber Towers',
-        city: 'Hyderabad',
-        state: 'Telangana',
-        pincode: '500081'
-      },
-      {
-        id: 2,
-        type: 'Work / Office',
-        isDefault: false,
-        name: 'Akhil',
-        phone: '6305974564',
-        house: 'Mindspace IT Park, Building 12',
-        street: 'Floor 4, Hitec City',
-        city: 'Hyderabad',
-        state: 'Telangana',
-        pincode: '500081'
-      }
-    ],
-    subscriptions: [
-      {
-        id: 'sub-1',
-        product: 'Pure Fresh Milk (1 Litre)',
-        image: 'assets/milvanta-cow-milk.jpg',
-        frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM – 7:00 AM',
-        quantity: '1 Litre',
-        qtyNum: 1,
-        costPerDay: 75,
-        status: 'active',
-        nextDelivery: 'Tomorrow, 6:00 AM'
-      },
-      {
-        id: 'sub-2',
-        product: 'Farm Fresh Malai Paneer (200g)',
-        image: 'assets/milvanta-paneer.jpg',
-        frequency: 'Alternate Days (Mon, Wed, Fri)',
-        timeSlot: '6:00 AM – 7:00 AM',
-        quantity: '200g',
-        qtyNum: 1,
-        costPerDay: 110,
-        status: 'active',
-        nextDelivery: 'Friday, 6:00 AM'
-      }
-    ]
+    customer: null,
+    orders: [],
+    addresses: [],
+    subscriptions: []
   };
 
   // Helper API fetch
   async function apiRequest(path, options = {}) {
-    const token = sessionStorage.getItem('milvanta-auth-token') || '';
-    const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+    const token = authToken || sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || '';
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const res = await fetch(`${API_URL}${path}`, { ...options, headers });
     if (!res.ok) {
+      if (res.status === 401) {
+        setAuthToken('');
+      }
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || `Request failed (${res.status})`);
+      throw new Error(err.message || err.error || `Request failed (${res.status})`);
     }
     return res.json();
-  }
-
-  // Switch Tab
-  function switchTab(tabId) {
-    if (!['profile', 'orders', 'addresses', 'subscription'].includes(tabId)) {
-      tabId = 'profile';
-    }
-    state.activeTab = tabId;
-
-    // Update Tab Buttons
-    $$('.profile-tab-btn').forEach((btn) => {
-      const isActive = btn.dataset.tab === tabId;
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
-    });
-
-    // Update Panels
-    $$('.tab-panel').forEach((panel) => {
-      panel.classList.toggle('active', panel.id === `tabPanel-${tabId}`);
-    });
-
-    // Update URL query string without reloading
-    const url = new URL(window.location);
-    url.searchParams.set('tab', tabId);
-    window.history.replaceState({}, '', url);
-
-    // Scroll smoothly to top of content if on mobile
-    if (window.innerWidth < 768) {
-      $('.profile-content-container')?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }
-
-  // Load Customer Profile
-  async function initProfile() {
-    try {
-      const token = sessionStorage.getItem('milvanta-auth-token');
-      if (token) {
-        const data = await apiRequest('/api/v1/auth/me');
-        const cust = data.customer || data.user;
-        if (cust) {
-          state.customer.name = cust.full_name || cust.name || 'Akhil';
-          state.customer.phone = cust.phone || '6305974564';
-          state.customer.email = cust.email || 'akhil@milvanta.in';
-        }
-      }
-    } catch {
-      // Fallback to default user Akhil
-    }
-
-    renderUserInfo();
-  }
-
-  // Render User Information across header and cards
-  function renderUserInfo() {
-    const initial = (state.customer.name || 'A').charAt(0).toUpperCase();
-
-    // Top card
-    if ($('#accountUserAvatar')) $('#accountUserAvatar').textContent = initial;
-    if ($('#accountUserName')) $('#accountUserName').textContent = state.customer.name;
-    if ($('#accountUserPhone')) $('#accountUserPhone').textContent = state.customer.phone;
-
-    // Header pill & dropdown
-    const avatar = $('#accountAvatarCircle') || $('#profileHeaderAvatar');
-    if (avatar) avatar.textContent = initial;
-    const name = $('#userDropdownName') || $('#dropdownUserName');
-    if (name) name.textContent = state.customer.name;
-    const phone = $('#userDropdownSub') || $('#dropdownUserPhone');
-    if (phone) phone.textContent = state.customer.phone;
-
-    // Profile Tab Details
-    if ($('#profileDetailName')) $('#profileDetailName').textContent = state.customer.name;
-    if ($('#profileDetailPhone')) $('#profileDetailPhone').textContent = `+91 ${state.customer.phone}`;
-    if ($('#profileDetailEmail')) $('#profileDetailEmail').textContent = state.customer.email;
-
-    // Delivery Location & Area from Pincode
-    const pin = localStorage.getItem('milvanta-pincode') || '500049';
-    const delivery = window.MilvantaDelivery;
-    const info = delivery ? delivery.getDeliveryInfo(pin) : { shortArea: 'Hafeezpet' };
-    const area = (info.inHyderabad && info.shortArea) ? info.shortArea : (localStorage.getItem('milvanta-area') || 'Hafeezpet');
-
-    if ($('#currentLocationText')) $('#currentLocationText').textContent = area;
-    if ($('#currentLocationDrawer')) $('#currentLocationDrawer').textContent = area;
-    if ($('#currentPincodeDrawer')) $('#currentPincodeDrawer').textContent = pin;
-    if ($('#profileDetailCity')) $('#profileDetailCity').textContent = `${area}, Hyderabad`;
-  }
-
-  // Update Cart Count
-  function updateCartBadge() {
-    try {
-      const cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
-      const count = Array.isArray(cart) ? cart.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0;
-      const badge = $('#cartCount') || $('#profileCartCount');
-      if (badge) badge.textContent = count;
-    } catch {
-      const badge = $('#cartCount') || $('#profileCartCount');
-      if (badge) badge.textContent = '0';
-    }
-  }
-
-  // Render Order Cards
-  function renderOrders() {
-    const container = $('#ordersListContainer');
-    if (!container) return;
-
-    if (!state.orders.length) {
-      container.innerHTML = `
-        <div style="text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
-          <p style="font-size: 1.1rem; color: #64748b; margin-bottom: 14px;">You have no past orders yet.</p>
-          <a href="index.html#products" class="profile-order-now-btn">Browse Fresh Milk & Pickles</a>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = state.orders.map((order) => {
-      const itemsHtml = order.items.map((item) => `
-        <div class="order-item-row">
-          <div class="order-item-title">
-            <span>🥛 ${escapeHtml(item.name)}</span>
-            <span style="color: #64748b; font-size: 0.82rem;">× ${item.qty}</span>
-          </div>
-          <span class="order-item-price">₹${item.price * item.qty}</span>
-        </div>
-      `).join('');
-
-      return `
-        <article class="order-card" data-order-id="${order.id}">
-          <div class="order-card-header">
-            <div class="order-id-group">
-              <span class="order-id">#${order.id}</span>
-              <span class="order-date">${order.date}</span>
-            </div>
-            <span class="order-status-pill ${order.status}">
-              ${order.status === 'delivered' ? '✓' : '●'} ${order.statusLabel}
-            </span>
-          </div>
-          <div class="order-items-list">
-            ${itemsHtml}
-          </div>
-          <div class="order-card-footer">
-            <div class="order-total-group">
-              <span class="order-total-label">Total Amount:</span>
-              <span class="order-total-amount">₹${order.total}</span>
-            </div>
-            <div class="order-actions-group">
-              <button type="button" class="btn-track-order" data-track-id="${order.id}">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-                <span>Track Order</span>
-              </button>
-              <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
-                <span>+ Re-order</span>
-              </button>
-            </div>
-          </div>
-        </article>
-      `;
-    }).join('');
-  }
-
-  // Render Saved Addresses
-  function renderAddresses() {
-    const container = $('#addressesGridContainer');
-    if (!container) return;
-
-    container.innerHTML = state.addresses.map((addr) => `
-      <div class="address-card ${addr.isDefault ? 'is-default' : ''}">
-        <div>
-          <div class="address-tag-row">
-            <span class="address-tag">${escapeHtml(addr.type)}</span>
-            ${addr.isDefault ? '<span class="address-default-badge">✓ Default Address</span>' : ''}
-          </div>
-          <h4 class="address-recipient">${escapeHtml(addr.name)}</h4>
-          <p class="address-phone">+91 ${escapeHtml(addr.phone)}</p>
-          <p class="address-text">
-            ${escapeHtml(addr.house)}, ${escapeHtml(addr.street)}<br />
-            ${escapeHtml(addr.city)}, ${escapeHtml(addr.state)} - <strong>${escapeHtml(addr.pincode)}</strong>
-          </p>
-        </div>
-        <div class="address-card-actions">
-          ${!addr.isDefault ? `<button type="button" class="address-card-btn" data-set-default="${addr.id}">Set as Default</button>` : ''}
-          <button type="button" class="address-card-btn" data-edit-addr="${addr.id}">Edit</button>
-          ${!addr.isDefault ? `<button type="button" class="address-card-btn delete-btn" data-delete-addr="${addr.id}">Delete</button>` : ''}
-        </div>
-      </div>
-    `).join('');
-  }
-
-  // Render Subscriptions
-  function renderSubscriptions() {
-    const container = $('#subscriptionsGridContainer');
-    if (!container) return;
-
-    container.innerHTML = state.subscriptions.map((sub) => `
-      <div class="subscription-card" data-sub-id="${sub.id}">
-        <div>
-          <div class="subscription-item-header">
-            <img src="${sub.image}" alt="${escapeHtml(sub.product)}" class="subscription-item-img" />
-            <div class="subscription-item-info">
-              <span class="subscription-item-tag">Early Morning Delivery</span>
-              <h4 class="subscription-item-title">${escapeHtml(sub.product)}</h4>
-              <p class="subscription-item-meta">${sub.frequency} • ${sub.timeSlot}</p>
-            </div>
-          </div>
-          <div class="subscription-details-list">
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Daily Quantity</span>
-              <span class="sub-detail-val" id="qtyVal-${sub.id}">${sub.quantity}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Status</span>
-              <span class="status-badge-active" id="statusVal-${sub.id}">
-                ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
-              </span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Next Scheduled Delivery</span>
-              <span class="sub-detail-val" style="color: #0284c7;">${sub.nextDelivery}</span>
-            </div>
-          </div>
-        </div>
-        <div class="subscription-actions-row">
-          <button type="button" class="btn-sub-pause" data-toggle-sub="${sub.id}">
-            ${sub.status === 'active' ? '⏸ Pause' : '▶ Resume'}
-          </button>
-          <button type="button" class="btn-sub-modify" data-modify-sub="${sub.id}">
-            ✎ Modify Qty
-          </button>
-        </div>
-      </div>
-    `).join('');
   }
 
   // Escape HTML helper
@@ -361,7 +79,7 @@
       .replace(/"/g, '&quot;');
   }
 
-  // Show Toast
+  // Show Toast Notification
   function showToast(msg) {
     let toast = $('#profileToast');
     if (!toast) {
@@ -394,7 +112,609 @@
     }, 2800);
   }
 
-  // Setup Event Listeners
+  // Switch Tab
+  function switchTab(tabId) {
+    if (!['profile', 'orders', 'addresses', 'subscription'].includes(tabId)) {
+      tabId = 'profile';
+    }
+    state.activeTab = tabId;
+
+    // Update Tab Buttons
+    $$('.profile-tab-btn').forEach((btn) => {
+      const isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+
+    // Update Panels
+    $$('.tab-panel').forEach((panel) => {
+      panel.classList.toggle('active', panel.id === `tabPanel-${tabId}`);
+    });
+
+    // Update URL query string without reloading
+    const url = new URL(window.location);
+    url.searchParams.set('tab', tabId);
+    window.history.replaceState({}, '', url);
+
+    // Scroll smoothly to top of content if on mobile
+    if (window.innerWidth < 768) {
+      $('.profile-content-container')?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }
+
+  // ==========================================
+  // 1. CUSTOMER PROFILE INITIALIZATION
+  // ==========================================
+  async function initProfile() {
+    // A. Read cached customer from localStorage first for instant paint
+    try {
+      const saved = localStorage.getItem('milvanta-user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.full_name || parsed.name)) {
+          state.customer = {
+            id: parsed.id,
+            name: parsed.full_name || parsed.name,
+            phone: parsed.phone || '',
+            email: parsed.email || '',
+            city: parsed.city || 'Hafeezpet, Hyderabad'
+          };
+          renderUserInfo();
+        }
+      }
+    } catch {}
+
+    // B. Fetch live customer session if auth token exists
+    const token = authToken || sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token');
+    if (token) {
+      try {
+        const data = await apiRequest('/api/v1/auth/me');
+        const cust = data.customer || data.user;
+        if (cust) {
+          state.customer = {
+            id: cust.id,
+            name: cust.full_name || cust.name || 'Akhil',
+            phone: cust.phone || '',
+            email: cust.email || '',
+            city: 'Hafeezpet, Hyderabad'
+          };
+          try {
+            localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
+          } catch {}
+          renderUserInfo();
+        }
+      } catch (err) {
+        console.warn('Live profile fetch failed, using cached session:', err);
+      }
+    }
+
+    // C. Gate unauthenticated visitors: If neither token nor user exists, redirect to login
+    if (!state.customer && !token) {
+      window.location.href = 'index.html?auth=login';
+      return;
+    }
+
+    renderUserInfo();
+  }
+
+  // Render User Information across header and profile card
+  function renderUserInfo() {
+    if (!state.customer) return;
+
+    const initial = (state.customer.name || 'A').charAt(0).toUpperCase();
+
+    // Top card
+    if ($('#accountUserAvatar')) $('#accountUserAvatar').textContent = initial;
+    if ($('#accountUserName')) $('#accountUserName').textContent = state.customer.name;
+    if ($('#accountUserPhone')) $('#accountUserPhone').textContent = state.customer.phone;
+
+    // Header pill & dropdown
+    const avatar = $('#accountAvatarCircle') || $('#profileHeaderAvatar');
+    if (avatar) avatar.textContent = initial;
+    const name = $('#userDropdownName') || $('#dropdownUserName');
+    if (name) name.textContent = state.customer.name;
+    const phone = $('#userDropdownSub') || $('#dropdownUserPhone');
+    if (phone) phone.textContent = state.customer.phone;
+
+    // Profile Tab Details
+    if ($('#profileDetailName')) $('#profileDetailName').textContent = state.customer.name;
+    if ($('#profileDetailPhone')) $('#profileDetailPhone').textContent = state.customer.phone ? `+91 ${state.customer.phone}` : '—';
+    if ($('#profileDetailEmail')) $('#profileDetailEmail').textContent = state.customer.email || '—';
+
+    // Delivery Location & Area from Pincode
+    const pin = localStorage.getItem('milvanta-pincode') || '500049';
+    const delivery = window.MilvantaDelivery;
+    const info = delivery ? delivery.getDeliveryInfo(pin) : { shortArea: 'Hafeezpet' };
+    const area = (info.inHyderabad && info.shortArea) ? info.shortArea : (localStorage.getItem('milvanta-area') || 'Hafeezpet');
+
+    if ($('#currentLocationText')) $('#currentLocationText').textContent = area;
+    if ($('#currentLocationDrawer')) $('#currentLocationDrawer').textContent = area;
+    if ($('#currentPincodeDrawer')) $('#currentPincodeDrawer').textContent = pin;
+    if ($('#profileDetailCity')) $('#profileDetailCity').textContent = `${area}, Hyderabad`;
+  }
+
+  // Update Cart Badge Count
+  function updateCartBadge() {
+    try {
+      const cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
+      const count = Array.isArray(cart) ? cart.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0;
+      const badge = $('#cartCount') || $('#profileCartCount');
+      if (badge) badge.textContent = count;
+    } catch {
+      const badge = $('#cartCount') || $('#profileCartCount');
+      if (badge) badge.textContent = '0';
+    }
+  }
+
+  // ==========================================
+  // 2. MY ORDERS FETCHING & RENDERING
+  // ==========================================
+  async function fetchOrders() {
+    const container = $('#ordersListContainer');
+    if (container) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 40px 20px;">
+          <div style="display: inline-block; width: 34px; height: 34px; border: 3px solid #e2e8f0; border-top-color: #0a3d66; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <p style="font-size: 0.9rem; color: #64748b; margin-top: 12px;">Fetching your orders from Milvanta hub...</p>
+        </div>
+      `;
+    }
+
+    let loadedOrders = [];
+
+    // 1. Fetch live orders from backend API
+    try {
+      const data = await apiRequest('/api/v1/orders');
+      if (data && Array.isArray(data.orders)) {
+        loadedOrders = data.orders.map(formatOrderRow);
+      }
+    } catch (err) {
+      console.warn('Backend orders fetch failed, reading from local cache:', err);
+    }
+
+    // 2. Merge with any local orders saved in localStorage (from recent checkout)
+    try {
+      const localOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
+      if (Array.isArray(localOrders) && localOrders.length > 0) {
+        localOrders.forEach((lo) => {
+          const loId = lo.id || lo.order_number;
+          if (!loadedOrders.some((o) => o.id === loId)) {
+            loadedOrders.push(formatOrderRow(lo));
+          }
+        });
+      }
+    } catch {}
+
+    // Sort by date descending
+    loadedOrders.sort((a, b) => new Date(b.rawDate || b.date) - new Date(a.rawDate || a.date));
+
+    state.orders = loadedOrders;
+    renderOrders();
+  }
+
+  function formatOrderRow(row) {
+    const id = row.order_number || row.id || `MV-${Date.now()}`;
+    const rawDate = row.created_at || row.date || new Date().toISOString();
+    let formattedDate = 'Recently placed';
+    try {
+      const d = new Date(rawDate);
+      formattedDate = d.toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {}
+
+    const status = (row.order_status || row.status || 'placed').toLowerCase();
+    const statusMap = {
+      placed: 'Order Placed',
+      confirmed: 'Confirmed',
+      bottled: 'Bottled Fresh',
+      hub: 'At Cold Hub',
+      out_for_delivery: 'Out for Delivery',
+      delivered: 'Delivered',
+      cancelled: 'Cancelled'
+    };
+    const statusLabel = row.statusLabel || statusMap[status] || 'Processing';
+
+    // Parse items array
+    let items = [];
+    if (Array.isArray(row.items)) {
+      items = row.items.map((it) => ({
+        name: it.name || it.product_name || `Milvanta Product #${it.productId || it.id || ''}`,
+        qty: Number(it.quantity || it.qty || 1),
+        price: Number(it.price || (it.price_paise ? it.price_paise / 100 : 0) || 0)
+      }));
+    } else if (typeof row.items === 'string') {
+      try {
+        const parsed = JSON.parse(row.items);
+        if (Array.isArray(parsed)) {
+          items = parsed.map((it) => ({
+            name: it.name || it.product_name || `Milvanta Product #${it.productId || ''}`,
+            qty: Number(it.quantity || it.qty || 1),
+            price: Number(it.price || (it.price_paise ? it.price_paise / 100 : 0) || 0)
+          }));
+        }
+      } catch {}
+    }
+
+    // Total in rupees
+    let total = 0;
+    if (row.total_paise) {
+      total = Math.round(row.total_paise / 100);
+    } else if (row.total) {
+      total = Math.round(row.total);
+    } else {
+      total = items.reduce((sum, it) => sum + (it.price * it.qty), 0);
+    }
+
+    // Address string
+    let addrStr = 'Hyderabad, Telangana';
+    if (typeof row.address === 'object' && row.address !== null) {
+      const a = row.address;
+      addrStr = `${a.house || ''}${a.building ? ', ' + a.building : ''}${a.street ? ', ' + a.street : ''}, ${a.city || 'Hyderabad'} - ${a.pincode || ''}`;
+    } else if (typeof row.address === 'string') {
+      addrStr = row.address;
+    }
+
+    return {
+      id,
+      rawDate,
+      date: formattedDate,
+      status,
+      statusLabel,
+      items,
+      total,
+      address: addrStr,
+      courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
+      trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
+      estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM'
+    };
+  }
+
+  // Render Order Cards
+  function renderOrders() {
+    const container = $('#ordersListContainer');
+    if (!container) return;
+
+    if (!state.orders.length) {
+      container.innerHTML = `
+        <div style="text-align: center; padding: 48px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
+          <div style="font-size: 2.8rem; margin-bottom: 12px;">🧺</div>
+          <h3 style="font-size: 1.25rem; font-weight: 700; color: #0f172a; margin: 0 0 8px;">No Past Orders Yet</h3>
+          <p style="font-size: 0.9rem; color: #64748b; margin-bottom: 20px;">You haven't placed any orders yet. Fresh farm milk and authentic pickles are just a tap away.</p>
+          <a href="index.html#products" class="address-card-btn" style="padding: 10px 22px; font-weight: 700; text-decoration: none; display: inline-block;">Browse Fresh Milk &amp; Pickles →</a>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = state.orders.map((order) => {
+      const itemsHtml = order.items.length > 0
+        ? order.items.map((item) => `
+            <div class="order-item-row">
+              <div class="order-item-title">
+                <span>🥛 ${escapeHtml(item.name)}</span>
+                <span style="color: #64748b; font-size: 0.82rem;">× ${item.qty}</span>
+              </div>
+              <span class="order-item-price">₹${item.price > 0 ? (item.price * item.qty).toLocaleString('en-IN') : '—'}</span>
+            </div>
+          `).join('')
+        : `<div class="order-item-row"><div class="order-item-title"><span>🥛 Milvanta Farm Fresh Selection</span></div></div>`;
+
+      return `
+        <article class="order-card" data-order-id="${order.id}">
+          <div class="order-card-header">
+            <div class="order-id-group">
+              <span class="order-id">#${order.id}</span>
+              <span class="order-date">${order.date}</span>
+            </div>
+            <span class="order-status-pill ${order.status}">
+              ${order.status === 'delivered' ? '✓' : '●'} ${order.statusLabel}
+            </span>
+          </div>
+          <div class="order-items-list">
+            ${itemsHtml}
+          </div>
+          <div class="order-card-footer">
+            <div class="order-total-group">
+              <span class="order-total-label">Total Amount:</span>
+              <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
+            </div>
+            <div class="order-actions-group">
+              <button type="button" class="btn-track-order" data-track-id="${order.id}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                <span>Track Order</span>
+              </button>
+              <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
+                <span>+ Re-order</span>
+              </button>
+            </div>
+          </div>
+        </article>
+      `;
+    }).join('');
+  }
+
+  // ==========================================
+  // 3. SAVED ADDRESSES FETCHING & RENDERING
+  // ==========================================
+  async function fetchAddresses() {
+    const container = $('#addressesGridContainer');
+    if (container) {
+      container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 30px 20px;">
+          <div style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e2e8f0; border-top-color: #0a3d66; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <p style="font-size: 0.88rem; color: #64748b; margin-top: 10px;">Loading saved delivery addresses...</p>
+        </div>
+      `;
+    }
+
+    let loadedAddresses = [];
+
+    // 1. Fetch live addresses from backend API
+    try {
+      const data = await apiRequest('/api/v1/addresses');
+      if (data && Array.isArray(data.addresses)) {
+        loadedAddresses = data.addresses.map(formatAddressRow);
+      }
+    } catch (err) {
+      console.warn('Backend addresses fetch failed, reading from local cache:', err);
+    }
+
+    // 2. Merge with localStorage addresses
+    try {
+      const localAddrs = JSON.parse(localStorage.getItem('milvanta-addresses') || '[]');
+      if (Array.isArray(localAddrs) && localAddrs.length > 0) {
+        localAddrs.forEach((la) => {
+          if (!loadedAddresses.some((a) => a.id === la.id || (a.house === la.house && a.pincode === la.pincode))) {
+            loadedAddresses.push(formatAddressRow(la));
+          }
+        });
+      }
+    } catch {}
+
+    // Ensure at least one default if addresses exist
+    if (loadedAddresses.length > 0 && !loadedAddresses.some((a) => a.isDefault)) {
+      loadedAddresses[0].isDefault = true;
+    }
+
+    state.addresses = loadedAddresses;
+    try {
+      localStorage.setItem('milvanta-addresses', JSON.stringify(loadedAddresses));
+    } catch {}
+    renderAddresses();
+  }
+
+  function formatAddressRow(row) {
+    const id = row.id || Date.now();
+    const isDefault = Boolean(row.is_default || row.isDefault);
+    const house = row.house || '';
+    const building = row.building || '';
+    const street = row.street || '';
+    const landmark = row.landmark || '';
+    const city = row.city || 'Hyderabad';
+    const stateVal = row.state || 'Telangana';
+    const pincode = row.pincode || '500049';
+    const name = row.name || row.recipient_name || state.customer?.name || 'Akhil';
+    const phone = row.phone || state.customer?.phone || '6305974564';
+
+    let type = row.type || 'Home';
+    if (!row.type) {
+      if (/office|work|park|tower|building|hitec|cyber/i.test(`${building} ${street} ${landmark}`)) {
+        type = 'Work / Office';
+      }
+    }
+
+    return {
+      id,
+      type,
+      isDefault,
+      name,
+      phone,
+      house,
+      building,
+      street,
+      landmark,
+      city,
+      state: stateVal,
+      pincode
+    };
+  }
+
+  // Render Saved Addresses
+  function renderAddresses() {
+    const container = $('#addressesGridContainer');
+    if (!container) return;
+
+    if (!state.addresses.length) {
+      container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
+          <p style="font-size: 1rem; color: #64748b; margin-bottom: 14px;">No saved delivery addresses found.</p>
+          <button type="button" class="btn-track-order" onclick="document.getElementById('btnOpenAddAddress')?.click()">
+            <span>+ Add Your First Address</span>
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = state.addresses.map((addr) => `
+      <div class="address-card ${addr.isDefault ? 'is-default' : ''}">
+        <div>
+          <div class="address-tag-row">
+            <span class="address-tag">${escapeHtml(addr.type)}</span>
+            ${addr.isDefault ? '<span class="address-default-badge">✓ Default Address</span>' : ''}
+          </div>
+          <h4 class="address-recipient">${escapeHtml(addr.name)}</h4>
+          <p class="address-phone">+91 ${escapeHtml(addr.phone)}</p>
+          <p class="address-text">
+            ${escapeHtml(addr.house)}${addr.building ? `, ${escapeHtml(addr.building)}` : ''}, ${escapeHtml(addr.street)}${addr.landmark ? `, ${escapeHtml(addr.landmark)}` : ''}<br />
+            ${escapeHtml(addr.city)}, ${escapeHtml(addr.state)} - <strong>${escapeHtml(addr.pincode)}</strong>
+          </p>
+        </div>
+        <div class="address-card-actions">
+          ${!addr.isDefault ? `<button type="button" class="address-card-btn" data-set-default="${addr.id}">Set as Default</button>` : ''}
+          <button type="button" class="address-card-btn" data-edit-addr="${addr.id}">Edit</button>
+          ${!addr.isDefault ? `<button type="button" class="address-card-btn delete-btn" data-delete-addr="${addr.id}">Delete</button>` : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ==========================================
+  // 4. SUBSCRIPTION FETCHING & RENDERING
+  // ==========================================
+  async function fetchSubscriptions() {
+    const container = $('#subscriptionsGridContainer');
+    if (container) {
+      container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 30px 20px;">
+          <div style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e2e8f0; border-top-color: #0a3d66; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+          <p style="font-size: 0.88rem; color: #64748b; margin-top: 10px;">Loading your active milk subscriptions...</p>
+        </div>
+      `;
+    }
+
+    let loadedSubs = [];
+
+    // 1. Fetch live subscriptions from backend API
+    try {
+      const data = await apiRequest('/api/v1/subscriptions');
+      if (data && Array.isArray(data.subscriptions) && data.subscriptions.length > 0) {
+        loadedSubs = data.subscriptions.map(formatSubscriptionRow);
+      }
+    } catch (err) {
+      console.warn('Backend subscriptions fetch failed, checking local cache:', err);
+    }
+
+    // 2. Read from localStorage if API empty or unavailable
+    if (loadedSubs.length === 0) {
+      try {
+        const localSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+        if (Array.isArray(localSubs) && localSubs.length > 0) {
+          loadedSubs = localSubs.map(formatSubscriptionRow);
+        }
+      } catch {}
+    }
+
+    // 3. If still empty, provide the standard initial milk subscription
+    if (loadedSubs.length === 0) {
+      const defaultSub = {
+        id: 'sub-1',
+        product: 'Pure Fresh Cow Milk (1 Litre)',
+        image: 'assets/milvanta-cow-milk.jpg',
+        frequency: 'Daily (Every Morning)',
+        timeSlot: '6:00 AM – 7:00 AM',
+        quantity: '1 Litre',
+        qtyNum: 1,
+        costPerDay: 60,
+        status: 'active',
+        nextDelivery: 'Tomorrow, 6:00 AM'
+      };
+      loadedSubs = [defaultSub];
+
+      // Try creating in backend in background
+      try {
+        apiRequest('/api/v1/subscriptions', {
+          method: 'POST',
+          body: JSON.stringify({
+            productName: defaultSub.product,
+            imageUrl: defaultSub.image,
+            frequency: defaultSub.frequency,
+            timeSlot: defaultSub.timeSlot,
+            quantity: defaultSub.quantity,
+            quantityNum: 1,
+            costPerDayPaise: 6000
+          })
+        }).then((res) => {
+          if (res?.subscription?.id) defaultSub.id = res.subscription.id;
+        }).catch(() => {});
+      } catch {}
+    }
+
+    state.subscriptions = loadedSubs;
+    try {
+      localStorage.setItem('milvanta-subscriptions', JSON.stringify(loadedSubs));
+    } catch {}
+    renderSubscriptions();
+  }
+
+  function formatSubscriptionRow(row) {
+    return {
+      id: row.id || Date.now(),
+      product: row.product_name || row.product || 'Pure Fresh Milk (1 Litre)',
+      image: row.image_url || row.image || 'assets/milvanta-cow-milk.jpg',
+      frequency: row.frequency || 'Daily (Every Morning)',
+      timeSlot: row.time_slot || row.timeSlot || '6:00 AM – 7:00 AM',
+      quantity: row.quantity || '1 Litre',
+      qtyNum: Number(row.quantity_num || row.qtyNum || 1),
+      costPerDay: row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : (Number(row.costPerDay) || 60),
+      status: row.status || 'active',
+      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow, 6:00 AM'
+    };
+  }
+
+  // Render Subscriptions
+  function renderSubscriptions() {
+    const container = $('#subscriptionsGridContainer');
+    if (!container) return;
+
+    if (!state.subscriptions.length) {
+      container.innerHTML = `
+        <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
+          <p style="font-size: 1rem; color: #64748b; margin-bottom: 14px;">No active subscriptions found.</p>
+          <a href="index.html#products" class="address-card-btn" style="text-decoration: none; padding: 10px 20px; display: inline-block;">+ Subscribe to Morning Fresh Milk</a>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = state.subscriptions.map((sub) => `
+      <div class="subscription-card" data-sub-id="${sub.id}">
+        <div>
+          <div class="subscription-item-header">
+            <img src="${sub.image}" alt="${escapeHtml(sub.product)}" class="subscription-item-img" onerror="this.src='assets/milvanta-cow-milk.jpg'" />
+            <div class="subscription-item-info">
+              <span class="subscription-item-tag">Early Morning Delivery</span>
+              <h4 class="subscription-item-title">${escapeHtml(sub.product)}</h4>
+              <p class="subscription-item-meta">${escapeHtml(sub.frequency)} • ${escapeHtml(sub.timeSlot)}</p>
+            </div>
+          </div>
+          <div class="subscription-details-list">
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Daily Quantity</span>
+              <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Status</span>
+              <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
+                ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
+              </span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Next Scheduled Delivery</span>
+              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">${escapeHtml(sub.nextDelivery)}</span>
+            </div>
+          </div>
+        </div>
+        <div class="subscription-actions-row">
+          <button type="button" class="btn-sub-pause" data-toggle-sub="${sub.id}">
+            ${sub.status === 'active' ? '⏸ Pause' : '▶ Resume'}
+          </button>
+          <button type="button" class="btn-sub-modify" data-modify-sub="${sub.id}">
+            ✎ Modify Qty
+          </button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ==========================================
+  // 5. EVENT LISTENERS & USER ACTIONS
+  // ==========================================
   function setupListeners() {
     // Tab switching buttons
     $$('.profile-tab-btn').forEach((btn) => {
@@ -406,8 +726,10 @@
     // Overview Card Buttons
     $('#btnGoOrders')?.addEventListener('click', () => switchTab('orders'));
 
-    // Logout Pill in Card
+    // Logout
     $('#btnLogout')?.addEventListener('click', logoutUser);
+    $('#userMenuLogout')?.addEventListener('click', logoutUser);
+    $('#dropdownLogoutBtn')?.addEventListener('click', logoutUser);
 
     // Header Account Dropdown Toggle
     const accountToggle = $('#accountToggle') || $('#profileAccountToggle');
@@ -417,7 +739,7 @@
       if (dropdown) dropdown.classList.toggle('hidden');
     });
 
-    // Header Dropdown Items
+    // Header Dropdown Navigation Items
     $$('[data-tab-target]').forEach((item) => {
       item.addEventListener('click', (e) => {
         e.preventDefault();
@@ -426,9 +748,6 @@
         switchTab(item.dataset.tabTarget);
       });
     });
-
-    $('#userMenuLogout')?.addEventListener('click', logoutUser);
-    $('#dropdownLogoutBtn')?.addEventListener('click', logoutUser);
 
     // Close Dropdown on outside click
     document.addEventListener('click', (e) => {
@@ -466,7 +785,6 @@
       }
     });
 
-    // Clear search
     $('#clearSearch')?.addEventListener('click', () => {
       const input = $('#searchInput');
       if (input) {
@@ -550,39 +868,119 @@
 
       const reorderBtn = e.target.closest('[data-reorder-id]');
       if (reorderBtn) {
-        showToast('Items added to cart! Redirecting to checkout...');
-        setTimeout(() => {
-          window.location.href = 'index.html#cart';
-        }, 1000);
+        const orderId = reorderBtn.dataset.reorderId;
+        const order = state.orders.find((o) => o.id === orderId);
+        if (order && order.items && order.items.length > 0) {
+          try {
+            const cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
+            order.items.forEach((item) => {
+              const existing = cart.find((c) => c.name === item.name);
+              if (existing) {
+                existing.quantity = (existing.quantity || 1) + item.qty;
+              } else {
+                cart.push({
+                  id: Date.now(),
+                  name: item.name,
+                  price: item.price,
+                  quantity: item.qty,
+                  image: 'assets/milvanta-mark.png'
+                });
+              }
+            });
+            localStorage.setItem('milvanta-cart', JSON.stringify(cart));
+            updateCartBadge();
+            showToast('Items added to cart! Opening checkout...');
+            setTimeout(() => {
+              window.location.href = 'checkout.html';
+            }, 800);
+          } catch {
+            window.location.href = 'index.html#cart';
+          }
+        } else {
+          window.location.href = 'index.html#products';
+        }
       }
     });
 
-    // Addresses Actions (Default & Delete)
-    $('#addressesGridContainer')?.addEventListener('click', (e) => {
+    // Addresses Actions (Set Default, Delete, Edit)
+    $('#addressesGridContainer')?.addEventListener('click', async (e) => {
       const defBtn = e.target.closest('[data-set-default]');
       if (defBtn) {
-        const id = Number(defBtn.dataset.setDefault);
-        state.addresses.forEach((a) => (a.isDefault = a.id === id));
+        const id = defBtn.dataset.setDefault;
+        try {
+          await apiRequest(`/api/v1/addresses/${id}/default`, { method: 'PUT' });
+        } catch (err) {
+          console.warn('API set default failed:', err);
+        }
+        state.addresses.forEach((a) => (a.isDefault = String(a.id) === String(id)));
+        try {
+          localStorage.setItem('milvanta-addresses', JSON.stringify(state.addresses));
+        } catch {}
         renderAddresses();
-        showToast('Default address updated!');
+        showToast('Default delivery address updated!');
         return;
       }
 
       const delBtn = e.target.closest('[data-delete-addr]');
       if (delBtn) {
-        const id = Number(delBtn.dataset.deleteAddr);
+        const id = delBtn.dataset.deleteAddr;
         if (confirm('Delete this delivery address?')) {
-          state.addresses = state.addresses.filter((a) => a.id !== id);
+          try {
+            await apiRequest(`/api/v1/addresses/${id}`, { method: 'DELETE' });
+          } catch (err) {
+            console.warn('API delete address failed:', err);
+          }
+          state.addresses = state.addresses.filter((a) => String(a.id) !== String(id));
+          try {
+            localStorage.setItem('milvanta-addresses', JSON.stringify(state.addresses));
+          } catch {}
           renderAddresses();
           showToast('Address removed.');
+        }
+        return;
+      }
+
+      const editBtn = e.target.closest('[data-edit-addr]');
+      if (editBtn) {
+        const id = editBtn.dataset.editAddr;
+        const addr = state.addresses.find((a) => String(a.id) === String(id));
+        if (addr) {
+          const modal = $('#addAddressModal');
+          if (modal) {
+            modal.querySelector('h2').textContent = 'Edit Delivery Address';
+            const form = $('#addNewAddressForm');
+            if (form) {
+              form.elements['name'].value = addr.name || '';
+              form.elements['phone'].value = addr.phone || '';
+              form.elements['house'].value = addr.house || '';
+              form.elements['street'].value = addr.street || '';
+              form.elements['city'].value = addr.city || 'Hyderabad';
+              form.elements['pincode'].value = addr.pincode || '';
+              form.elements['type'].value = addr.type || 'Home';
+              form.elements['is_default'].checked = Boolean(addr.isDefault);
+            }
+            modal.classList.remove('hidden');
+          }
         }
       }
     });
 
-    // Add New Address Form Modal
+    // Add / Edit Address Form Modal Handlers
     $('#btnOpenAddAddress')?.addEventListener('click', () => {
-      $('#addAddressModal')?.classList.remove('hidden');
+      const modal = $('#addAddressModal');
+      if (modal) {
+        modal.querySelector('h2').textContent = 'Add Delivery Address';
+        $('#addNewAddressForm')?.reset();
+        if ($('#addNewAddressForm')?.elements['name']) {
+          $('#addNewAddressForm').elements['name'].value = state.customer?.name || '';
+        }
+        if ($('#addNewAddressForm')?.elements['phone']) {
+          $('#addNewAddressForm').elements['phone'].value = state.customer?.phone || '';
+        }
+        modal.classList.remove('hidden');
+      }
     });
+
     $('#closeAddAddressModal')?.addEventListener('click', () => {
       $('#addAddressModal')?.classList.add('hidden');
     });
@@ -590,42 +988,75 @@
       $('#addAddressModal')?.classList.add('hidden');
     });
 
-    $('#addNewAddressForm')?.addEventListener('submit', (e) => {
+    $('#addNewAddressForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const newAddr = {
-        id: Date.now(),
-        type: fd.get('type') || 'Home',
-        isDefault: fd.get('is_default') === 'on',
-        name: fd.get('name'),
-        phone: fd.get('phone'),
-        house: fd.get('house'),
-        street: fd.get('street'),
-        city: fd.get('city') || 'Hyderabad',
+      const payload = {
+        name: fd.get('name')?.trim() || state.customer?.name || 'Akhil',
+        phone: fd.get('phone')?.trim() || state.customer?.phone || '6305974564',
+        house: fd.get('house')?.trim(),
+        building: fd.get('street')?.trim() || '',
+        street: fd.get('street')?.trim(),
+        landmark: '',
+        city: fd.get('city')?.trim() || 'Hyderabad',
         state: 'Telangana',
-        pincode: fd.get('pincode') || '500081'
+        pincode: fd.get('pincode')?.trim() || '500049',
+        is_default: fd.get('is_default') === 'on'
+      };
+
+      let savedId = Date.now();
+      try {
+        const res = await apiRequest('/api/v1/addresses', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        if (res?.address?.id) savedId = res.address.id;
+      } catch (err) {
+        console.warn('API save address failed:', err);
+      }
+
+      const newAddr = {
+        id: savedId,
+        type: fd.get('type') || 'Home',
+        isDefault: payload.is_default,
+        ...payload
       };
 
       if (newAddr.isDefault) {
         state.addresses.forEach((a) => (a.isDefault = false));
       }
-      state.addresses.push(newAddr);
+      state.addresses.unshift(newAddr);
+      try {
+        localStorage.setItem('milvanta-addresses', JSON.stringify(state.addresses));
+      } catch {}
       renderAddresses();
       $('#addAddressModal')?.classList.add('hidden');
       e.target.reset();
       showToast('New address saved successfully!');
     });
 
-    // Subscriptions Actions (Pause / Modify)
-    $('#subscriptionsGridContainer')?.addEventListener('click', (e) => {
+    // Subscriptions Actions (Pause / Resume & Modify Qty via Backend)
+    $('#subscriptionsGridContainer')?.addEventListener('click', async (e) => {
       const toggleBtn = e.target.closest('[data-toggle-sub]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggleSub;
-        const sub = state.subscriptions.find((s) => s.id === id);
+        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
         if (sub) {
-          sub.status = sub.status === 'active' ? 'paused' : 'active';
+          const newStatus = sub.status === 'active' ? 'paused' : 'active';
+          sub.status = newStatus;
+          try {
+            await apiRequest(`/api/v1/subscriptions/${id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ status: newStatus })
+            });
+          } catch (err) {
+            console.warn('API subscription status update failed:', err);
+          }
+          try {
+            localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+          } catch {}
           renderSubscriptions();
-          showToast(sub.status === 'active' ? 'Subscription resumed!' : 'Subscription paused for now.');
+          showToast(newStatus === 'active' ? 'Subscription resumed!' : 'Subscription paused for now.');
         }
         return;
       }
@@ -633,11 +1064,22 @@
       const modifyBtn = e.target.closest('[data-modify-sub]');
       if (modifyBtn) {
         const id = modifyBtn.dataset.modifySub;
-        const sub = state.subscriptions.find((s) => s.id === id);
+        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
         if (sub) {
           const newQty = prompt(`Update daily quantity for ${sub.product}:`, sub.quantity);
           if (newQty && newQty.trim()) {
             sub.quantity = newQty.trim();
+            try {
+              await apiRequest(`/api/v1/subscriptions/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ quantity: sub.quantity })
+              });
+            } catch (err) {
+              console.warn('API subscription quantity update failed:', err);
+            }
+            try {
+              localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+            } catch {}
             renderSubscriptions();
             showToast(`Quantity updated to ${sub.quantity}`);
           }
@@ -650,29 +1092,131 @@
       $('#trackingModal')?.classList.add('hidden');
     });
 
-    // Edit Profile Modal
+    // Edit Profile Modal & Handler
     $('#btnEditProfile')?.addEventListener('click', () => {
-      $('#editProfileName').value = state.customer.name;
-      $('#editProfileEmail').value = state.customer.email;
+      if ($('#editProfileName')) $('#editProfileName').value = state.customer?.name || '';
+      if ($('#editProfileEmail')) $('#editProfileEmail').value = state.customer?.email || '';
       $('#editProfileModal')?.classList.remove('hidden');
     });
+
     $('#closeEditProfileModal')?.addEventListener('click', () => {
       $('#editProfileModal')?.classList.add('hidden');
     });
-    $('#editProfileForm')?.addEventListener('submit', (e) => {
+
+    $('#editProfileForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
-      state.customer.name = $('#editProfileName').value.trim() || state.customer.name;
-      state.customer.email = $('#editProfileEmail').value.trim() || state.customer.email;
+      const newName = $('#editProfileName')?.value.trim();
+      const newEmail = $('#editProfileEmail')?.value.trim();
+
+      if (!newName || newName.length < 2) {
+        alert('Please enter a valid full name.');
+        return;
+      }
+
+      try {
+        await apiRequest('/api/v1/auth/me', {
+          method: 'PATCH',
+          body: JSON.stringify({ fullName: newName })
+        });
+      } catch (err) {
+        console.warn('API profile update failed:', err);
+      }
+
+      if (!state.customer) state.customer = {};
+      state.customer.name = newName;
+      if (newEmail) state.customer.email = newEmail;
+
+      try {
+        localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
+      } catch {}
+
       renderUserInfo();
       $('#editProfileModal')?.classList.add('hidden');
-      showToast('Profile information updated!');
+      showToast('Profile updated successfully!');
     });
 
-    // Policy links
+    // Policy Links
     $$('.policy-btn').forEach((btn) => {
       btn.addEventListener('click', () => openPolicyModal(btn.dataset.policy));
     });
     $('#policyClose')?.addEventListener('click', closePolicyModal);
+  }
+
+  // Tracking Modal with Visual Stepper
+  async function openTrackingModal(orderId) {
+    const modal = $('#trackingModal');
+    if (!modal) return;
+
+    const order = state.orders.find((o) => o.id === orderId) || { id: orderId };
+    $('#trackingModalOrderId').textContent = `#${order.id}`;
+    $('#trackingModalStatus').textContent = order.statusLabel || 'Out for Delivery';
+    $('#trackingModalCourier').textContent = order.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)';
+    $('#trackingModalEst').textContent = order.estDelivery || 'Today by 7:00 AM';
+
+    // Fetch live tracking from API if available
+    try {
+      const data = await apiRequest(`/api/v1/orders/${order.id}/track`);
+      if (data && data.order) {
+        const live = data.order;
+        const statusMap = {
+          placed: 'Order Placed',
+          confirmed: 'Confirmed',
+          bottled: 'Bottled Fresh',
+          hub: 'At Cold Hub',
+          out_for_delivery: 'Out for Delivery',
+          delivered: 'Delivered'
+        };
+        $('#trackingModalStatus').textContent = statusMap[live.orderStatus] || live.orderStatus;
+        if (live.courierName) $('#trackingModalCourier').textContent = live.courierName;
+        if (live.estimatedDelivery) $('#trackingModalEst').textContent = live.estimatedDelivery;
+        updateTrackingModalStepper(live.orderStatus);
+      } else {
+        updateTrackingModalStepper(order.status || 'placed');
+      }
+    } catch {
+      updateTrackingModalStepper(order.status || 'placed');
+    }
+
+    modal.classList.remove('hidden');
+  }
+
+  function updateTrackingModalStepper(status) {
+    const stages = ['placed', 'confirmed', 'bottled', 'hub', 'out_for_delivery', 'delivered'];
+    const currentIdx = stages.indexOf(String(status).toLowerCase());
+    const steps = $$('.tracking-stepper .tracking-step');
+
+    steps.forEach((step, idx) => {
+      const node = step.querySelector('.step-node');
+      const label = step.querySelector('.step-label');
+      step.classList.remove('completed', 'active');
+      if (idx < currentIdx) {
+        step.classList.add('completed');
+        if (node) {
+          node.style.background = '#047857';
+          node.style.color = '#fff';
+          node.style.boxShadow = 'none';
+          node.textContent = '✓';
+        }
+        if (label) label.style.color = '#0f172a';
+      } else if (idx === currentIdx) {
+        step.classList.add('active');
+        if (node) {
+          node.style.background = '#2563eb';
+          node.style.color = '#fff';
+          node.style.boxShadow = '0 0 0 4px #dbeafe';
+          node.textContent = String(idx + 1);
+        }
+        if (label) label.style.color = '#2563eb';
+      } else {
+        if (node) {
+          node.style.background = '#e2e8f0';
+          node.style.color = '#94a3b8';
+          node.style.boxShadow = 'none';
+          node.textContent = String(idx + 1);
+        }
+        if (label) label.style.color = '#94a3b8';
+      }
+    });
   }
 
   // Policy Modal
@@ -685,7 +1229,7 @@
         <h4>2. Orders & Payment</h4>
         <p>Orders are placed via Razorpay's secure checkout. Prices shown are in Indian Rupees (INR) and are inclusive of GST. Orders cannot be modified once dispatched from the packing facility.</p>
         <h4>3. Serviceable Areas</h4>
-        <p>Certain perishable items (such as raw milk) are only serviceable within designated morning delivery pin codes.</p>`
+        <p>Perishable fresh dairy is serviceable across Hyderabad morning delivery pin codes (500001–500096).</p>`
     },
     privacy: {
       title: 'Privacy Policy',
@@ -699,22 +1243,18 @@
     },
     shipping: {
       title: 'Shipping & Delivery Policy',
-      html: `<p>We take pride in our direct-from-farm cold-chain logistics.</p>
+      html: `<p>We take pride in our direct-from-farm cold-chain logistics originating from Hafeezpet hub.</p>
         <h4>1. Fresh Dairy Delivery</h4>
         <p>Fresh milk and cottage cheese are dispatched in temperature-controlled bags maintained under 4°C and delivered directly to your doorstep between <strong>6:00 AM and 7:00 AM</strong>.</p>
-        <h4>2. Bakery & Pantry Pickles</h4>
-        <p>Bakery treats and jarred pickles are dispatched within 24 hours of ordering. Standard courier delivery takes 2–4 business days depending on location.</p>
-        <h4>3. Delivery Charges</h4>
-        <p>Orders of ₹499 and above enjoy <strong>FREE Delivery</strong>. For orders below ₹499, a nominal delivery charge of ₹40 applies.</p>`
+        <h4>2. Delivery Charges</h4>
+        <p>Orders within 5 km: ₹50. Deliveries 6–10 km and Hyderabad Core City (500001–500096): ₹80.</p>`
     },
     refund: {
       title: 'Refund & Cancellation Policy',
       html: `<p>Your satisfaction and food safety are our highest priorities.</p>
-        <h4>1. Damaged or Spoiled Goods</h4>
-        <p>If any product arrives damaged, unsealed, or compromised in temperature, please notify us within 24 hours of delivery with a photo. We will immediately dispatch a replacement or issue a 100% refund.</p>
-        <h4>2. Cancellations</h4>
-        <p>Orders for morning dairy can be paused or cancelled up to 8:00 PM on the evening prior to scheduled delivery.</p>
-        <h4>3. Refund Timeline</h4>
+        <h4>1. Damaged or Compromised Goods</h4>
+        <p>If any product arrives damaged or unsealed, notify us within 24 hours of delivery. We will immediately dispatch a fresh replacement or issue a 100% refund.</p>
+        <h4>2. Refund Timeline</h4>
         <p>Approved refunds are credited back to the original payment source (UPI/Card/Bank) via Razorpay within 3–5 working days.</p>`
     }
   };
@@ -731,45 +1271,36 @@
     $('#policyModal')?.classList.add('hidden');
   }
 
-  // Open Tracking Modal
-  function openTrackingModal(orderId) {
-    const order = state.orders.find((o) => o.id === orderId) || state.orders[0];
-    const modal = $('#trackingModal');
-    if (!modal) return;
-
-    $('#trackingModalOrderId').textContent = `#${order.id}`;
-    $('#trackingModalStatus').textContent = order.statusLabel;
-    $('#trackingModalCourier').textContent = order.courier;
-    $('#trackingModalEst').textContent = order.estDelivery;
-
-    modal.classList.remove('hidden');
-  }
-
   // Logout User
   async function logoutUser() {
     try {
       await apiRequest('/api/v1/auth/logout', { method: 'POST' });
     } catch {}
-    sessionStorage.removeItem('milvanta-auth-token');
+    setAuthToken('');
+    try {
+      localStorage.removeItem('milvanta-user');
+    } catch {}
     showToast('Logged out successfully.');
     setTimeout(() => {
       window.location.href = 'index.html';
-    }, 800);
+    }, 700);
   }
 
-  // Initialize Page
-  document.addEventListener('DOMContentLoaded', () => {
-    // Read URL tab parameter
+  // ==========================================
+  // INITIALIZE PAGE ON LOAD
+  // ==========================================
+  document.addEventListener('DOMContentLoaded', async () => {
     const params = new URLSearchParams(window.location.search);
     const initialTab = params.get('tab') || 'profile';
 
-    initProfile();
-    updateCartBadge();
-    renderOrders();
-    renderAddresses();
-    renderSubscriptions();
     setupListeners();
     switchTab(initialTab);
+    updateCartBadge();
+
+    // Fetch and initialize all profile sections
+    await initProfile();
+    fetchOrders();
+    fetchAddresses();
+    fetchSubscriptions();
   });
 })();
-

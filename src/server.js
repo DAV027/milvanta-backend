@@ -572,6 +572,101 @@ app.delete('/api/v1/addresses/:id', { preHandler: app.authenticate }, async (req
   }
 });
 
+// ---------- Subscriptions Management ----------
+app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { rows } = await pool.query(
+    `SELECT id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
+            cost_per_day_paise, status, next_delivery, created_at, updated_at
+     FROM customer_subscriptions
+     WHERE customer_id = $1 AND status != 'cancelled'
+     ORDER BY created_at DESC`,
+    [request.customer.id]
+  );
+  return { subscriptions: rows };
+});
+
+app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { productId, productName, imageUrl, frequency, timeSlot, quantity, quantityNum, costPerDayPaise } = request.body || {};
+  if (!productName) return reply.code(400).send({ error: 'product_name_required' });
+
+  const { rows } = await pool.query(
+    `INSERT INTO customer_subscriptions (
+       customer_id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num, cost_per_day_paise, status, next_delivery
+     ) VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 'Tomorrow, 6:00 AM'
+     ) RETURNING *`,
+    [
+      request.customer.id,
+      productId || null,
+      String(productName).trim(),
+      imageUrl || 'assets/milvanta-cow-milk.jpg',
+      frequency || 'Daily (Every Morning)',
+      timeSlot || '6:00 AM – 7:00 AM',
+      quantity || '1 Litre',
+      Number(quantityNum) || 1,
+      Number(costPerDayPaise) || 6000
+    ]
+  );
+  return reply.code(201).send({ subscription: rows[0] });
+});
+
+app.patch('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { status, quantity, quantityNum } = request.body || {};
+
+  const updates = [];
+  const values = [request.customer.id, subId];
+  let paramIdx = 3;
+
+  if (status && ['active', 'paused', 'cancelled'].includes(status)) {
+    updates.push(`status = $${paramIdx++}`);
+    values.push(status);
+  }
+  if (quantity) {
+    updates.push(`quantity = $${paramIdx++}`);
+    values.push(String(quantity).trim());
+  }
+  if (quantityNum !== undefined) {
+    updates.push(`quantity_num = $${paramIdx++}`);
+    values.push(Number(quantityNum));
+  }
+
+  if (updates.length === 0) {
+    return reply.code(400).send({ error: 'no_updates_provided' });
+  }
+
+  updates.push('updated_at = NOW()');
+
+  const { rows } = await pool.query(
+    `UPDATE customer_subscriptions
+     SET ${updates.join(', ')}
+     WHERE customer_id = $1 AND id = $2
+     RETURNING *`,
+    values
+  );
+
+  if (!rows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
+  return { subscription: rows[0] };
+});
+
+app.delete('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { rows } = await pool.query(
+    `UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW()
+     WHERE customer_id = $1 AND id = $2
+     RETURNING id`,
+    [request.customer.id, subId]
+  );
+  if (!rows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
+  return { deleted: true, id: rows[0].id };
+});
+
 // ---------- Delivery Check ----------
 app.get('/api/v1/delivery/check', async (request, reply) => {
   const pincode = request.query?.pincode;

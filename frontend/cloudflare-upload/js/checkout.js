@@ -23,14 +23,19 @@
   const RAZORPAY_KEY = window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX';
 
   let authToken = (() => {
-    try { return sessionStorage.getItem('milvanta-auth-token') || ''; } catch { return ''; }
+    try { return sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || ''; } catch { return ''; }
   })();
 
   function setAuthToken(token) {
     authToken = token || '';
     try {
-      if (authToken) sessionStorage.setItem('milvanta-auth-token', authToken);
-      else sessionStorage.removeItem('milvanta-auth-token');
+      if (authToken) {
+        sessionStorage.setItem('milvanta-auth-token', authToken);
+        localStorage.setItem('milvanta-auth-token', authToken);
+      } else {
+        sessionStorage.removeItem('milvanta-auth-token');
+        localStorage.removeItem('milvanta-auth-token');
+      }
     } catch {}
   }
 
@@ -875,6 +880,39 @@
   // Display Order Success Screen
   function showOrderSuccess(orderNumber) {
     try {
+      const { total } = getOrderFinancials();
+      const existingOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
+      const newOrderRecord = {
+        order_number: orderNumber,
+        items: state.cart.map((item) => ({
+          name: item.name,
+          quantity: item.quantity || 1,
+          price: item.price
+        })),
+        address: state.addressDraft,
+        total: total,
+        total_paise: Math.round(total * 100),
+        order_status: 'placed',
+        payment_status: 'paid',
+        courier_name: 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
+        tracking_number: `MLV-${orderNumber}`,
+        estimated_delivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM',
+        created_at: new Date().toISOString()
+      };
+      existingOrders.unshift(newOrderRecord);
+      localStorage.setItem('milvanta-orders', JSON.stringify(existingOrders));
+
+      const existingAddrs = JSON.parse(localStorage.getItem('milvanta-addresses') || '[]');
+      const newAddrRecord = {
+        id: Date.now(),
+        type: 'Home',
+        isDefault: true,
+        ...state.addressDraft
+      };
+      existingAddrs.forEach((a) => (a.isDefault = false));
+      existingAddrs.unshift(newAddrRecord);
+      localStorage.setItem('milvanta-addresses', JSON.stringify(existingAddrs));
+
       localStorage.removeItem('milvanta-cart');
     } catch {}
     state.cart = [];
