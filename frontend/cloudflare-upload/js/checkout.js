@@ -850,6 +850,14 @@
               method: 'POST',
               body: JSON.stringify(response)
             });
+          } catch (e) {
+            console.warn('Payment verify error:', e);
+          }
+          try {
+            await api(`/api/v1/orders/${encodeURIComponent(order.orderNumber)}/send-confirmation`, {
+              method: 'POST',
+              body: JSON.stringify({ paymentId: response?.razorpay_payment_id || '' })
+            });
           } catch {}
           showOrderSuccess(order.orderNumber);
         },

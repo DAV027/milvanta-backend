@@ -12,6 +12,7 @@ import Razorpay from 'razorpay';
 import { runMigrations } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
+import { sendOrderPaidEmails } from './email.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1064,7 +1065,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
     return reply.code(400).send({ verified: false, error: 'invalid_payment_signature' });
   }
   const paymentOrder = await pool.query(
-    `SELECT po.amount_paise FROM payment_orders po
+    `SELECT po.amount_paise, po.customer_order_id FROM payment_orders po
      JOIN customer_orders co ON co.id = po.customer_order_id
      WHERE po.razorpay_order_id = $1 AND co.customer_id = $2`,
     [orderId, request.customer.id]
@@ -1083,6 +1084,17 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
     const applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
     await client.query('COMMIT');
     if (!applied) return reply.code(409).send({ verified: false, error: 'payment_state_not_applicable' });
+
+    // Send order confirmation emails via Resend to customer & admin
+    if (gatewayPayment.status === 'captured') {
+      const customerOrderId = paymentOrder.rows[0]?.customer_order_id;
+      if (customerOrderId) {
+        sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
+          app.log.error({ err }, '[Resend] Failed to send order emails on payment verify');
+        });
+      }
+    }
+
     return { verified: true, orderId, paymentId, status: gatewayPayment.status };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1115,7 +1127,18 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         const status = request.body.event === 'payment.captured' ? 'captured'
           : request.body.event === 'payment.failed' ? 'failed'
             : request.body.event === 'payment.authorized' ? 'authorized' : null;
-        if (status) await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency);
+        if (status) {
+          await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency);
+          if (status === 'captured') {
+            const foundOrder = await client.query('SELECT customer_order_id FROM payment_orders WHERE razorpay_order_id = $1', [entity.order_id]);
+            const orderId = foundOrder.rows[0]?.customer_order_id;
+            if (orderId) {
+              sendOrderPaidEmails(pool, orderId, entity.id).catch((err) => {
+                app.log.error({ err }, '[Resend] Failed to send order emails on webhook capture');
+              });
+            }
+          }
+        }
       }
     }
     await client.query('COMMIT');
@@ -1126,6 +1149,14 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   } finally {
     client.release();
   }
+});
+
+// Explicit endpoint to trigger or resend order confirmation emails
+app.post('/api/v1/orders/:orderNumber/send-confirmation', async (request, reply) => {
+  const { orderNumber } = request.params;
+  const paymentId = request.body?.paymentId || '';
+  const result = await sendOrderPaidEmails(pool, orderNumber, paymentId);
+  return reply.send(result);
 });
 
 app.setErrorHandler((error, request, reply) => {
