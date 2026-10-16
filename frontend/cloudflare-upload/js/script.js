@@ -2026,9 +2026,13 @@ async function beginCheckout(form) {
     state.checkoutStep = 3;
     renderCart();
 
-    const deliveryInfo = window.MilvantaDelivery ? window.MilvantaDelivery.getDeliveryInfo(state.addressDraft.pincode || '500049') : { fee: 50 };
     const deliveryFee = deliveryInfo.fee || 50;
-    const expectedTotalPaise = Math.round((subtotal + deliveryFee) * 100);
+    const cartSubtotal = state.cart.reduce((sum, item) => {
+      const p = state.products?.find((prod) => Number(prod.id) === Number(item.id)) || {};
+      const price = Number(item.variant?.price || item.price || p.price || 0);
+      return sum + price * (Number(item.quantity) || 1);
+    }, 0);
+    const expectedTotalPaise = Math.round((cartSubtotal + deliveryFee) * 100);
     const razorpayAmount = (order && Number(order.amount) >= expectedTotalPaise)
       ? Number(order.amount)
       : (Number(order?.amount) || expectedTotalPaise);
