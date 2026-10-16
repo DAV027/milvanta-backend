@@ -824,6 +824,8 @@ async function handleStartSubscription(p) {
   } catch {}
 
   try {
+    await ensureRazorpayScript();
+
     // Initiate Razorpay subscription payment via API
     const res = await apiRequest('/api/v1/subscriptions/razorpay-checkout', {
       method: 'POST',
@@ -845,7 +847,47 @@ async function handleStartSubscription(p) {
       try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
     }
 
-    closeProductModal();
+    const returnEndpoint = `${API_URL || 'https://milvanta-backend.onrender.com'}/api/v1/subscriptions/callback?return_url=${encodeURIComponent(window.location.origin + '/')}`;
+
+    if (window.Razorpay && res?.subscriptionId) {
+      const rzpOptions = {
+        key: res.keyId || window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX',
+        subscription_id: res.subscriptionId,
+        name: 'Milvanta',
+        description: `${p.name} (${variantSize}) · ${details.rangeLabel}`,
+        image: p.image || 'assets/milvanta-cow-milk.jpg',
+        callback_url: returnEndpoint,
+        prefill: {
+          name: state.customer?.fullName || '',
+          email: state.customer?.email || '',
+          contact: state.customer?.phone || ''
+        },
+        theme: {
+          color: '#0a3d66'
+        },
+        handler: function (response) {
+          closeProductModal();
+          subItem.status = 'active';
+          subItem.paymentId = response.razorpay_payment_id;
+          try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+          // Immediately return customer to home page with celebration
+          window.location.href = `${window.location.origin}/?subscription=success`;
+        },
+        modal: {
+          ondismiss: function () {
+            if (addBtn) {
+              addBtn.disabled = false;
+              if (originalBtnHtml) addBtn.innerHTML = originalBtnHtml;
+            }
+          }
+        }
+      };
+
+      const checkout = new window.Razorpay(rzpOptions);
+      checkout.open();
+      closeProductModal();
+      return;
+    }
 
     if (res?.shortUrl) {
       showStoreToast(`Opening Razorpay Subscription Checkout...`);
@@ -2545,6 +2587,17 @@ function closePolicyModal() {
   $('#policyModal')?.classList.add('hidden');
 }
 
+function checkSubscriptionReturn() {
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('subscription') === 'success' || urlParams.get('sub_success') === '1' || urlParams.get('sub_success') === 'true') {
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+    setTimeout(() => {
+      showStoreToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.', 'profile.html?tab=subscription');
+    }, 500);
+  }
+}
+
 // Event Listeners
 document.addEventListener('DOMContentLoaded', () => {
   renderCategories();
@@ -2555,6 +2608,7 @@ document.addEventListener('DOMContentLoaded', () => {
   restoreSession();
   updatePincodeDisplays(state.pincode);
   updateAccountButton();
+  checkSubscriptionReturn();
 
   // Search
   $('#searchInput')?.addEventListener('input', (e) => {

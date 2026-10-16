@@ -679,6 +679,25 @@ app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
   }
 });
 
+// Razorpay Subscription return callback (redirects customer back to home page)
+app.all('/api/v1/subscriptions/callback', async (request, reply) => {
+  const returnUrl = request.query.return_url || 'https://milvanta.in/';
+  const subId = request.body?.razorpay_subscription_id || request.query?.razorpay_subscription_id;
+  const paymentId = request.body?.razorpay_payment_id || request.query?.razorpay_payment_id;
+
+  if (subId && pool) {
+    try {
+      await pool.query(
+        "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR id::text = $1",
+        [subId]
+      );
+    } catch {}
+  }
+
+  const separator = returnUrl.includes('?') ? '&' : '?';
+  return reply.redirect(303, `${returnUrl}${separator}subscription=success${paymentId ? `&payment_id=${paymentId}` : ''}`);
+});
+
 app.patch('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const subId = Number(request.params.id);
