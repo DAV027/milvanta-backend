@@ -470,18 +470,18 @@
 
               <!-- Continuous Months Controls -->
               <div class="sub-month-controls" id="subMonthControls">
-                <div class="sub-start-month-row" style="margin-bottom: 12px;">
+                <div class="sub-start-month-row" style="margin-bottom: 10px;">
                   <label class="sub-input-label" for="subStartMonthSelect">Starting Month</label>
                   <select id="subStartMonthSelect" class="sub-select-input">
-                    <!-- Populated dynamically via JS: October 2026 (Starts Now), November 2026, etc. -->
+                    <!-- Populated dynamically via JS: October 2026 (Current Month), November 2026, etc. -->
                   </select>
                   <select id="subMonthSelect" style="display: none;"></select>
                 </div>
 
                 <div class="sub-months-counter-block">
-                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-                    <label class="sub-input-label" style="margin-bottom: 0;">Number of Months (Continuous)</label>
-                    <span class="sub-plan-badge" style="font-size: 0.70rem; color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 8px; border-radius: 9999px; font-weight: 700;">Continuous Sequence</span>
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                    <label class="sub-input-label" style="margin-bottom: 0;">Subscription Duration</label>
+                    <span class="sub-plan-badge" style="font-size: 0.68rem; padding: 2px 8px;">Continuous Sequence</span>
                   </div>
                   <div class="sub-days-counter-row">
                     <button type="button" class="sub-day-stepper-btn" id="subMonthsDec" aria-label="Decrease months">−</button>
@@ -490,14 +490,13 @@
                     </div>
                     <button type="button" class="sub-day-stepper-btn" id="subMonthsInc" aria-label="Increase months">+</button>
                   </div>
-                  <div class="sub-quick-day-pills" id="subMonthQuickPills" style="margin-top: 8px;">
+                  <div class="sub-quick-month-grid" id="subMonthQuickPills">
                     <button type="button" class="sub-quick-pill active" data-months="1">1 Month</button>
                     <button type="button" class="sub-quick-pill" data-months="2">2 Months</button>
                     <button type="button" class="sub-quick-pill" data-months="3">3 Months</button>
                     <button type="button" class="sub-quick-pill" data-months="6">6 Months</button>
                   </div>
                 </div>
-                <p class="sub-month-hint" id="subMonthHint" style="margin-top: 8px;">Price dynamically adjusts to the exact total days across continuous months.</p>
               </div>
 
               <!-- Custom Days Selection Controls -->
@@ -513,6 +512,37 @@
                   <button type="button" class="sub-quick-pill" data-days="7">7 Days</button>
                   <button type="button" class="sub-quick-pill" data-days="15">15 Days</button>
                   <button type="button" class="sub-quick-pill" data-days="30">30 Days</button>
+                </div>
+              </div>
+
+              <!-- Dedicated Delivery Period & Schedule Card -->
+              <div class="sub-period-card" id="subPeriodCard">
+                <div class="sub-period-top">
+                  <span class="sub-period-kicker">📅 Delivery Period</span>
+                  <span class="sub-period-total-pill" id="subPeriodDaysBadge">31 Mornings</span>
+                </div>
+                <div class="sub-period-timeline">
+                  <div class="sub-timeline-box start">
+                    <span class="sub-timeline-tag">START DATE</span>
+                    <span class="sub-timeline-date" id="subPeriodStartDate">Tomorrow, 17 Oct 2026</span>
+                  </div>
+                  <div class="sub-timeline-arrow">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                  </div>
+                  <div class="sub-timeline-box end">
+                    <span class="sub-timeline-tag">END DATE</span>
+                    <span class="sub-timeline-date" id="subPeriodEndDate">16 Nov 2026</span>
+                  </div>
+                </div>
+                <div class="sub-period-breakdown-row">
+                  <div class="sub-breakdown-chip" id="subPeriodMonthsChip">
+                    <span class="chip-icon">🗓️</span>
+                    <span id="subPeriodBreakdownText">October 2026 (31 Days)</span>
+                  </div>
+                  <div class="sub-breakdown-chip time">
+                    <span class="chip-icon">⏰</span>
+                    <span>Daily 6:00 AM – 7:00 AM</span>
+                  </div>
                 </div>
               </div>
 

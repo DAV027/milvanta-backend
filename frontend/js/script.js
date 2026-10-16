@@ -558,6 +558,38 @@ function getContinuousMonthsDetails(startOffset = 0, count = 1) {
   };
 }
 
+function formatSubscriptionDates(startOffset = 0, days = 30) {
+  const now = new Date();
+  let startDate;
+
+  if (startOffset === 0) {
+    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  } else {
+    startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
+  }
+
+  const endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + (days - 1));
+
+  const startFormatted = startDate.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+
+  const endFormatted = endDate.toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+
+  return {
+    startDate,
+    endDate,
+    startLabel: startOffset === 0 ? `Tomorrow, ${startFormatted}` : startFormatted,
+    endLabel: endFormatted
+  };
+}
+
 function populateSubscriptionMonths(selectElem) {
   if (!selectElem) return;
   const now = new Date();
@@ -567,10 +599,9 @@ function populateSubscriptionMonths(selectElem) {
     const y = d.getFullYear();
     const m = d.getMonth();
     const monthName = d.toLocaleString('en-IN', { month: 'long' });
-    const days = new Date(y, m + 1, 0).getDate();
     const opt = document.createElement('option');
     opt.value = String(i);
-    opt.textContent = i === 0 ? `${monthName} ${y} (Starts Now · ${days} Days)` : `${monthName} ${y} (${days} Days)`;
+    opt.textContent = i === 0 ? `${monthName} ${y} (Current Month)` : `${monthName} ${y}`;
     if (i === 0) opt.selected = true;
     selectElem.appendChild(opt);
   }
@@ -585,10 +616,12 @@ function updateSubscriptionSummary() {
 
   let days = 30;
   let planLabel = '';
+  let startOffset = 0;
+  let breakdownText = '';
 
   if (state.subPlanType === 'month') {
     const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
-    const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+    startOffset = parseInt(startSelect?.value || '0', 10) || 0;
     const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
     state.subMonthsCount = monthsCount;
     state.subStartMonthOffset = startOffset;
@@ -596,15 +629,7 @@ function updateSubscriptionSummary() {
     const details = getContinuousMonthsDetails(startOffset, monthsCount);
     days = details.totalDays;
     planLabel = details.rangeLabel;
-
-    const hintElem = $('#subMonthHint');
-    if (hintElem) {
-      if (monthsCount === 1) {
-        hintElem.textContent = `Period: ${details.firstMonth.longName} ${details.firstMonth.year} (${days} Days). Price is calculated from exact days in this month.`;
-      } else {
-        hintElem.textContent = `Period: ${details.breakdownText} = ${days} Continuous Days across ${monthsCount} months.`;
-      }
-    }
+    breakdownText = details.breakdownText;
 
     const valElem = $('#subMonthsVal');
     const unitElem = $('#subMonthsUnit');
@@ -621,7 +646,21 @@ function updateSubscriptionSummary() {
     days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
     if (input) input.value = days;
     planLabel = `${days} Days Plan`;
+    breakdownText = `${days} Days Plan`;
+    startOffset = 0;
   }
+
+  // Update prominent Subscription Delivery Period Card
+  const dateInfo = formatSubscriptionDates(startOffset, days);
+  const periodDaysBadge = $('#subPeriodDaysBadge');
+  const periodStartDate = $('#subPeriodStartDate');
+  const periodEndDate = $('#subPeriodEndDate');
+  const periodBreakdownText = $('#subPeriodBreakdownText');
+
+  if (periodDaysBadge) periodDaysBadge.textContent = `${days} Mornings`;
+  if (periodStartDate) periodStartDate.textContent = dateInfo.startLabel;
+  if (periodEndDate) periodEndDate.textContent = dateInfo.endLabel;
+  if (periodBreakdownText) periodBreakdownText.textContent = breakdownText || `${days} Days`;
 
   const subTotal = days * rates.dailyRate;
   const regularTotal = days * rates.oneTimeRate;
@@ -690,11 +729,18 @@ function setPurchaseMode(mode) {
     if (subPlanner) subPlanner.classList.remove('hidden');
     if (qtyRow) qtyRow.style.display = 'none';
     if (actionBar) actionBar.style.justifyContent = 'flex-end';
+    $('.ingredients-block')?.classList.add('hidden');
+    $('#modalExtra')?.classList.add('hidden');
+    $('#modalViewRecipe')?.classList.add('hidden');
     updateSubscriptionSummary();
   } else {
     if (subPlanner) subPlanner.classList.add('hidden');
     if (qtyRow) qtyRow.style.display = '';
     if (actionBar) actionBar.style.justifyContent = 'space-between';
+    const p = products.find((item) => item.id === state.activeProductId);
+    if (p?.ingredients?.length) $('.ingredients-block')?.classList.remove('hidden');
+    if (p?.details) $('#modalExtra')?.classList.remove('hidden');
+    if (hasRecipe(p)) $('#modalViewRecipe')?.classList.remove('hidden');
     updateModalAddToCartBtn();
   }
 }
