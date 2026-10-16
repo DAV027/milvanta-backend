@@ -25,7 +25,7 @@ export async function sendEmailViaResend({ to, subject, html, text, from }) {
     };
   }
 
-  const sender = from || process.env.RESEND_FROM_EMAIL || 'Milvanta <onboarding@resend.dev>';
+  let sender = (from || process.env.RESEND_FROM_EMAIL || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
   const recipients = Array.isArray(to) ? to : [to];
 
   try {
@@ -473,7 +473,7 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
 
     const recipientCustomerEmail = customer.email?.trim();
     const adminEmail = process.env.ADMIN_EMAIL?.trim() || 'projects@milvanta.in';
-    const sender = process.env.RESEND_FROM_EMAIL || 'Milvanta <onboarding@resend.dev>';
+    const sender = (process.env.RESEND_FROM_EMAIL || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
 
     const results = {
       customerEmail: null,
@@ -549,3 +549,4 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
     client.release();
   }
 }
+
