@@ -760,6 +760,7 @@ app.post('/api/v1/orders', {
         name: product.name,
         category: product.category,
         unit: product.selling_unit,
+        imageUrl: product.image_url,
         quantity,
         unitPricePaise,
         lineTotalPaise: unitPricePaise * quantity

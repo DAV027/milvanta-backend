@@ -17,3 +17,4 @@ CREATE TABLE IF NOT EXISTS customer_subscriptions (
 
 CREATE INDEX IF NOT EXISTS customer_subscriptions_customer_idx
   ON customer_subscriptions (customer_id, status, created_at DESC);
+

@@ -880,20 +880,36 @@
   // Display Order Success Screen
   function showOrderSuccess(orderNumber) {
     try {
-      const { total } = getOrderFinancials();
+      const { total, subtotal, deliveryFee } = getOrderFinancials();
       const existingOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
       const newOrderRecord = {
         order_number: orderNumber,
-        items: state.cart.map((item) => ({
-          name: item.name,
-          quantity: item.quantity || 1,
-          price: item.price
-        })),
+        items: state.cart.map((item) => {
+          const prod = productsCatalog.find((p) => Number(p.id) === Number(item.id)) || {};
+          const unitPrice = Number(item.variant?.price || item.price || prod.price || 0);
+          const qty = Number(item.quantity || 1);
+          return {
+            productId: item.id || prod.id,
+            name: item.name || item.variant?.name || prod.name || 'Milvanta Product',
+            size: item.size || item.variant?.size || prod.size || '',
+            image: item.image || prod.image || 'assets/milvanta-mark.png',
+            quantity: qty,
+            qty: qty,
+            unitPrice: unitPrice,
+            price: unitPrice,
+            lineTotal: unitPrice * qty
+          };
+        }),
         address: state.addressDraft,
+        subtotal: subtotal,
+        subtotal_paise: Math.round(subtotal * 100),
+        deliveryFee: deliveryFee,
+        delivery_charge_paise: Math.round(deliveryFee * 100),
         total: total,
         total_paise: Math.round(total * 100),
         order_status: 'placed',
         payment_status: 'paid',
+        paymentMethod: 'Paid Online via Razorpay',
         courier_name: 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
         tracking_number: `MLV-${orderNumber}`,
         estimated_delivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM',

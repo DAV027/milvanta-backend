@@ -249,6 +249,80 @@
   // ==========================================
   // 2. MY ORDERS FETCHING & RENDERING
   // ==========================================
+
+  // Rich catalog lookup table for resolving images, pack sizes, and prices
+  const productsCatalog = [
+    { id: 101, name: 'Cow Milk', shortName: 'Cow Milk', price: 60, size: '500 ml pouch', image: 'assets/milvanta-cow-milk.jpg' },
+    { id: 102, name: 'Buffalo Milk', shortName: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' },
+    { id: 104, name: 'Paneer', shortName: 'Paneer', price: 140, size: '200 g pack', image: 'assets/milvanta-paneer.jpg' },
+    { id: 105, name: 'Curd', shortName: 'Curd', price: 65, size: '400 g tub', image: 'assets/milvanta-curd.jpg' },
+    { id: 103, name: 'Ghee', shortName: 'Ghee', price: 1100, size: '500 ml jar', image: 'assets/milvanta-ghee.jpg' },
+    { id: 1, name: 'Walnut Raagi Brownie', shortName: 'Walnut Brownie', price: 299, size: '1 Piece', image: 'assets/walnut-raagi-brownie.jpg' },
+    { id: 2, name: 'Butter Cake with Couverture Chocolate Chips', shortName: 'Butter Cake', price: 350, size: '250 g cake', image: 'assets/butter-cake.jpg' },
+    { id: 3, name: 'Kowa Cake', shortName: 'Kowa Cake', price: 150, size: '1 Piece', image: 'assets/kowa-cake.jpg' },
+    { id: 4, name: 'Raagi Cookies', shortName: 'Raagi Cookies', price: 550, size: '250 g tin', image: 'assets/raagi-cookies.jpg' },
+    { id: 5, name: 'Muesli', shortName: 'Muesli', price: 450, size: '250 g pack', image: 'assets/muesli.jpg' },
+    { id: 6, name: 'Traditional Tomato Pickle', shortName: 'Tomato Pickle', price: 479, size: '500 g jar', image: 'assets/tomato-pickle.jpg' },
+    { id: 7, name: 'Andhra Gongura Pickle', shortName: 'Gongura Pickle', price: 499, size: '500 g jar', image: 'assets/gongura-pickle.jpg' },
+    { id: 8, name: 'Usirikaya Pickle (Amla)', shortName: 'Usirikaya Pickle', price: 499, size: '500 g jar', image: 'assets/usirikaya-pickle.jpg' },
+    { id: 9, name: 'Pandu Mirchi Pickle', shortName: 'Pandu Mirchi Pickle', price: 489, size: '500 g jar', image: 'assets/pandu-mirchi-pickle.jpg' },
+    { id: 10, name: 'Avakaya Mango Pickle', shortName: 'Mango Avakaya', price: 449, size: '500 g jar', image: 'assets/avakaya-mango-pickle.jpg' },
+    { id: 12, name: 'Chicken Pickle (Boneless)', shortName: 'Chicken Pickle', price: 849, size: '500 g jar', image: 'assets/chicken-pickle-boneless.jpg' },
+    { id: 14, name: 'Mutton Pickle (Boneless)', shortName: 'Mutton Pickle', price: 1149, size: '500 g jar', image: 'assets/mutton-pickle-boneless.jpg' },
+    { id: 15, name: 'Prawns Pickle', shortName: 'Prawns Pickle', price: 1049, size: '500 g jar', image: 'assets/prawns-pickle.jpg' },
+    { id: 16, name: 'Fish Pickle (Boneless)', shortName: 'Fish Pickle', price: 1049, size: '500 g jar', image: 'assets/fish-pickle-boneless.jpg' },
+    { id: 17, name: 'Gongura Chicken (Boneless)', shortName: 'Gongura Chicken', price: 1149, size: '500 g jar', image: 'assets/gongura-chicken-pickle.jpg' },
+    { id: 18, name: 'Gongura Mutton (Boneless)', shortName: 'Gongura Mutton', price: 1199, size: '500 g jar', image: 'assets/gongura-mutton-pickle.jpg' }
+  ];
+
+  // Helper to resolve accurate product image, pack size, and unit price
+  function resolveProductInfo(item) {
+    const rawName = String(item.name || item.product_name || '').trim();
+    const lower = rawName.toLowerCase();
+    const id = Number(item.productId || item.id || 0);
+
+    // 1. Direct ID match
+    if (id > 0) {
+      const match = productsCatalog.find((p) => Number(p.id) === id);
+      if (match) return match;
+    }
+
+    // 2. Exact or substring match in catalog name
+    const byName = productsCatalog.find((p) => p.name.toLowerCase() === lower || lower.includes(p.name.toLowerCase()));
+    if (byName) return byName;
+
+    // 3. Keyword matching for all Milvanta specialties
+    if (lower.includes('gongura mutton')) return { id: 18, name: 'Gongura Mutton (Boneless)', size: '500 g jar', price: 1199, image: 'assets/gongura-mutton-pickle.jpg' };
+    if (lower.includes('gongura chicken')) return { id: 17, name: 'Gongura Chicken (Boneless)', size: '500 g jar', price: 1149, image: 'assets/gongura-chicken-pickle.jpg' };
+    if (lower.includes('mutton pickle') || (lower.includes('mutton') && lower.includes('pickle'))) return { id: 14, name: 'Mutton Pickle (Boneless)', size: '500 g jar', price: 1149, image: 'assets/mutton-pickle-boneless.jpg' };
+    if (lower.includes('chicken pickle') || (lower.includes('chicken') && lower.includes('pickle'))) return { id: 12, name: 'Chicken Pickle (Boneless)', size: '500 g jar', price: 849, image: 'assets/chicken-pickle-boneless.jpg' };
+    if (lower.includes('prawn')) return { id: 15, name: 'Prawns Pickle', size: '500 g jar', price: 1049, image: 'assets/prawns-pickle.jpg' };
+    if (lower.includes('fish pickle') || (lower.includes('fish') && lower.includes('pickle'))) return { id: 16, name: 'Fish Pickle (Boneless)', size: '500 g jar', price: 1049, image: 'assets/fish-pickle-boneless.jpg' };
+    if (lower.includes('tomato pickle') || (lower.includes('tomato') && lower.includes('pickle'))) return { id: 6, name: 'Traditional Tomato Pickle', size: '500 g jar', price: 479, image: 'assets/tomato-pickle.jpg' };
+    if (lower.includes('gongura pickle')) return { id: 7, name: 'Andhra Gongura Pickle', size: '500 g jar', price: 499, image: 'assets/gongura-pickle.jpg' };
+    if (lower.includes('usirikaya') || lower.includes('amla')) return { id: 8, name: 'Usirikaya Pickle (Amla)', size: '500 g jar', price: 499, image: 'assets/usirikaya-pickle.jpg' };
+    if (lower.includes('pandu mirchi')) return { id: 9, name: 'Pandu Mirchi Pickle', size: '500 g jar', price: 489, image: 'assets/pandu-mirchi-pickle.jpg' };
+    if (lower.includes('avakaya') || lower.includes('mango')) return { id: 10, name: 'Avakaya Mango Pickle', size: '500 g jar', price: 449, image: 'assets/avakaya-mango-pickle.jpg' };
+    if (lower.includes('cow milk') || (lower.includes('cow') && lower.includes('milk'))) return { id: 101, name: 'Pure Fresh Cow Milk', size: '500 ml pouch', price: 60, image: 'assets/milvanta-cow-milk.jpg' };
+    if (lower.includes('buffalo milk') || (lower.includes('buffalo') && lower.includes('milk'))) return { id: 102, name: 'Pure Buffalo Milk', size: '500 ml bottle', price: 70, image: 'assets/milvanta-buffalo-milk.jpg' };
+    if (lower.includes('paneer')) return { id: 104, name: 'Farm Fresh Malai Paneer', size: '200 g pack', price: 140, image: 'assets/milvanta-paneer.jpg' };
+    if (lower.includes('curd') || lower.includes('dahi')) return { id: 105, name: 'Traditional Farm Curd', size: '400 g tub', price: 65, image: 'assets/milvanta-curd.jpg' };
+    if (lower.includes('ghee')) return { id: 103, name: 'Desi Cow Bilona Ghee', size: '500 ml jar', price: 1100, image: 'assets/milvanta-ghee.jpg' };
+    if (lower.includes('brownie')) return { id: 1, name: 'Walnut Raagi Brownie', size: '1 Piece', price: 299, image: 'assets/walnut-raagi-brownie.jpg' };
+    if (lower.includes('butter cake')) return { id: 2, name: 'Butter Cake with Chocolate Chips', size: '250 g cake', price: 350, image: 'assets/butter-cake.jpg' };
+    if (lower.includes('kowa cake')) return { id: 3, name: 'Heritage Kowa Cake', size: '1 Piece', price: 150, image: 'assets/kowa-cake.jpg' };
+    if (lower.includes('cookie') || lower.includes('raagi cookie')) return { id: 4, name: 'Raagi Cookies', size: '250 g tin', price: 550, image: 'assets/raagi-cookies.jpg' };
+    if (lower.includes('muesli')) return { id: 5, name: 'Artisanal Muesli', size: '250 g pack', price: 450, image: 'assets/muesli.jpg' };
+
+    return {
+      id: 0,
+      name: rawName || 'Milvanta Selection',
+      size: item.size || item.unit || '',
+      price: Number(item.price || item.unitPrice || 0),
+      image: item.image || item.imageUrl || item.image_url || 'assets/milvanta-mark.png'
+    };
+  }
+
   async function fetchOrders() {
     const container = $('#ordersListContainer');
     if (container) {
@@ -320,42 +394,86 @@
     const statusLabel = row.statusLabel || statusMap[status] || 'Processing';
 
     // Parse items array
-    let items = [];
+    let rawItems = [];
     if (Array.isArray(row.items)) {
-      items = row.items.map((it) => ({
-        name: it.name || it.product_name || `Milvanta Product #${it.productId || it.id || ''}`,
-        qty: Number(it.quantity || it.qty || 1),
-        price: Number(it.price || (it.price_paise ? it.price_paise / 100 : 0) || 0)
-      }));
+      rawItems = row.items;
     } else if (typeof row.items === 'string') {
       try {
         const parsed = JSON.parse(row.items);
-        if (Array.isArray(parsed)) {
-          items = parsed.map((it) => ({
-            name: it.name || it.product_name || `Milvanta Product #${it.productId || ''}`,
-            qty: Number(it.quantity || it.qty || 1),
-            price: Number(it.price || (it.price_paise ? it.price_paise / 100 : 0) || 0)
-          }));
-        }
+        if (Array.isArray(parsed)) rawItems = parsed;
       } catch {}
     }
 
-    // Total in rupees
+    const items = rawItems.map((it) => {
+      const resolved = resolveProductInfo(it);
+      const name = it.name || it.product_name || resolved.name || `Milvanta Selection`;
+      const qty = Number(it.quantity || it.qty || 1);
+      const unitPrice = Number(
+        it.unitPrice ||
+        (it.unitPricePaise ? it.unitPricePaise / 100 : 0) ||
+        it.price ||
+        (it.price_paise ? it.price_paise / 100 : 0) ||
+        resolved.price ||
+        0
+      );
+      const lineTotal = Number(
+        it.lineTotal ||
+        (it.lineTotalPaise ? it.lineTotalPaise / 100 : 0) ||
+        (unitPrice * qty)
+      );
+
+      return {
+        productId: it.productId || it.id || resolved.id,
+        name,
+        size: it.size || it.unit || resolved.size || '',
+        image: it.image || it.imageUrl || it.image_url || resolved.image || 'assets/milvanta-mark.png',
+        qty,
+        unitPrice,
+        price: unitPrice,
+        lineTotal
+      };
+    });
+
+    // Subtotal, Delivery Fee & Total in rupees
+    let subtotal = 0;
+    if (row.subtotal_paise) {
+      subtotal = Math.round(row.subtotal_paise / 100);
+    } else if (row.subtotal) {
+      subtotal = Math.round(row.subtotal);
+    } else {
+      subtotal = items.reduce((sum, it) => sum + it.lineTotal, 0);
+    }
+
+    let deliveryFee = 50;
+    if (row.delivery_charge_paise) {
+      deliveryFee = Math.round(row.delivery_charge_paise / 100);
+    } else if (row.deliveryFee !== undefined) {
+      deliveryFee = Math.round(row.deliveryFee);
+    }
+
     let total = 0;
     if (row.total_paise) {
       total = Math.round(row.total_paise / 100);
     } else if (row.total) {
       total = Math.round(row.total);
     } else {
-      total = items.reduce((sum, it) => sum + (it.price * it.qty), 0);
+      total = subtotal + deliveryFee;
     }
 
-    // Address string
-    let addrStr = 'Hyderabad, Telangana';
+    if (total > 0 && subtotal === 0) {
+      subtotal = Math.max(0, total - deliveryFee);
+    }
+
+    // Address string & recipient details
+    let addrStr = 'Hafeezpet, Hyderabad - 500049';
+    let recipientName = state.customer?.name || 'Customer';
+    let recipientPhone = state.customer?.phone || '';
     if (typeof row.address === 'object' && row.address !== null) {
       const a = row.address;
+      recipientName = a.name || recipientName;
+      recipientPhone = a.phone || recipientPhone;
       addrStr = `${a.house || ''}${a.building ? ', ' + a.building : ''}${a.street ? ', ' + a.street : ''}, ${a.city || 'Hyderabad'} - ${a.pincode || ''}`;
-    } else if (typeof row.address === 'string') {
+    } else if (typeof row.address === 'string' && row.address.trim()) {
       addrStr = row.address;
     }
 
@@ -366,15 +484,21 @@
       status,
       statusLabel,
       items,
+      subtotal,
+      deliveryFee,
       total,
+      recipientName,
+      recipientPhone,
       address: addrStr,
+      paymentStatus: (row.payment_status || 'paid').toUpperCase(),
+      paymentMethod: row.paymentMethod || 'Paid Online via Razorpay',
       courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
       trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
       estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM'
     };
   }
 
-  // Render Order Cards
+  // Render Order Cards with rich thumbnails, detailed prices, and breakdown
   function renderOrders() {
     const container = $('#ordersListContainer');
     if (!container) return;
@@ -394,36 +518,88 @@
     container.innerHTML = state.orders.map((order) => {
       const itemsHtml = order.items.length > 0
         ? order.items.map((item) => `
-            <div class="order-item-row">
-              <div class="order-item-title">
-                <span>🥛 ${escapeHtml(item.name)}</span>
-                <span style="color: #64748b; font-size: 0.82rem;">× ${item.qty}</span>
+            <div class="order-item-detailed-row">
+              <div class="order-item-thumb-box">
+                <img src="${item.image}" alt="${escapeHtml(item.name)}" class="order-item-thumb-img" onerror="this.src='assets/milvanta-mark.png'" loading="lazy" />
               </div>
-              <span class="order-item-price">₹${item.price > 0 ? (item.price * item.qty).toLocaleString('en-IN') : '—'}</span>
+              <div class="order-item-content">
+                <div class="order-item-heading">
+                  <h4 class="order-item-title">${escapeHtml(item.name)}</h4>
+                  <span class="order-item-line-total">₹${item.lineTotal.toLocaleString('en-IN')}</span>
+                </div>
+                <div class="order-item-specs">
+                  ${item.size ? `<span class="order-item-spec-badge">${escapeHtml(item.size)}</span>` : ''}
+                  <span class="order-item-spec-qty">Qty: <strong>${item.qty}</strong></span>
+                  <span class="order-item-spec-unit">₹${item.unitPrice.toLocaleString('en-IN')} each</span>
+                </div>
+              </div>
             </div>
           `).join('')
-        : `<div class="order-item-row"><div class="order-item-title"><span>🥛 Milvanta Farm Fresh Selection</span></div></div>`;
+        : `<div class="order-item-detailed-row"><div class="order-item-content"><h4 class="order-item-title">Milvanta Farm Fresh Selection</h4></div></div>`;
 
       return `
         <article class="order-card" data-order-id="${order.id}">
           <div class="order-card-header">
             <div class="order-id-group">
               <span class="order-id">#${order.id}</span>
-              <span class="order-date">${order.date}</span>
+              <span class="order-date">Placed on ${order.date}</span>
             </div>
             <span class="order-status-pill ${order.status}">
-              ${order.status === 'delivered' ? '✓' : '●'} ${order.statusLabel}
+              ${order.status === 'delivered' ? '✓' : order.status === 'out_for_delivery' ? '🛵' : '●'} ${order.statusLabel}
             </span>
           </div>
+
           <div class="order-items-list">
             ${itemsHtml}
           </div>
+
+          <!-- Order Delivery & Bill Details Breakdown -->
+          <div class="order-delivery-bill-card">
+            <div class="order-destination-info">
+              <div class="order-info-line">
+                <span class="order-info-icon">📍</span>
+                <div class="order-info-text">
+                  <strong>Delivering to:</strong> ${escapeHtml(order.address)}
+                </div>
+              </div>
+              <div class="order-info-line" style="margin-top: 4px;">
+                <span class="order-info-icon">🕒</span>
+                <div class="order-info-text">
+                  <strong>Delivery Window:</strong> ${escapeHtml(order.estDelivery)}
+                </div>
+              </div>
+            </div>
+
+            <div class="order-bill-summary-bar">
+              <div class="bill-metric">
+                <span class="bill-metric-label">Items Subtotal</span>
+                <span class="bill-metric-val">₹${order.subtotal.toLocaleString('en-IN')}</span>
+              </div>
+              <div class="bill-metric">
+                <span class="bill-metric-label">Delivery Fee</span>
+                <span class="bill-metric-val">${order.deliveryFee > 0 ? `₹${order.deliveryFee}` : 'FREE'}</span>
+              </div>
+              <div class="bill-metric total">
+                <span class="bill-metric-label">Total Amount</span>
+                <span class="bill-metric-val total-price">₹${order.total.toLocaleString('en-IN')}</span>
+              </div>
+              <div class="bill-payment-tag">
+                <span class="payment-check-icon">✓</span>
+                <span>${order.paymentMethod}</span>
+              </div>
+            </div>
+          </div>
+
           <div class="order-card-footer">
             <div class="order-total-group">
-              <span class="order-total-label">Total Amount:</span>
+              <span class="order-total-label">Grand Total Paid:</span>
               <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
             </div>
             <div class="order-actions-group">
+              <button type="button" class="btn-order-details" data-details-id="${order.id}">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                <span>View Details</span>
+              </button>
               <button type="button" class="btn-track-order" data-track-id="${order.id}">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
                 <span>Track Order</span>
@@ -857,8 +1033,15 @@
       });
     });
 
-    // Orders Actions (Track & Reorder)
+    // Orders Actions (Details, Track & Reorder)
     $('#ordersListContainer')?.addEventListener('click', (e) => {
+      const detailsBtn = e.target.closest('[data-details-id]');
+      if (detailsBtn) {
+        const orderId = detailsBtn.dataset.detailsId;
+        openOrderDetailsModal(orderId);
+        return;
+      }
+
       const trackBtn = e.target.closest('[data-track-id]');
       if (trackBtn) {
         const orderId = trackBtn.dataset.trackId;
@@ -870,36 +1053,14 @@
       if (reorderBtn) {
         const orderId = reorderBtn.dataset.reorderId;
         const order = state.orders.find((o) => o.id === orderId);
-        if (order && order.items && order.items.length > 0) {
-          try {
-            const cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
-            order.items.forEach((item) => {
-              const existing = cart.find((c) => c.name === item.name);
-              if (existing) {
-                existing.quantity = (existing.quantity || 1) + item.qty;
-              } else {
-                cart.push({
-                  id: Date.now(),
-                  name: item.name,
-                  price: item.price,
-                  quantity: item.qty,
-                  image: 'assets/milvanta-mark.png'
-                });
-              }
-            });
-            localStorage.setItem('milvanta-cart', JSON.stringify(cart));
-            updateCartBadge();
-            showToast('Items added to cart! Opening checkout...');
-            setTimeout(() => {
-              window.location.href = 'checkout.html';
-            }, 800);
-          } catch {
-            window.location.href = 'index.html#cart';
-          }
-        } else {
-          window.location.href = 'index.html#products';
-        }
+        triggerReorder(order);
       }
+    });
+
+    // Close Order Details Modal
+    $('#closeOrderDetailsModal')?.addEventListener('click', closeOrderDetailsModal);
+    $('#orderDetailsModal')?.addEventListener('click', (e) => {
+      if (e.target.id === 'orderDetailsModal') closeOrderDetailsModal();
     });
 
     // Addresses Actions (Set Default, Delete, Edit)
@@ -1217,6 +1378,113 @@
         if (label) label.style.color = '#94a3b8';
       }
     });
+  }
+
+  // Order Details Modal with Full Tax Invoice and Items Breakdown
+  function openOrderDetailsModal(orderId) {
+    const modal = $('#orderDetailsModal');
+    if (!modal) return;
+    const order = state.orders.find((o) => o.id === orderId);
+    if (!order) return;
+
+    if ($('#orderModalId')) $('#orderModalId').textContent = `#${order.id}`;
+    if ($('#orderModalDate')) $('#orderModalDate').textContent = `Placed on ${order.date}`;
+    if ($('#orderModalStatusPill')) {
+      const pill = $('#orderModalStatusPill');
+      pill.className = `order-status-pill ${order.status}`;
+      pill.textContent = `${order.status === 'delivered' ? '✓' : order.status === 'out_for_delivery' ? '🛵' : '●'} ${order.statusLabel}`;
+    }
+
+    if ($('#orderModalAddress')) $('#orderModalAddress').textContent = order.address;
+    if ($('#orderModalContact')) {
+      $('#orderModalContact').textContent = `${order.recipientName || state.customer?.name || 'Customer'}${order.recipientPhone ? ' · +91 ' + order.recipientPhone : ''}`;
+    }
+    if ($('#orderModalWindow')) $('#orderModalWindow').textContent = order.estDelivery;
+    if ($('#orderModalCourier')) $('#orderModalCourier').textContent = order.courier;
+    if ($('#orderModalPayment')) $('#orderModalPayment').textContent = `✓ ${order.paymentMethod || 'Paid Online (Razorpay)'}`;
+
+    if ($('#orderModalSubtotal')) $('#orderModalSubtotal').textContent = `₹${order.subtotal.toLocaleString('en-IN')}`;
+    if ($('#orderModalDeliveryFee')) $('#orderModalDeliveryFee').textContent = order.deliveryFee > 0 ? `₹${order.deliveryFee}` : 'FREE';
+    if ($('#orderModalTotal')) $('#orderModalTotal').textContent = `₹${order.total.toLocaleString('en-IN')}`;
+
+    const itemsContainer = $('#orderModalItemsContainer');
+    if (itemsContainer) {
+      itemsContainer.innerHTML = order.items.map((item) => `
+        <div class="order-item-detailed-row">
+          <div class="order-item-thumb-box">
+            <img src="${item.image}" alt="${escapeHtml(item.name)}" class="order-item-thumb-img" onerror="this.src='assets/milvanta-mark.png'" loading="lazy" />
+          </div>
+          <div class="order-item-content">
+            <div class="order-item-heading">
+              <h4 class="order-item-title">${escapeHtml(item.name)}</h4>
+              <span class="order-item-line-total">₹${item.lineTotal.toLocaleString('en-IN')}</span>
+            </div>
+            <div class="order-item-specs">
+              ${item.size ? `<span class="order-item-spec-badge">${escapeHtml(item.size)}</span>` : ''}
+              <span class="order-item-spec-qty">Qty: <strong>${item.qty}</strong></span>
+              <span class="order-item-spec-unit">₹${item.unitPrice.toLocaleString('en-IN')} each</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Modal action buttons
+    const trackBtn = $('#orderModalTrackBtn');
+    if (trackBtn) {
+      trackBtn.onclick = () => {
+        closeOrderDetailsModal();
+        openTrackingModal(order.id);
+      };
+    }
+
+    const reorderBtn = $('#orderModalReorderBtn');
+    if (reorderBtn) {
+      reorderBtn.onclick = () => {
+        closeOrderDetailsModal();
+        triggerReorder(order);
+      };
+    }
+
+    modal.classList.remove('hidden');
+  }
+
+  function closeOrderDetailsModal() {
+    $('#orderDetailsModal')?.classList.add('hidden');
+  }
+
+  // One-click Re-order handler
+  function triggerReorder(order) {
+    if (!order || !order.items || order.items.length === 0) {
+      window.location.href = 'index.html#products';
+      return;
+    }
+    try {
+      const cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
+      order.items.forEach((item) => {
+        const existing = cart.find((c) => c.name === item.name);
+        if (existing) {
+          existing.quantity = (existing.quantity || 1) + item.qty;
+        } else {
+          cart.push({
+            id: item.productId || Date.now(),
+            name: item.name,
+            price: item.price || item.unitPrice,
+            size: item.size || '',
+            quantity: item.qty,
+            image: item.image || 'assets/milvanta-mark.png'
+          });
+        }
+      });
+      localStorage.setItem('milvanta-cart', JSON.stringify(cart));
+      updateCartBadge();
+      showToast('Items added to cart! Opening checkout...');
+      setTimeout(() => {
+        window.location.href = 'checkout.html';
+      }, 700);
+    } catch {
+      window.location.href = 'index.html#cart';
+    }
   }
 
   // Policy Modal

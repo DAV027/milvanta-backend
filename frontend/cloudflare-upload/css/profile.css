@@ -360,28 +360,193 @@
 .order-items-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-bottom: 16px;
 }
 
-.order-item-row {
+.order-item-detailed-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 0.92rem;
+  gap: 14px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #eef2f6;
+  border-radius: 12px;
+  transition: all 0.15s ease;
 }
 
-.order-item-title {
-  color: #1e293b;
-  font-weight: 500;
+.order-item-detailed-row:hover {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+
+.order-item-thumb-box {
+  width: 58px;
+  height: 58px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
+}
+
+.order-item-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.order-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.order-item-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.order-item-price {
-  font-weight: 600;
+.order-item-title {
+  font-size: 0.95rem;
+  font-weight: 700;
   color: #0f172a;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.order-item-line-total {
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: #0f172a;
+  flex-shrink: 0;
+}
+
+.order-item-specs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.order-item-spec-badge {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.order-item-spec-qty {
+  color: #475569;
+}
+
+.order-item-spec-qty strong {
+  color: #0f172a;
+}
+
+.order-item-spec-unit {
+  color: #64748b;
+}
+
+/* Order Delivery & Bill Details Card */
+.order-delivery-bill-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin: 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.order-destination-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: #475569;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed #cbd5e1;
+}
+
+.order-info-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.order-info-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.order-info-text strong {
+  color: #0f172a;
+}
+
+.order-bill-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.bill-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bill-metric-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #64748b;
+}
+
+.bill-metric-val {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.bill-metric-val.total-price {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #0a3d66;
+}
+
+.bill-payment-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+  border-radius: 9999px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.payment-check-icon {
+  font-weight: 800;
 }
 
 .order-card-footer {
@@ -406,7 +571,7 @@
 }
 
 .order-total-amount {
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   font-weight: 800;
   color: #0a3d66;
 }
@@ -414,7 +579,28 @@
 .order-actions-group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.btn-order-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ffffff;
+  color: #0a3d66;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-order-details:hover {
+  background: #f8fafc;
+  border-color: #0a3d66;
 }
 
 .btn-track-order {
@@ -807,4 +993,72 @@
     grid-template-columns: repeat(4, 1fr);
   }
 }
+
+@media (max-width: 640px) {
+  .order-card {
+    padding: 16px;
+  }
+
+  .order-card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .order-item-detailed-row {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .order-item-thumb-box {
+    width: 50px;
+    height: 50px;
+  }
+
+  .order-item-heading {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .order-item-title {
+    font-size: 0.88rem;
+    white-space: normal;
+  }
+
+  .order-item-line-total {
+    font-size: 0.92rem;
+    color: #0a3d66;
+  }
+
+  .order-bill-summary-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .bill-payment-tag {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+
+  .order-card-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .order-actions-group {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .btn-order-details,
+  .btn-track-order,
+  .btn-reorder {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 

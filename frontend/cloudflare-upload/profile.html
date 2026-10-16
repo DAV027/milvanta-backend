@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=20261012-3" />
     <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
-    <link rel="stylesheet" href="css/profile.css?v=20261015-2" />
+    <link rel="stylesheet" href="css/profile.css?v=20261016-2" />
   </head>
   <body>
     <div class="page-shell">
@@ -511,6 +511,77 @@
       </div>
     </div>
 
+    <!-- Modal 1B: View Full Order Details & Invoice -->
+    <div class="modal-overlay hidden" id="orderDetailsModal" aria-hidden="true">
+      <div class="account-panel order-details-panel" role="dialog" aria-modal="true" aria-labelledby="orderModalId" style="max-width: 620px;">
+        <button type="button" class="modal-close" id="closeOrderDetailsModal" aria-label="Close order details">×</button>
+        <p class="modal-kicker">TAX INVOICE &amp; ORDER DETAILS</p>
+        
+        <div style="margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <h2 id="orderModalId" style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 4px;">Order #MV-94821</h2>
+              <div id="orderModalDate" style="font-size: 0.82rem; color: #64748b;">Placed on 16 Oct 2026, 06:15 AM</div>
+            </div>
+            <span id="orderModalStatusPill" class="order-status-pill delivered">✓ Delivered</span>
+          </div>
+        </div>
+
+        <!-- Scrollable Order Items List with Image, Qty, Unit Price, Line Total -->
+        <div style="font-size: 0.82rem; font-weight: 700; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Items in this Order</div>
+        <div id="orderModalItemsContainer" style="max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; padding-right: 4px;">
+          <!-- Populated dynamically -->
+        </div>
+
+        <!-- Delivery & Payment Information -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; background: #f8fafc; border: 1px solid #eef2f6; border-radius: 12px; padding: 12px 14px;">
+          <div>
+            <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #64748b; display: block; margin-bottom: 3px;">Delivered To</span>
+            <div id="orderModalAddress" style="font-size: 0.82rem; color: #0f172a; line-height: 1.4;">Hafeezpet, Hyderabad</div>
+            <div id="orderModalContact" style="font-size: 0.78rem; color: #64748b; margin-top: 2px;">Akhil</div>
+          </div>
+          <div>
+            <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #64748b; display: block; margin-bottom: 3px;">Delivery &amp; Payment</span>
+            <div id="orderModalWindow" style="font-size: 0.8rem; color: #2563eb; font-weight: 600; margin-bottom: 2px;">Tomorrow Morning · 6:00 – 7:00 AM</div>
+            <div id="orderModalCourier" style="font-size: 0.78rem; color: #64748b; margin-bottom: 2px;">Milvanta Cold-Chain Express</div>
+            <div id="orderModalPayment" style="font-size: 0.78rem; color: #059669; font-weight: 600;">✓ Paid Online (Razorpay)</div>
+          </div>
+        </div>
+
+        <!-- Bill Details Summary -->
+        <div style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; margin-bottom: 18px;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.86rem; color: #475569; margin-bottom: 6px;">
+            <span>Items Subtotal</span>
+            <span id="orderModalSubtotal" style="font-weight: 600; color: #0f172a;">₹0</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 0.86rem; color: #475569; margin-bottom: 6px;">
+            <span>Cold-Chain Delivery Charges</span>
+            <span id="orderModalDeliveryFee" style="font-weight: 600; color: #0f172a;">₹50</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 0.86rem; color: #475569; margin-bottom: 8px;">
+            <span>Taxes &amp; Packaging</span>
+            <span style="font-weight: 600; color: #059669;">Included (₹0)</span>
+          </div>
+          <div style="height: 1px; background: #e2e8f0; margin: 8px 0;"></div>
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 0.98rem; font-weight: 700; color: #0f172a;">Total Amount Paid</span>
+            <span id="orderModalTotal" style="font-size: 1.25rem; font-weight: 800; color: #0a3d66;">₹0</span>
+          </div>
+        </div>
+
+        <!-- Modal Actions -->
+        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+          <button type="button" class="btn-track-order" id="orderModalTrackBtn" style="flex: 1; justify-content: center;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+            <span>Track Delivery</span>
+          </button>
+          <button type="button" class="btn-reorder" id="orderModalReorderBtn" style="flex: 1; justify-content: center; background: #f1f5f9; font-weight: 700;">
+            <span>+ Re-order Items</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal 2: Add New Delivery Address -->
     <div class="modal-overlay hidden" id="addAddressModal" aria-hidden="true">
       <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="addAddrTitle" style="max-width: 500px;">
@@ -646,7 +717,7 @@
       );
       window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
     </script>
-    <script src="js/delivery.js?v=20261016-1"></script>
-    <script src="js/profile.js?v=20261016-1"></script>
+    <script src="js/delivery.js?v=20261016-2"></script>
+    <script src="js/profile.js?v=20261016-2"></script>
   </body>
 </html>
