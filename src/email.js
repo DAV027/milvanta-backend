@@ -228,10 +228,6 @@ export function buildCustomerOrderEmail({ order, customer, address, items, payme
                         <td style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right;">${deliveryStr}</td>
                       </tr>
                       <tr>
-                        <td style="font-size: 13px; color: #059669;">Taxes &amp; Packaging</td>
-                        <td style="font-size: 13px; font-weight: 600; color: #059669; text-align: right;">Included</td>
-                      </tr>
-                      <tr>
                         <td colspan="2" style="padding: 6px 0;"><div style="height: 1px; background: #cbd5e1;"></div></td>
                       </tr>
                       <tr>
