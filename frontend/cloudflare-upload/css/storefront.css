@@ -2679,6 +2679,310 @@ body.cart-open .cart-scrim {
   padding: 10px 14px;
 }
 
+/* ==========================================================================
+   Milk Subscription Selector & Planner Styles
+   ========================================================================== */
+.purchase-mode-switch {
+  display: flex;
+  background: #f1f5f9;
+  border-radius: 12px;
+  padding: 4px;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.purchase-mode-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.purchase-mode-tab:hover {
+  color: #0f172a;
+}
+
+.purchase-mode-tab.active {
+  background: #ffffff;
+  color: #0a3d66;
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  font-weight: 700;
+}
+
+.sub-save-tag {
+  background: #ecfdf5;
+  color: #059669;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid #a7f3d0;
+}
+
+/* Subscription Planner Wrap */
+.subscription-planner-wrap {
+  background: #fafcff;
+  border: 1.5px solid #bfdbfe;
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.sub-plan-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sub-plan-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #1e3a8a;
+}
+
+.sub-plan-badge {
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+
+.sub-duration-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.sub-duration-tab {
+  flex: 1;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.sub-duration-tab:hover {
+  border-color: #94a3b8;
+}
+
+.sub-duration-tab.active {
+  background: #0a3d66;
+  border-color: #0a3d66;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.sub-input-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.sub-select-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.sub-month-hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin: 4px 0 0;
+}
+
+.sub-days-counter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sub-day-stepper-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.sub-day-stepper-btn:hover {
+  background: #f1f5f9;
+}
+
+.sub-days-number-input {
+  flex: 1;
+  height: 44px;
+  text-align: center;
+  font-size: 1.15rem;
+  font-weight: 800;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  font-family: inherit;
+  color: #0f172a;
+}
+
+.sub-quick-day-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sub-quick-pill {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sub-quick-pill:hover,
+.sub-quick-pill.active {
+  background: #0a3d66;
+  border-color: #0a3d66;
+  color: #ffffff;
+}
+
+/* Dynamic Price Breakdown Card */
+.sub-price-summary-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.sub-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.sub-summary-label {
+  color: #475569;
+  font-weight: 600;
+}
+
+.sub-summary-rate {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.sub-summary-divider {
+  height: 1px;
+  background: #f1f5f9;
+  margin: 8px 0;
+}
+
+.sub-summary-totals {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.sub-total-label {
+  font-size: 0.78rem;
+  color: #64748b;
+  display: block;
+}
+
+.sub-total-strike-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.sub-regular-strike {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  text-decoration: line-through;
+}
+
+.sub-savings-badge {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #059669;
+  background: #ecfdf5;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.sub-final-price {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: #0a3d66;
+}
+
+/* Card Badge on Product Cards */
+.card-sub-banner {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #1d4ed8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.card-sub-banner:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
+}
+
 .single-size-meta {
   display: flex;
   align-items: center;

@@ -430,13 +430,88 @@
             <h3 id="modalTitle">Product</h3>
             <div class="modal-stock-badge" id="modalStock"><span class="stock-dot">●</span> <span id="modalStockText">In Stock · Farm Fresh Daily</span></div>
             <p id="modalDescription" class="modal-description"></p>
+            <!-- Milk Purchase Mode Switch: One-Time vs Daily Subscription -->
+            <div class="purchase-mode-switch hidden" id="modalPurchaseModeWrap">
+              <button type="button" class="purchase-mode-tab active" id="btnModeOneTime" data-mode="onetime">
+                <span>Buy Once</span>
+              </button>
+              <button type="button" class="purchase-mode-tab" id="btnModeSub" data-mode="subscription">
+                <span class="sub-tab-icon">🥛</span>
+                <span>Daily Subscription</span>
+                <span class="sub-save-tag">Save ₹5/day</span>
+              </button>
+            </div>
+
             <!-- Interactive Pack Size Variant Selector -->
             <div class="modal-variants-wrap" id="variantWrap">
               <div class="variant-header">
-                <span class="variant-title">Choose Pack Size</span>
+                <span class="variant-title" id="variantHeaderTitle">Choose Pack Size</span>
                 <span class="variant-active-price" id="modalPrice"></span>
               </div>
               <div class="variant-chips-grid" id="variantChips" role="radiogroup" aria-label="Pack sizes"></div>
+            </div>
+
+            <!-- Subscription Planner Box (visible when Subscription mode is chosen) -->
+            <div class="subscription-planner-wrap hidden" id="modalSubscriptionPlanWrap">
+              <div class="sub-plan-header">
+                <span class="sub-plan-title">Choose Subscription Plan</span>
+                <span class="sub-plan-badge">Min. 2 Days</span>
+              </div>
+
+              <!-- Plan Duration Type Tabs -->
+              <div class="sub-duration-tabs" role="tablist">
+                <button type="button" class="sub-duration-tab active" id="subTabMonth" data-plan="month">
+                  <span>Full Month Plan</span>
+                </button>
+                <button type="button" class="sub-duration-tab" id="subTabCustom" data-plan="custom">
+                  <span>Custom Days (Min 2)</span>
+                </button>
+              </div>
+
+              <!-- Month Selection Controls -->
+              <div class="sub-month-controls" id="subMonthControls">
+                <label class="sub-input-label">Select Month
+                  <select id="subMonthSelect" class="sub-select-input">
+                    <!-- Populated dynamically via JS: Current month, Next month, etc. with exact days -->
+                  </select>
+                </label>
+                <p class="sub-month-hint" id="subMonthHint">Price dynamically adjusts to the exact days in month (28, 29, 30, or 31 days).</p>
+              </div>
+
+              <!-- Custom Days Selection Controls -->
+              <div class="sub-custom-controls hidden" id="subCustomControls">
+                <label class="sub-input-label">Select Number of Days (Min. 2 Days)</label>
+                <div class="sub-days-counter-row">
+                  <button type="button" class="sub-day-stepper-btn" id="subDaysDec" aria-label="Decrease days">−</button>
+                  <input type="number" id="subDaysInput" min="2" max="90" value="7" class="sub-days-number-input" />
+                  <button type="button" class="sub-day-stepper-btn" id="subDaysInc" aria-label="Increase days">+</button>
+                </div>
+                <div class="sub-quick-day-pills">
+                  <button type="button" class="sub-quick-pill" data-days="2">2 Days</button>
+                  <button type="button" class="sub-quick-pill" data-days="7">7 Days</button>
+                  <button type="button" class="sub-quick-pill" data-days="15">15 Days</button>
+                  <button type="button" class="sub-quick-pill" data-days="30">30 Days</button>
+                </div>
+              </div>
+
+              <!-- Dynamic Price Breakdown Card -->
+              <div class="sub-price-summary-card" id="subPriceSummaryCard">
+                <div class="sub-summary-row">
+                  <span class="sub-summary-label" id="subSummaryPlanLabel">October 2026 (31 Days)</span>
+                  <span class="sub-summary-rate" id="subSummaryRate">₹65 / day</span>
+                </div>
+                <div class="sub-summary-divider"></div>
+                <div class="sub-summary-totals">
+                  <div>
+                    <span class="sub-total-label">Total Subscription Amount</span>
+                    <div class="sub-total-strike-row">
+                      <span class="sub-regular-strike" id="subRegularStrike">₹2,170</span>
+                      <span class="sub-savings-badge" id="subSavingsBadge">Save ₹155</span>
+                    </div>
+                  </div>
+                  <span class="sub-final-price" id="subFinalPrice">₹2,015</span>
+                </div>
+              </div>
             </div>
 
             <!-- Single Size Meta (when no variants) -->

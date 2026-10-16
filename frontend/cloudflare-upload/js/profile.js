@@ -747,36 +747,32 @@
   // 4. SUBSCRIPTION FETCHING & RENDERING
   // ==========================================
   async function fetchSubscriptions() {
-    const container = $('#subscriptionsGridContainer');
-    if (container) {
-      container.innerHTML = `
-        <div style="grid-column: 1 / -1; text-align: center; padding: 30px 20px;">
-          <div style="display: inline-block; width: 30px; height: 30px; border: 3px solid #e2e8f0; border-top-color: #0a3d66; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
-          <p style="font-size: 0.88rem; color: #64748b; margin-top: 10px;">Loading your active milk subscriptions...</p>
-        </div>
-      `;
-    }
-
     let loadedSubs = [];
 
-    // 1. Fetch live subscriptions from backend API
+    // 1. Immediately read from localStorage for instant zero-delay render
+    try {
+      const localSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+      if (Array.isArray(localSubs) && localSubs.length > 0) {
+        loadedSubs = localSubs.map(formatSubscriptionRow);
+        state.subscriptions = loadedSubs;
+        renderSubscriptions();
+      }
+    } catch {}
+
+    // 2. Fetch live subscriptions from backend API
     try {
       const data = await apiRequest('/api/v1/subscriptions');
       if (data && Array.isArray(data.subscriptions) && data.subscriptions.length > 0) {
         loadedSubs = data.subscriptions.map(formatSubscriptionRow);
+        state.subscriptions = loadedSubs;
+        try {
+          localStorage.setItem('milvanta-subscriptions', JSON.stringify(loadedSubs));
+        } catch {}
+        renderSubscriptions();
+        return;
       }
     } catch (err) {
-      console.warn('Backend subscriptions fetch failed, checking local cache:', err);
-    }
-
-    // 2. Read from localStorage if API empty or unavailable
-    if (loadedSubs.length === 0) {
-      try {
-        const localSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
-        if (Array.isArray(localSubs) && localSubs.length > 0) {
-          loadedSubs = localSubs.map(formatSubscriptionRow);
-        }
-      } catch {}
+      console.warn('Backend subscriptions fetch failed, using local cache:', err);
     }
 
     // 3. If still empty, provide the standard initial milk subscription
@@ -786,14 +782,22 @@
         product: 'Pure Fresh Cow Milk (1 Litre)',
         image: 'assets/milvanta-cow-milk.jpg',
         frequency: 'Daily (Every Morning)',
-        timeSlot: '',
+        timeSlot: '6:00 AM - 7:00 AM',
         quantity: '1 Litre',
         qtyNum: 1,
-        costPerDay: 60,
+        costPerDay: 105,
+        dailyRate: 105,
+        durationLabel: 'Monthly Plan (30 Days)',
+        days: 30,
         status: 'active',
         nextDelivery: 'Tomorrow'
       };
       loadedSubs = [defaultSub];
+      state.subscriptions = loadedSubs;
+      try {
+        localStorage.setItem('milvanta-subscriptions', JSON.stringify(loadedSubs));
+      } catch {}
+      renderSubscriptions();
 
       // Try creating in backend in background
       try {
@@ -806,31 +810,33 @@
             timeSlot: defaultSub.timeSlot,
             quantity: defaultSub.quantity,
             quantityNum: 1,
-            costPerDayPaise: 6000
+            costPerDayPaise: 10500
           })
         }).then((res) => {
           if (res?.subscription?.id) defaultSub.id = res.subscription.id;
         }).catch(() => {});
       } catch {}
     }
-
-    state.subscriptions = loadedSubs;
-    try {
-      localStorage.setItem('milvanta-subscriptions', JSON.stringify(loadedSubs));
-    } catch {}
-    renderSubscriptions();
   }
 
   function formatSubscriptionRow(row) {
+    const isBuffalo = (row.product_name || row.product || '').toLowerCase().includes('buffalo');
+    const is1L = (row.quantity || row.size || row.product_name || row.product || '').toLowerCase().includes('1');
+    const defaultCost = isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55);
+
     return {
       id: row.id || Date.now(),
-      product: row.product_name || row.product || 'Pure Fresh Milk (1 Litre)',
-      image: row.image_url || row.image || 'assets/milvanta-cow-milk.jpg',
+      product: row.product_name || row.product || (isBuffalo ? 'Pure Buffalo Milk (1/2 Litre)' : 'Pure Fresh Cow Milk (1 Litre)'),
+      image: row.image_url || row.image || (isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg'),
       frequency: row.frequency || 'Daily (Every Morning)',
-      timeSlot: row.time_slot || row.timeSlot || '',
-      quantity: row.quantity || '1 Litre',
+      timeSlot: row.time_slot || row.timeSlot || '6:00 AM - 7:00 AM',
+      quantity: row.quantity || (is1L ? '1 Litre' : '500 ml'),
       qtyNum: Number(row.quantity_num || row.qtyNum || 1),
-      costPerDay: row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : (Number(row.costPerDay) || 60),
+      costPerDay: row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : (Number(row.costPerDay) || Number(row.dailyRate) || defaultCost),
+      dailyRate: row.dailyRate || (row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : defaultCost),
+      durationLabel: row.durationLabel || row.duration_label || '',
+      totalAmount: row.totalAmount || row.total_amount || 0,
+      days: row.days || 30,
       status: row.status || 'active',
       nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
     };
@@ -845,7 +851,7 @@
       container.innerHTML = `
         <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
           <p style="font-size: 1rem; color: #64748b; margin-bottom: 14px;">No active subscriptions found.</p>
-          <a href="index.html#products" class="address-card-btn" style="text-decoration: none; padding: 10px 20px; display: inline-block;">+ Subscribe to Morning Fresh Milk</a>
+          <button type="button" class="address-card-btn" onclick="document.getElementById('btnOpenCreateSubModal')?.click()" style="text-decoration: none; padding: 10px 20px; display: inline-block;">+ Subscribe to Morning Fresh Milk</button>
         </div>
       `;
       return;
@@ -868,6 +874,16 @@
               <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
             </div>
             <div class="sub-detail-row">
+              <span class="sub-detail-label">Daily Rate</span>
+              <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${sub.costPerDay || sub.dailyRate}/day</span>
+            </div>
+            ${sub.durationLabel ? `
+              <div class="sub-detail-row">
+                <span class="sub-detail-label">Plan Duration</span>
+                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 600;">${escapeHtml(sub.durationLabel)}</span>
+              </div>
+            ` : ''}
+            <div class="sub-detail-row">
               <span class="sub-detail-label">Status</span>
               <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
                 ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
@@ -885,6 +901,9 @@
           </button>
           <button type="button" class="btn-sub-modify" data-modify-sub="${sub.id}">
             ✎ Modify Qty
+          </button>
+          <button type="button" class="btn-sub-pause" data-cancel-sub="${sub.id}" style="color: #ef4444; border-color: #fee2e2; background: #fff5f5;">
+            Cancel
           </button>
         </div>
       </div>
@@ -1243,6 +1262,26 @@
           }
         }
       }
+
+      const cancelBtn = e.target.closest('[data-cancel-sub]');
+      if (cancelBtn) {
+        const id = cancelBtn.dataset.cancelSub;
+        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
+        if (sub && confirm(`Are you sure you want to cancel the subscription for ${sub.product}?`)) {
+          state.subscriptions = state.subscriptions.filter((s) => String(s.id) !== String(id));
+          try {
+            await apiRequest(`/api/v1/subscriptions/${id}`, { method: 'DELETE' });
+          } catch (err) {
+            console.warn('API subscription cancellation failed:', err);
+          }
+          try {
+            localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+          } catch {}
+          renderSubscriptions();
+          showToast('Subscription cancelled.');
+        }
+        return;
+      }
     });
 
     // Edit Profile Modal & Handler
@@ -1288,11 +1327,296 @@
       showToast('Profile updated successfully!');
     });
 
+    // Create Subscription Modal Setup
+    setupCreateSubscriptionModal();
+
     // Policy Links
     $$('.policy-btn').forEach((btn) => {
       btn.addEventListener('click', () => openPolicyModal(btn.dataset.policy));
     });
     $('#policyClose')?.addEventListener('click', closePolicyModal);
+  }
+
+  // Create Subscription Modal Logic & Dynamic Pricing
+  function setupCreateSubscriptionModal() {
+    const modal = $('#createSubscriptionModal');
+    const openBtn = $('#btnOpenCreateSubModal');
+    const closeBtn = $('#closeCreateSubModal') || $('#createSubClose');
+    const cancelBtn = $('#closeCreateSubBtn');
+    const form = $('#createSubForm') || $('#createSubscriptionForm');
+    const monthSelect = $('#profileSubMonthSelect');
+
+    if (!modal) return;
+
+    let subState = {
+      milk: 'cow',
+      size: '500ml',
+      planType: 'month',
+      days: 30
+    };
+
+    function populateProfileMonths() {
+      if (!monthSelect) return;
+      const now = new Date();
+      monthSelect.innerHTML = '';
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+        const y = d.getFullYear();
+        const m = d.getMonth();
+        const monthName = d.toLocaleString('en-IN', { month: 'long' });
+        const days = new Date(y, m + 1, 0).getDate();
+        const opt = document.createElement('option');
+        opt.value = `${y}-${m}-${days}`;
+        opt.textContent = `${monthName} ${y} (${days} Days)`;
+        if (i === 0) opt.selected = true;
+        monthSelect.appendChild(opt);
+      }
+    }
+
+    function calculateProfileRates() {
+      const isBuffalo = subState.milk === 'buffalo';
+      const is1L = subState.size === '1L';
+
+      let dailyRate, oneTimeRate;
+      if (isBuffalo) {
+        if (is1L) {
+          dailyRate = 125; oneTimeRate = 130;
+        } else {
+          dailyRate = 65; oneTimeRate = 70;
+        }
+      } else {
+        if (is1L) {
+          dailyRate = 105; oneTimeRate = 110;
+        } else {
+          dailyRate = 55; oneTimeRate = 60;
+        }
+      }
+
+      // Update rate chips inside pack size cards
+      const rate500 = $('#profileSizeRate500');
+      const rate1L = $('#profileSizeRate1L');
+      if (rate500) rate500.textContent = isBuffalo ? '₹65/day' : '₹55/day';
+      if (rate1L) rate1L.textContent = isBuffalo ? '₹125/day' : '₹105/day';
+
+      let days = 30;
+      let planLabel = '';
+
+      if (subState.planType === 'month') {
+        if (monthSelect && monthSelect.value) {
+          const parts = monthSelect.value.split('-');
+          days = parseInt(parts[2], 10) || 30;
+          planLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days`;
+        } else {
+          const now = new Date();
+          days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+          planLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
+        }
+      } else {
+        const input = $('#profileSubDaysInput');
+        days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
+        if (input) input.value = days;
+        planLabel = `${days} Days Plan`;
+      }
+
+      subState.days = days;
+      const totalAmount = days * dailyRate;
+      const regularTotal = days * oneTimeRate;
+      const savings = days * (oneTimeRate - dailyRate);
+
+      if ($('#profileSubSummaryPlanText')) $('#profileSubSummaryPlanText').textContent = planLabel;
+      if ($('#profileSubSummaryRateText')) $('#profileSubSummaryRateText').textContent = `₹${dailyRate} / day`;
+      if ($('#profileSubSavingsText')) $('#profileSubSavingsText').textContent = `Save ₹${savings.toLocaleString('en-IN')} vs one-time order`;
+      if ($('#profileSubFinalTotal')) $('#profileSubFinalTotal').textContent = `₹${totalAmount.toLocaleString('en-IN')}`;
+
+      return { dailyRate, oneTimeRate, days, totalAmount, savings, planLabel };
+    }
+
+    openBtn?.addEventListener('click', () => {
+      populateProfileMonths();
+      calculateProfileRates();
+      modal.classList.remove('hidden');
+    });
+
+    const closeModal = () => modal.classList.add('hidden');
+    closeBtn?.addEventListener('click', closeModal);
+    cancelBtn?.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeModal();
+    });
+
+    // Milk selection
+    $$('#profileSubMilkTypeGroup .sub-type-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        $$('#profileSubMilkTypeGroup .sub-type-card').forEach((c) => {
+          c.classList.remove('active');
+          c.style.borderColor = '#e2e8f0';
+          c.style.background = '#ffffff';
+        });
+        card.classList.add('active');
+        card.style.borderColor = '#0a3d66';
+        card.style.background = '#eff6ff';
+        const radio = card.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+        subState.milk = card.dataset.milk || 'cow';
+        calculateProfileRates();
+      });
+    });
+
+    // Size selection
+    $$('#profileSubSizeGroup .sub-size-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        $$('#profileSubSizeGroup .sub-size-card').forEach((c) => {
+          c.classList.remove('active');
+          c.style.borderColor = '#e2e8f0';
+          c.style.background = '#ffffff';
+        });
+        card.classList.add('active');
+        card.style.borderColor = '#0a3d66';
+        card.style.background = '#eff6ff';
+        const radio = card.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+        subState.size = card.dataset.size || '500ml';
+        calculateProfileRates();
+      });
+    });
+
+    // Duration tabs
+    const tabMonth = $('#profileSubTabMonth');
+    const tabCustom = $('#profileSubTabCustom');
+    const wrapMonth = $('#profileSubMonthWrap');
+    const wrapCustom = $('#profileSubCustomWrap');
+
+    tabMonth?.addEventListener('click', () => {
+      subState.planType = 'month';
+      tabMonth.style.background = '#0a3d66';
+      tabMonth.style.color = '#fff';
+      tabMonth.style.borderColor = '#0a3d66';
+      if (tabCustom) {
+        tabCustom.style.background = '#f8fafc';
+        tabCustom.style.color = '#475569';
+        tabCustom.style.borderColor = '#cbd5e1';
+      }
+      wrapMonth?.classList.remove('hidden');
+      wrapCustom?.classList.add('hidden');
+      calculateProfileRates();
+    });
+
+    tabCustom?.addEventListener('click', () => {
+      subState.planType = 'custom';
+      tabCustom.style.background = '#0a3d66';
+      tabCustom.style.color = '#fff';
+      tabCustom.style.borderColor = '#0a3d66';
+      if (tabMonth) {
+        tabMonth.style.background = '#f8fafc';
+        tabMonth.style.color = '#475569';
+        tabMonth.style.borderColor = '#cbd5e1';
+      }
+      wrapCustom?.classList.remove('hidden');
+      wrapMonth?.classList.add('hidden');
+      calculateProfileRates();
+    });
+
+    monthSelect?.addEventListener('change', calculateProfileRates);
+
+    $('#profileSubDaysDec')?.addEventListener('click', () => {
+      const input = $('#profileSubDaysInput');
+      if (input) {
+        const cur = parseInt(input.value || '7', 10);
+        input.value = Math.max(2, cur - 1);
+        calculateProfileRates();
+      }
+    });
+
+    $('#profileSubDaysInc')?.addEventListener('click', () => {
+      const input = $('#profileSubDaysInput');
+      if (input) {
+        const cur = parseInt(input.value || '7', 10);
+        input.value = Math.min(90, cur + 1);
+        calculateProfileRates();
+      }
+    });
+
+    $('#profileSubDaysInput')?.addEventListener('input', () => {
+      const input = $('#profileSubDaysInput');
+      if (input) {
+        let cur = parseInt(input.value || '2', 10);
+        if (isNaN(cur) || cur < 2) cur = 2;
+        if (cur > 90) cur = 90;
+        input.value = cur;
+        calculateProfileRates();
+      }
+    });
+
+    $$('[data-profile-days]').forEach((pill) => {
+      pill.addEventListener('click', () => {
+        const days = parseInt(pill.dataset.profileDays, 10);
+        const input = $('#profileSubDaysInput');
+        if (input && days >= 2) {
+          input.value = days;
+          calculateProfileRates();
+        }
+      });
+    });
+
+    // Form submit
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const calc = calculateProfileRates();
+      const isBuffalo = subState.milk === 'buffalo';
+      const is1L = subState.size === '1L';
+
+      const productName = isBuffalo ? 'Pure Buffalo Milk' : 'Pure Fresh Cow Milk';
+      const sizeLabel = is1L ? '1 Litre' : '500 ml';
+      const imageUrl = isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg';
+
+      const newSub = {
+        id: 'sub-' + Date.now().toString(36),
+        product: `${productName} (${sizeLabel})`,
+        image: imageUrl,
+        frequency: 'Daily (Every Morning)',
+        timeSlot: '6:00 AM - 7:00 AM',
+        quantity: sizeLabel,
+        qtyNum: 1,
+        costPerDay: calc.dailyRate,
+        dailyRate: calc.dailyRate,
+        days: calc.days,
+        planType: subState.planType,
+        durationLabel: calc.planLabel,
+        totalAmount: calc.totalAmount,
+        savings: calc.savings,
+        status: 'active',
+        nextDelivery: 'Tomorrow'
+      };
+
+      try {
+        await apiRequest('/api/v1/subscriptions', {
+          method: 'POST',
+          body: JSON.stringify({
+            productName: newSub.product,
+            imageUrl: newSub.image,
+            frequency: newSub.frequency,
+            timeSlot: newSub.timeSlot,
+            quantity: newSub.quantity,
+            quantityNum: 1,
+            costPerDayPaise: calc.dailyRate * 100,
+            daysCount: calc.days,
+            totalAmountPaise: calc.totalAmount * 100
+          })
+        }).then((res) => {
+          if (res?.subscription?.id) newSub.id = res.subscription.id;
+        }).catch(() => {});
+      } catch {}
+
+      state.subscriptions.unshift(newSub);
+      try {
+        localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+      } catch {}
+
+      renderSubscriptions();
+      closeModal();
+      showToast(`🥛 ${newSub.product} morning subscription active!`);
+      switchTab('subscription');
+    });
   }
 
   // Order Details Modal with Full Tax Invoice and Items Breakdown

@@ -270,9 +270,9 @@
                 <h3>🥛 Farm Fresh Morning Subscription</h3>
                 <p>Chilled, unadulterated milk and fresh daily essentials delivered directly to your doorstep every morning. Pause, resume, or adjust quantities anytime with zero hassle.</p>
               </div>
-              <a href="index.html#products" class="account-action-pill" style="background: #ffffff; color: #0a3d66; flex-shrink: 0; box-shadow: none;">
+              <button type="button" class="account-action-pill" id="btnOpenCreateSubModal" style="background: #ffffff; color: #0a3d66; flex-shrink: 0; box-shadow: none; border: none; cursor: pointer;">
                 + Subscribe Product
-              </a>
+              </button>
             </div>
 
             <!-- Active Subscriptions List -->
@@ -582,6 +582,109 @@
           </label>
           <div style="display: flex; gap: 10px; margin-top: 12px;">
             <button class="primary-cart" type="submit" style="flex: 1; justify-content: center; border: none; cursor: pointer; padding: 10px;">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Start Milk Subscription -->
+    <div class="modal-overlay hidden" id="createSubscriptionModal" aria-hidden="true">
+      <div class="account-panel subscription-modal-panel" role="dialog" aria-modal="true" aria-labelledby="createSubTitle" style="max-width: 520px;">
+        <button type="button" class="modal-close" id="closeCreateSubModal" aria-label="Close subscription modal">×</button>
+        <p class="modal-kicker">MORNING DOORSTEP DELIVERY</p>
+        <h2 id="createSubTitle" style="font-size: 1.45rem; color: #0a3d66; margin: 0 0 6px;">Start Daily Milk Subscription</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 16px;">Pure farm-fresh milk delivered directly to your doorstep every morning. Pause, resume, or adjust quantity anytime.</p>
+
+        <form id="createSubForm" style="display: grid; gap: 14px;">
+          <!-- Milk Type Selection -->
+          <div>
+            <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Select Milk Type</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;" id="profileSubMilkTypeGroup">
+              <label class="sub-type-card active" data-milk="cow" style="display: flex; flex-direction: column; padding: 12px; border: 2px solid #0a3d66; border-radius: 12px; background: #eff6ff; cursor: pointer; text-align: center;">
+                <input type="radio" name="profileMilkType" value="cow" checked style="display: none;" />
+                <span style="font-size: 1.3rem; margin-bottom: 2px;">🥛</span>
+                <strong style="font-size: 0.95rem; color: #0a3d66;">Cow Milk</strong>
+                <span style="font-size: 0.74rem; color: #2563eb; font-weight: 600; margin-top: 2px;">From ₹55 / day</span>
+              </label>
+              <label class="sub-type-card" data-milk="buffalo" style="display: flex; flex-direction: column; padding: 12px; border: 2px solid #e2e8f0; border-radius: 12px; background: #ffffff; cursor: pointer; text-align: center;">
+                <input type="radio" name="profileMilkType" value="buffalo" style="display: none;" />
+                <span style="font-size: 1.3rem; margin-bottom: 2px;">🥛</span>
+                <strong style="font-size: 0.95rem; color: #0f172a;">Buffalo Milk</strong>
+                <span style="font-size: 0.74rem; color: #475569; font-weight: 600; margin-top: 2px;">From ₹65 / day</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Pack Size Selection -->
+          <div>
+            <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Select Pack Size</label>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;" id="profileSubSizeGroup">
+              <label class="sub-size-card active" data-size="500ml" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 1.5px solid #0a3d66; border-radius: 10px; background: #eff6ff; cursor: pointer;">
+                <input type="radio" name="profileSubSize" value="500ml" checked style="display: none;" />
+                <span style="font-size: 0.88rem; font-weight: 700; color: #0a3d66;">1/2 Litre (500 ml)</span>
+                <span id="profileSizeRate500" style="font-size: 0.8rem; font-weight: 800; color: #059669; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">₹55/day</span>
+              </label>
+              <label class="sub-size-card" data-size="1L" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 1.5px solid #e2e8f0; border-radius: 10px; background: #ffffff; cursor: pointer;">
+                <input type="radio" name="profileSubSize" value="1L" style="display: none;" />
+                <span style="font-size: 0.88rem; font-weight: 700; color: #334155;">1 Litre (1000 ml)</span>
+                <span id="profileSizeRate1L" style="font-size: 0.8rem; font-weight: 800; color: #059669; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">₹105/day</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Duration Type -->
+          <div>
+            <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Subscription Duration</label>
+            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+              <button type="button" class="sub-duration-tab active" id="profileSubTabMonth" style="flex: 1; padding: 9px; font-size: 0.85rem; font-weight: 700; border-radius: 8px; border: 1px solid #0a3d66; background: #0a3d66; color: #fff; cursor: pointer;">Full Month Plan</button>
+              <button type="button" class="sub-duration-tab" id="profileSubTabCustom" style="flex: 1; padding: 9px; font-size: 0.85rem; font-weight: 600; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; cursor: pointer;">Custom Days (Min 2)</button>
+            </div>
+
+            <!-- Month Select -->
+            <div id="profileSubMonthWrap">
+              <select id="profileSubMonthSelect" style="width: 100%; padding: 10px 12px; font-size: 16px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff;">
+              </select>
+              <p style="font-size: 0.75rem; color: #64748b; margin: 4px 0 0;">Price adapts automatically to the exact number of days in that month (28, 29, 30, or 31 days).</p>
+            </div>
+
+            <!-- Custom Days Counter -->
+            <div id="profileSubCustomWrap" class="hidden">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <button type="button" class="sub-day-stepper-btn" id="profileSubDaysDec" style="width: 44px; height: 44px; font-size: 1.4rem; font-weight: 700; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">−</button>
+                <input type="number" id="profileSubDaysInput" min="2" max="90" value="7" style="flex: 1; height: 44px; text-align: center; font-size: 1.15rem; font-weight: 800; border: 1px solid #cbd5e1; border-radius: 8px;" />
+                <button type="button" class="sub-day-stepper-btn" id="profileSubDaysInc" style="width: 44px; height: 44px; font-size: 1.4rem; font-weight: 700; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">+</button>
+              </div>
+              <div style="display: flex; gap: 6px; margin-top: 8px;">
+                <button type="button" class="sub-quick-pill" data-profile-days="2" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">2 Days</button>
+                <button type="button" class="sub-quick-pill" data-profile-days="7" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">7 Days</button>
+                <button type="button" class="sub-quick-pill" data-profile-days="15" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">15 Days</button>
+                <button type="button" class="sub-quick-pill" data-profile-days="30" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">30 Days</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Dynamic Price Card -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: #475569; margin-bottom: 6px;">
+              <span id="profileSubSummaryPlanText">October 2026 (31 Days)</span>
+              <span id="profileSubSummaryRateText" style="font-weight: 700; color: #0f172a;">₹55 / day</span>
+            </div>
+            <div style="height: 1px; background: #e2e8f0; margin: 8px 0;"></div>
+            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+              <div>
+                <span style="font-size: 0.82rem; color: #64748b; display: block;">Total Subscription Amount</span>
+                <span id="profileSubSavingsText" style="font-size: 0.75rem; color: #059669; font-weight: 700;">Save ₹155 vs one-time order</span>
+              </div>
+              <span id="profileSubFinalTotal" style="font-size: 1.4rem; font-weight: 800; color: #0a3d66;">₹1,705</span>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div style="display: flex; gap: 10px; margin-top: 4px;">
+            <button class="primary-cart" type="submit" id="profileSubmitSubBtn" style="flex: 1; justify-content: center; border: none; cursor: pointer; padding: 12px; min-height: 44px; font-size: 0.95rem; font-weight: 700;">
+              Confirm &amp; Start Subscription
+            </button>
+            <button type="button" class="btn-sub-pause" id="closeCreateSubBtn" style="flex: 0 0 auto; min-height: 44px; padding: 0 16px;">Cancel</button>
           </div>
         </form>
       </div>

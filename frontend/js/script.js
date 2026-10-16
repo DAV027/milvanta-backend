@@ -27,7 +27,7 @@ let products = [
     badge: 'Daily Essential',
     variants: [
       { size: '500 ml', price: 60 },
-      { size: '1 Litre', price: 115 }
+      { size: '1 Litre', price: 110 }
     ],
     details: 'Milked at 4:00 AM, tested for 18 purity parameters, and chilled to 3.8°C within 60 minutes.'
   },
@@ -48,7 +48,7 @@ let products = [
     badge: 'Farm Fresh',
     variants: [
       { size: '500 ml', price: 70 },
-      { size: '1 Litre', price: 135 }
+      { size: '1 Litre', price: 130 }
     ],
     details: 'High natural milk-fat (7.5%+), dense nutrition, and rich texture.'
   },
@@ -477,6 +477,8 @@ const state = {
   checkoutBusy: false,
   checkoutNotice: '',
   addressDraft: {},
+  purchaseMode: 'onetime',
+  subPlanType: 'month',
   pincode: (() => { try { return localStorage.getItem('milvanta-pincode') || '500049'; } catch { return '500049'; } })(),
   area: (() => { try { return localStorage.getItem('milvanta-area') || 'Hafeezpet'; } catch { return 'Hafeezpet'; } })(),
   checkoutKey: (() => { try { return sessionStorage.getItem('milvanta-checkout-key') || ''; } catch { return ''; } })(),
@@ -487,6 +489,244 @@ const $ = (selector) => document.querySelector(selector);
 const API_URL = (window.MILVANTA_API_URL || '').replace(/\/$/, '');
 window.state = state;
 window.products = products;
+
+// Milk Subscription Dynamic Pricing & Planner Utilities
+function isFreshMilkProduct(p) {
+  if (!p) return false;
+  return p.category === 'Fresh Milk' || p.id === 101 || p.id === 102 || /cow milk|buffalo milk/i.test(p.name);
+}
+
+function getMilkSubscriptionRates(product, variantSize) {
+  const isBuffalo = product.id === 102 || /buffalo/i.test(product.name);
+  const sizeStr = String(variantSize || product.size || '').toLowerCase();
+  const is1L = sizeStr.includes('1') || sizeStr.includes('litre') || sizeStr.includes('liter') || sizeStr.includes('1000');
+
+  if (isBuffalo) {
+    if (is1L) {
+      return { dailyRate: 125, oneTimeRate: 130, base30Rate: 3750, label: 'Buffalo Milk 1L' };
+    }
+    return { dailyRate: 65, oneTimeRate: 70, base30Rate: 1950, label: 'Buffalo Milk 1/2L' };
+  } else {
+    if (is1L) {
+      return { dailyRate: 105, oneTimeRate: 110, base30Rate: 3150, label: 'Cow Milk 1L' };
+    }
+    return { dailyRate: 55, oneTimeRate: 60, base30Rate: 1650, label: 'Cow Milk 1/2L' };
+  }
+}
+
+function populateSubscriptionMonths(selectElem) {
+  if (!selectElem) return;
+  const now = new Date();
+  selectElem.innerHTML = '';
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const monthName = d.toLocaleString('en-IN', { month: 'long' });
+    const days = new Date(y, m + 1, 0).getDate();
+    const opt = document.createElement('option');
+    opt.value = `${y}-${m}-${days}`;
+    opt.textContent = `${monthName} ${y} (${days} Days)`;
+    if (i === 0) opt.selected = true;
+    selectElem.appendChild(opt);
+  }
+}
+
+function updateSubscriptionSummary() {
+  const p = products.find((item) => item.id === state.activeProductId);
+  if (!p || !isFreshMilkProduct(p)) return;
+
+  const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
+  const rates = getMilkSubscriptionRates(p, variantSize);
+
+  let days = 30;
+  let planLabel = '';
+
+  if (state.subPlanType === 'month') {
+    const monthSelect = $('#subMonthSelect');
+    if (monthSelect && monthSelect.value) {
+      const parts = monthSelect.value.split('-');
+      days = parseInt(parts[2], 10) || 30;
+      planLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days`;
+    } else {
+      const now = new Date();
+      days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      planLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
+    }
+  } else {
+    const input = $('#subDaysInput');
+    days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
+    if (input) input.value = days;
+    planLabel = `${days} Days Plan`;
+  }
+
+  const subTotal = days * rates.dailyRate;
+  const regularTotal = days * rates.oneTimeRate;
+  const savings = days * (rates.oneTimeRate - rates.dailyRate);
+
+  const planLabelElem = $('#subSummaryPlanLabel');
+  const rateElem = $('#subSummaryRate');
+  const strikeElem = $('#subRegularStrike');
+  const savingsElem = $('#subSavingsBadge');
+  const finalPriceElem = $('#subFinalPrice');
+  const addBtn = $('#modalAddToCart');
+
+  if (planLabelElem) planLabelElem.textContent = planLabel;
+  if (rateElem) rateElem.textContent = `₹${rates.dailyRate} / day`;
+  if (strikeElem) strikeElem.textContent = `₹${regularTotal.toLocaleString('en-IN')}`;
+  if (savingsElem) savingsElem.textContent = `Save ₹${savings.toLocaleString('en-IN')}`;
+  if (finalPriceElem) finalPriceElem.textContent = `₹${subTotal.toLocaleString('en-IN')}`;
+
+  if (addBtn && state.purchaseMode === 'subscription') {
+    addBtn.innerHTML = `<span>Start Morning Subscription · ₹${subTotal.toLocaleString('en-IN')}</span>`;
+  }
+}
+
+function setPurchaseMode(mode) {
+  state.purchaseMode = mode;
+  const modeSwitch = $('#modalPurchaseModeWrap');
+  const subPlanner = $('#modalSubscriptionPlanWrap');
+  const qtyRow = $('.modal-action-bar .quantity-row');
+
+  if (modeSwitch) {
+    modeSwitch.querySelectorAll('.purchase-mode-tab').forEach((tab) => {
+      const isAct = tab.dataset.mode === mode;
+      tab.classList.toggle('active', isAct);
+    });
+  }
+
+  if (mode === 'subscription') {
+    if (subPlanner) subPlanner.classList.remove('hidden');
+    if (qtyRow) qtyRow.style.display = 'none';
+    updateSubscriptionSummary();
+  } else {
+    if (subPlanner) subPlanner.classList.add('hidden');
+    if (qtyRow) qtyRow.style.display = '';
+    updateModalAddToCartBtn();
+  }
+}
+
+function handleStartSubscription(p) {
+  const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
+  const rates = getMilkSubscriptionRates(p, variantSize);
+
+  let days = 30;
+  let durationLabel = '';
+
+  if (state.subPlanType === 'month') {
+    const monthSelect = $('#subMonthSelect');
+    if (monthSelect && monthSelect.value) {
+      const parts = monthSelect.value.split('-');
+      days = parseInt(parts[2], 10) || 30;
+      durationLabel = monthSelect.options[monthSelect.selectedIndex]?.text || `${days} Days Plan`;
+    } else {
+      const now = new Date();
+      days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      durationLabel = `${now.toLocaleString('en-IN', { month: 'long' })} ${now.getFullYear()} (${days} Days)`;
+    }
+  } else {
+    const input = $('#subDaysInput');
+    days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
+    durationLabel = `${days} Days Plan`;
+  }
+
+  const totalAmount = days * rates.dailyRate;
+  const savings = days * (rates.oneTimeRate - rates.dailyRate);
+
+  const subItem = {
+    id: 'sub-' + Date.now().toString(36),
+    product: `${p.name} (${variantSize})`,
+    productName: p.name,
+    productId: p.id,
+    image: p.image,
+    size: variantSize,
+    planType: state.subPlanType,
+    durationLabel,
+    days,
+    dailyRate: rates.dailyRate,
+    totalAmount,
+    savings,
+    frequency: 'Daily (Every Morning)',
+    timeSlot: '6:00 AM - 7:00 AM',
+    quantity: variantSize,
+    qtyNum: 1,
+    costPerDay: rates.dailyRate,
+    status: 'active',
+    nextDelivery: 'Tomorrow'
+  };
+
+  let subs = [];
+  try {
+    subs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+    if (!Array.isArray(subs)) subs = [];
+  } catch {
+    subs = [];
+  }
+  subs.unshift(subItem);
+  try {
+    localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs));
+  } catch {}
+
+  // Post to backend API if active
+  try {
+    apiRequest('/api/v1/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify({
+        productName: subItem.product,
+        imageUrl: subItem.image,
+        frequency: subItem.frequency,
+        timeSlot: subItem.timeSlot,
+        quantity: subItem.quantity,
+        quantityNum: 1,
+        costPerDayPaise: rates.dailyRate * 100,
+        daysCount: days,
+        totalAmountPaise: totalAmount * 100
+      })
+    }).then((res) => {
+      if (res?.subscription?.id) {
+        subItem.id = res.subscription.id;
+        try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+      }
+    }).catch(() => {});
+  } catch {}
+
+  closeProductModal();
+  showStoreToast(`🥛 Morning Subscription Confirmed! Total: ₹${totalAmount.toLocaleString('en-IN')} (Saved ₹${savings})`, 'profile.html?tab=subscription');
+}
+
+function showStoreToast(msg, linkUrl) {
+  let toast = $('#storeToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'storeToast';
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: #0d2137;
+      color: #ffffff;
+      padding: 12px 20px;
+      border-radius: 9999px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      z-index: 99999;
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 90vw;
+    `;
+    document.body.appendChild(toast);
+  }
+  const linkHtml = linkUrl ? `<a href="${linkUrl}" style="color: #60a5fa; text-decoration: underline; font-weight: 700; white-space: nowrap;">View in Account →</a>` : '';
+  toast.innerHTML = `<span>✓</span> <span style="flex:1;">${escapeHtml(msg)}</span> ${linkHtml}`;
+  toast.style.transform = 'translateX(-50%) translateY(0)';
+  setTimeout(() => {
+    toast.style.transform = 'translateX(-50%) translateY(100px)';
+  }, 6000);
+}
 
 // Policy contents for compliance modals
 const POLICIES = {
@@ -1107,6 +1347,12 @@ function renderCatalog() {
             <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
           </button>
         </div>
+        ${isFreshMilkProduct(p) ? `
+          <div class="card-sub-banner" data-sub-prod="${p.id}" title="Start Daily Morning Milk Subscription">
+            <span class="sub-banner-badge">🥛 Daily Subscription from ₹${(p.id === 102 || /buffalo/i.test(p.name)) ? '65' : '55'}/day</span>
+            <span class="sub-banner-action">Subscribe →</span>
+          </div>
+        ` : ''}
         <div class="card-feature-pills">
           ${featuresHtml}
         </div>
@@ -1118,6 +1364,12 @@ function renderCatalog() {
     // In Carousel view: click non-center card centers it; click center card opens modal
     card.addEventListener('click', (event) => {
       if (event.target.closest('.card-round-cart-btn')) return;
+      const subTrigger = event.target.closest('[data-sub-prod]');
+      if (subTrigger) {
+        event.stopPropagation();
+        openProductModal(p.id, 'subscription');
+        return;
+      }
       if (state.viewMode === 'grid') {
         openProductModal(p.id);
         return;
@@ -1201,7 +1453,7 @@ function renderCarouselDots(total, current) {
 }
 
 // Product Detail Modal
-function openProductModal(id) {
+function openProductModal(id, initialMode = 'onetime') {
   const p = products.find((item) => item.id === id);
   if (!p) return;
   state.activeProductId = id;
@@ -1285,7 +1537,9 @@ function openProductModal(id) {
           });
           const price = state.selectedVariant.price;
           $('#modalPrice').textContent = `₹${price}`;
-          if (addBtn && stock > 0) {
+          if (state.purchaseMode === 'subscription') {
+            updateSubscriptionSummary();
+          } else if (addBtn && stock > 0) {
             addBtn.innerHTML = `<span>Add to cart · ₹${price * state.modalQty}</span>`;
           }
         });
@@ -1301,8 +1555,24 @@ function openProductModal(id) {
     $('#modalPrice').textContent = `₹${p.price}`;
   }
 
-  if (addBtn && stock > 0) {
-    addBtn.innerHTML = `<span>Add to cart · ₹${currentPrice}</span>`;
+  // Setup Subscription vs Buy Once UI for Fresh Milk
+  const isMilk = isFreshMilkProduct(p);
+  const modeSwitch = $('#modalPurchaseModeWrap');
+  const subPlanner = $('#modalSubscriptionPlanWrap');
+  const qtyRow = $('.modal-action-bar .quantity-row');
+
+  if (isMilk) {
+    if (modeSwitch) modeSwitch.classList.remove('hidden');
+    populateSubscriptionMonths($('#subMonthSelect'));
+    setPurchaseMode(initialMode === 'subscription' ? 'subscription' : 'onetime');
+  } else {
+    if (modeSwitch) modeSwitch.classList.add('hidden');
+    if (subPlanner) subPlanner.classList.add('hidden');
+    if (qtyRow) qtyRow.style.display = '';
+    state.purchaseMode = 'onetime';
+    if (addBtn && stock > 0) {
+      addBtn.innerHTML = `<span>Add to cart · ₹${currentPrice * state.modalQty}</span>`;
+    }
   }
 
   const ingBlock = $('.ingredients-block');
@@ -2288,6 +2558,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateModalAddToCartBtn() {
+    if (state.purchaseMode === 'subscription') {
+      updateSubscriptionSummary();
+      return;
+    }
     const unitPrice = getModalUnitPrice();
     const addBtn = $('#modalAddToCart');
     if (addBtn && unitPrice) {
@@ -2301,16 +2575,96 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!p || !p.variants) return;
     state.selectedVariant = p.variants[Number(e.target.value)];
     $('#modalPrice').textContent = `₹${state.selectedVariant.price}`;
-    updateModalAddToCartBtn();
+    if (state.purchaseMode === 'subscription') {
+      updateSubscriptionSummary();
+    } else {
+      updateModalAddToCartBtn();
+    }
   });
 
   // Modal Add To Cart
   $('#modalAddToCart')?.addEventListener('click', () => {
     if (state.activeProductId) {
+      const p = products.find((item) => item.id === state.activeProductId);
+      if (p && state.purchaseMode === 'subscription' && isFreshMilkProduct(p)) {
+        handleStartSubscription(p);
+        return;
+      }
       addToCart(state.activeProductId, state.modalQty, state.selectedVariant);
       closeProductModal();
       setCartOpen(true);
     }
+  });
+
+  // Milk Subscription Mode Switching & Planner Event Listeners
+  $('#btnModeOneTime')?.addEventListener('click', () => {
+    setPurchaseMode('onetime');
+  });
+
+  $('#btnModeSub')?.addEventListener('click', () => {
+    setPurchaseMode('subscription');
+  });
+
+  $('#subTabMonth')?.addEventListener('click', () => {
+    state.subPlanType = 'month';
+    $('#subTabMonth')?.classList.add('active');
+    $('#subTabCustom')?.classList.remove('active');
+    $('#subMonthControls')?.classList.remove('hidden');
+    $('#subCustomControls')?.classList.add('hidden');
+    updateSubscriptionSummary();
+  });
+
+  $('#subTabCustom')?.addEventListener('click', () => {
+    state.subPlanType = 'custom';
+    $('#subTabCustom')?.classList.add('active');
+    $('#subTabMonth')?.classList.remove('active');
+    $('#subMonthControls')?.classList.add('hidden');
+    $('#subCustomControls')?.classList.remove('hidden');
+    updateSubscriptionSummary();
+  });
+
+  $('#subMonthSelect')?.addEventListener('change', () => {
+    updateSubscriptionSummary();
+  });
+
+  $('#subDaysDec')?.addEventListener('click', () => {
+    const input = $('#subDaysInput');
+    if (input) {
+      const cur = parseInt(input.value || '7', 10);
+      input.value = Math.max(2, cur - 1);
+      updateSubscriptionSummary();
+    }
+  });
+
+  $('#subDaysInc')?.addEventListener('click', () => {
+    const input = $('#subDaysInput');
+    if (input) {
+      const cur = parseInt(input.value || '7', 10);
+      input.value = Math.min(90, cur + 1);
+      updateSubscriptionSummary();
+    }
+  });
+
+  $('#subDaysInput')?.addEventListener('input', () => {
+    const input = $('#subDaysInput');
+    if (input) {
+      let cur = parseInt(input.value || '2', 10);
+      if (isNaN(cur) || cur < 2) cur = 2;
+      if (cur > 90) cur = 90;
+      input.value = cur;
+      updateSubscriptionSummary();
+    }
+  });
+
+  document.querySelectorAll('.sub-quick-pill').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      const days = parseInt(pill.dataset.days, 10);
+      const input = $('#subDaysInput');
+      if (input && days >= 2) {
+        input.value = days;
+        updateSubscriptionSummary();
+      }
+    });
   });
 
   // Modal Stepper
