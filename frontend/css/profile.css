@@ -977,42 +977,214 @@
   }
   
   .account-overview-card {
-    padding: 20px;
+    padding: 22px 20px;
   }
-  
-  .account-actions-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  
-  .account-action-pill.logout-pill {
-    margin-left: 0;
-  }
-  
+
   .calendar-days-track {
     grid-template-columns: repeat(4, 1fr);
   }
 }
 
 @media (max-width: 640px) {
+  /* Page Container & Layout */
+  .profile-page-main {
+    padding: 12px 14px 60px;
+    box-sizing: border-box;
+    overflow-x: hidden;
+  }
+
+  .profile-content-container {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .profile-page-title {
+    font-size: 1.85rem;
+    margin: 0 0 16px 0;
+    line-height: 1.2;
+  }
+
+  /* Scrollable Pill Navigation Bar */
+  .profile-tabs-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding: 5px;
+    margin-bottom: 20px;
+    border-radius: 9999px;
+    box-sizing: border-box;
+  }
+
+  .profile-tabs-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .profile-tab-btn {
+    flex-shrink: 0;
+    padding: 9px 16px;
+    font-size: 0.86rem;
+    gap: 6px;
+    min-height: 40px;
+    box-sizing: border-box;
+  }
+
+  .profile-tab-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  /* Account Overview Card */
+  .account-overview-card {
+    padding: 18px 16px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+  }
+
+  .account-overview-top {
+    gap: 14px;
+    margin-bottom: 16px;
+  }
+
+  .account-user-avatar {
+    width: 52px;
+    height: 52px;
+    min-width: 52px;
+    font-size: 1.35rem;
+  }
+
+  .account-user-name {
+    font-size: 1.35rem;
+  }
+
+  .account-user-phone {
+    font-size: 0.88rem;
+  }
+
+  .account-actions-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .account-action-pill {
+    padding: 10px 12px;
+    font-size: 0.84rem;
+    justify-content: center;
+    min-height: 42px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+
+  .account-action-pill.logout-pill {
+    grid-column: 1 / -1;
+    margin-left: 0;
+    justify-content: center;
+    width: 100%;
+  }
+
+  /* Section Cards */
+  .profile-section-card {
+    padding: 18px 16px;
+    border-radius: 16px;
+    margin-bottom: 20px;
+  }
+
+  .section-header-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .section-header-row > div {
+    width: 100%;
+  }
+
+  .section-title {
+    font-size: 1.15rem;
+  }
+
+  .section-subtitle {
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .section-header-row .address-add-btn,
+  .section-header-row .btn-sub-pause,
+  .section-header-row .address-card-btn {
+    align-self: flex-start;
+    white-space: nowrap;
+    padding: 9px 18px;
+    font-size: 0.84rem;
+    min-height: 38px;
+  }
+
+  /* 1. Profile Information Grid */
+  .profile-info-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .info-item {
+    padding: 12px 14px;
+    border-radius: 10px;
+  }
+
+  .info-item-value {
+    font-size: 0.95rem;
+    word-break: break-word;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* 2. Orders Cards List */
   .order-card {
     padding: 16px;
+    border-radius: 14px;
   }
 
   .order-card-header {
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  }
+
+  .order-id-group {
+    width: 100%;
+  }
+
+  .order-id {
+    font-size: 0.98rem;
+    white-space: nowrap;
+    word-break: keep-all;
+  }
+
+  .order-date {
+    font-size: 0.78rem;
   }
 
   .order-item-detailed-row {
     padding: 10px;
     gap: 10px;
+    border-radius: 10px;
   }
 
   .order-item-thumb-box {
     width: 50px;
     height: 50px;
+    min-width: 50px;
+    border-radius: 8px;
   }
 
   .order-item-heading {
@@ -1024,6 +1196,7 @@
   .order-item-title {
     font-size: 0.88rem;
     white-space: normal;
+    line-height: 1.35;
   }
 
   .order-item-line-total {
@@ -1031,33 +1204,289 @@
     color: #0a3d66;
   }
 
+  .order-item-specs {
+    gap: 6px;
+    font-size: 0.78rem;
+  }
+
+  .order-delivery-bill-card {
+    padding: 10px 12px;
+    margin: 12px 0;
+  }
+
+  .order-destination-info {
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
   .order-bill-summary-bar {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: 8px;
   }
 
   .bill-payment-tag {
     grid-column: 1 / -1;
     justify-content: center;
+    padding: 4px 10px;
+    font-size: 0.74rem;
   }
 
   .order-card-footer {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
+    padding-top: 12px;
+  }
+
+  .order-total-group {
+    justify-content: space-between;
+    width: 100%;
   }
 
   .order-actions-group {
+    display: flex;
     flex-direction: column;
     width: 100%;
+    gap: 8px;
   }
 
   .btn-order-details,
   .btn-reorder {
     width: 100%;
+    min-height: 42px;
     justify-content: center;
+    font-size: 0.88rem;
+    padding: 10px 14px;
+    box-sizing: border-box;
+  }
+
+  /* 3. Saved Addresses Section */
+  .addresses-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .address-card {
+    padding: 16px;
+    border-radius: 14px;
+  }
+
+  .address-recipient {
+    font-size: 1rem;
+  }
+
+  .address-text {
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+
+  .address-card-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 10px;
+  }
+
+  .address-card-btn {
+    padding: 6px 12px;
+    min-height: 38px;
+    font-size: 0.82rem;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* 4. Subscription Section */
+  .subscription-banner {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 20px 16px;
+    border-radius: 16px;
+    gap: 14px;
+  }
+
+  .subscription-banner-text h3 {
+    font-size: 1.2rem;
+  }
+
+  .subscription-banner-text p {
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+
+  .subscription-banner .account-action-pill {
+    width: 100%;
+    justify-content: center;
+    min-height: 42px;
+    box-sizing: border-box;
+  }
+
+  .subscription-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .subscription-card {
+    padding: 18px 16px;
+    border-radius: 14px;
+  }
+
+  .subscription-item-header {
+    gap: 12px;
+  }
+
+  .subscription-item-img {
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+  }
+
+  .subscription-item-title {
+    font-size: 1.05rem;
+  }
+
+  .subscription-details-list {
+    padding: 12px 14px;
+    font-size: 0.82rem;
+    gap: 8px;
+  }
+
+  .subscription-actions-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .btn-sub-pause,
+  .btn-sub-modify {
+    width: 100%;
+    min-height: 42px;
+  }
+
+  /* Morning Delivery Schedule Calendar Strip */
+  .morning-calendar-card {
+    padding: 16px 14px;
+    border-radius: 14px;
+  }
+
+  .calendar-days-track {
+    display: flex;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scroll-snap-type: x mandatory;
+  }
+
+  .calendar-days-track::-webkit-scrollbar {
+    display: none;
+  }
+
+  .calendar-day-box {
+    flex: 0 0 calc((100% - 24px) / 4);
+    min-width: 70px;
+    scroll-snap-align: start;
+    padding: 10px 4px;
+    border-radius: 10px;
+    box-sizing: border-box;
+  }
+
+  .calendar-day-name {
+    font-size: 0.72rem;
+  }
+
+  .calendar-day-num {
+    font-size: 1rem;
+  }
+
+  .calendar-status-dot {
+    font-size: 0.68rem;
+    padding: 2px 4px;
+  }
+
+  /* Modals on Mobile View */
+  .modal-overlay {
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    box-sizing: border-box;
+  }
+
+  .account-panel,
+  .order-details-panel {
+    width: 100% !important;
+    max-width: 480px !important;
+    max-height: calc(100dvh - 32px) !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+    padding: 22px 16px 20px !important;
+    border-radius: 18px !important;
+    box-sizing: border-box;
+  }
+
+  .order-modal-delivery-grid {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  .modal-form-two-col {
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+  }
+
+  /* Form inputs mobile styling to prevent iOS auto-zoom */
+  .account-panel input,
+  .account-panel select,
+  .account-panel textarea {
+    font-size: 16px !important;
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+  .account-panel .modal-close {
+    width: 36px;
+    height: 36px;
+    font-size: 1.4rem;
+  }
+
+  .account-panel button[type="submit"],
+  .account-panel .primary-cart,
+  #closeOrderModalBtn,
+  #orderModalReorderBtn {
+    min-height: 44px;
+    font-size: 0.92rem;
   }
 }
+
+@media (max-width: 360px) {
+  .profile-page-main {
+    padding: 10px 8px 50px;
+  }
+
+  .account-overview-card,
+  .profile-section-card,
+  .order-card,
+  .address-card,
+  .subscription-card {
+    padding: 14px 12px;
+  }
+
+  .account-actions-row {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-tab-btn {
+    padding: 8px 12px;
+    font-size: 0.8rem;
+  }
+
+  .calendar-day-box {
+    flex: 0 0 calc((100% - 16px) / 3);
+    min-width: 64px;
+  }
+}
+
 
 

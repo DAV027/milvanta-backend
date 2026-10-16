@@ -124,6 +124,9 @@
       const isActive = btn.dataset.tab === tabId;
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      if (isActive) {
+        btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
     });
 
     // Update Panels
@@ -501,7 +504,7 @@
       paymentMethod: row.paymentMethod || 'Paid Online via Razorpay',
       courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
       trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
-      estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM'
+      estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning'
     };
   }
 
@@ -783,12 +786,12 @@
         product: 'Pure Fresh Cow Milk (1 Litre)',
         image: 'assets/milvanta-cow-milk.jpg',
         frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM – 7:00 AM',
+        timeSlot: '',
         quantity: '1 Litre',
         qtyNum: 1,
         costPerDay: 60,
         status: 'active',
-        nextDelivery: 'Tomorrow, 6:00 AM'
+        nextDelivery: 'Tomorrow'
       };
       loadedSubs = [defaultSub];
 
@@ -824,12 +827,12 @@
       product: row.product_name || row.product || 'Pure Fresh Milk (1 Litre)',
       image: row.image_url || row.image || 'assets/milvanta-cow-milk.jpg',
       frequency: row.frequency || 'Daily (Every Morning)',
-      timeSlot: row.time_slot || row.timeSlot || '6:00 AM – 7:00 AM',
+      timeSlot: row.time_slot || row.timeSlot || '',
       quantity: row.quantity || '1 Litre',
       qtyNum: Number(row.quantity_num || row.qtyNum || 1),
       costPerDay: row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : (Number(row.costPerDay) || 60),
       status: row.status || 'active',
-      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow, 6:00 AM'
+      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
     };
   }
 
@@ -856,7 +859,7 @@
             <div class="subscription-item-info">
               <span class="subscription-item-tag">Early Morning Delivery</span>
               <h4 class="subscription-item-title">${escapeHtml(sub.product)}</h4>
-              <p class="subscription-item-meta">${escapeHtml(sub.frequency)} • ${escapeHtml(sub.timeSlot)}</p>
+              <p class="subscription-item-meta">${escapeHtml(sub.frequency)}${sub.timeSlot ? ` • ${escapeHtml(sub.timeSlot)}` : ''}</p>
             </div>
           </div>
           <div class="subscription-details-list">

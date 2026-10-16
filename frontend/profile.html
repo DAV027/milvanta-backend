@@ -268,7 +268,7 @@
             <div class="subscription-banner">
               <div class="subscription-banner-text">
                 <h3>🥛 Farm Fresh Morning Subscription</h3>
-                <p>Chilled, unadulterated milk and fresh daily essentials delivered to your doorstep every morning between 6:00 AM and 7:00 AM. Pause, resume, or adjust quantities anytime with zero hassle.</p>
+                <p>Chilled, unadulterated milk and fresh daily essentials delivered directly to your doorstep every morning. Pause, resume, or adjust quantities anytime with zero hassle.</p>
               </div>
               <a href="index.html#products" class="account-action-pill" style="background: #ffffff; color: #0a3d66; flex-shrink: 0; box-shadow: none;">
                 + Subscribe Product
@@ -285,7 +285,7 @@
               <div class="section-header-row" style="margin-bottom: 8px;">
                 <div>
                   <h4 style="font-size: 1.05rem; font-weight: 700; margin: 0; color: #0f172a;">This Week's Delivery Schedule</h4>
-                  <p style="font-size: 0.82rem; color: #64748b; margin: 2px 0 0;">Early morning doorstep drop: 6:00 AM – 7:00 AM</p>
+                  <p style="font-size: 0.82rem; color: #64748b; margin: 2px 0 0;">Early morning doorstep delivery</p>
                 </div>
               </div>
               <div class="calendar-days-track">
@@ -302,7 +302,7 @@
                 <div class="calendar-day-box is-today">
                   <span class="calendar-day-name">Wed</span>
                   <span class="calendar-day-num">15</span>
-                  <span class="calendar-status-dot">Today (6 AM)</span>
+                  <span class="calendar-status-dot">Today</span>
                 </div>
                 <div class="calendar-day-box">
                   <span class="calendar-day-name">Thu</span>
@@ -451,7 +451,7 @@
       </div>
 
       <div class="mobile-nav-footer">
-        <p>📍 Morning Delivery: <strong>6:00 AM – 7:00 AM</strong></p>
+        <p>📍 Morning Delivery: <strong>Fresh Farm Direct</strong></p>
         <p>📞 WhatsApp: <strong><a href="https://wa.me/919052222256" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">+91 9052222256</a></strong></p>
       </div>
     </nav>
@@ -479,7 +479,7 @@
         </div>
 
         <!-- Delivery & Payment Information -->
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; background: #f8fafc; border: 1px solid #eef2f6; border-radius: 12px; padding: 12px 14px;">
+        <div class="order-modal-delivery-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; background: #f8fafc; border: 1px solid #eef2f6; border-radius: 12px; padding: 12px 14px;">
           <div>
             <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #64748b; display: block; margin-bottom: 3px;">Delivered To</span>
             <div id="orderModalAddress" style="font-size: 0.82rem; color: #0f172a; line-height: 1.4;">Hafeezpet, Hyderabad</div>
@@ -526,7 +526,7 @@
         <p class="modal-kicker">DELIVERY LOCATION</p>
         <h2 id="addAddrTitle" style="margin-bottom: 16px;">Add Delivery Address</h2>
         <form id="addNewAddressForm" style="display: grid; gap: 12px;">
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="modal-form-two-col" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
             <label style="font-size: 0.8rem; font-weight: 600;">Address Tag
               <select name="type" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px;">
                 <option value="Home">Home</option>
@@ -547,7 +547,7 @@
           <label style="font-size: 0.8rem; font-weight: 600;">Building / Street / Area
             <input name="street" autocomplete="shipping address-line2" required placeholder="e.g. Rainbow Vistas, Hitec City" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px;" />
           </label>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="modal-form-two-col" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
             <label style="font-size: 0.8rem; font-weight: 600;">City
               <input name="city" autocomplete="shipping address-level2" value="Hyderabad" required style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px;" />
             </label>
@@ -559,9 +559,9 @@
             <input type="checkbox" name="is_default" checked style="width: 16px; height: 16px;" />
             <span>Set as default delivery address</span>
           </label>
-          <div style="display: flex; gap: 10px; margin-top: 14px;">
-            <button class="primary-cart" type="submit" style="flex: 1; justify-content: center; border: none; cursor: pointer; padding: 10px;">Save Address</button>
-            <button type="button" class="btn-sub-pause" id="cancelAddAddressBtn" style="flex: 0 0 auto;">Cancel</button>
+          <div class="modal-actions-row" style="display: flex; gap: 10px; margin-top: 14px;">
+            <button class="primary-cart" type="submit" style="flex: 1.5; justify-content: center; border: none; cursor: pointer; padding: 10px 14px; min-height: 44px; font-weight: 700; white-space: nowrap;">Save Address</button>
+            <button type="button" class="btn-sub-pause" id="cancelAddAddressBtn" style="flex: 1; justify-content: center; min-height: 44px; font-weight: 600;">Cancel</button>
           </div>
         </form>
       </div>
