@@ -2981,6 +2981,32 @@ body.cart-open .cart-scrim {
   text-decoration: underline;
 }
 
+.footer-whatsapp-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(37, 211, 102, 0.12);
+  color: #25D366;
+  text-decoration: none !important;
+  transition: all 0.2s ease;
+  line-height: 1;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.footer-whatsapp-link:hover {
+  background: rgba(37, 211, 102, 0.25);
+  transform: scale(1.1);
+  text-decoration: none !important;
+}
+
+.footer-whatsapp-link svg {
+  display: block;
+  flex-shrink: 0;
+}
+
 .footer-social-links {
   display: flex;
   gap: 8px;
