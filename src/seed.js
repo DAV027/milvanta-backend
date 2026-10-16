@@ -85,7 +85,7 @@ export const products = [
   // 4. Healthy Living
   {
     name: 'Raagi Cookies',
-    description: 'Healthy option from kids to adults. Made with pure A2 Belona ghee, organic Raagi, whole wheat flour, and organic jaggery, topped with 5 types of nuts and seeds (pumpkin seeds, cashew, almonds, sunflower, melon seeds). 250 grams tin containing 17 cookies in complete box.',
+    description: 'Healthy option from kids to adults. Made with pure Desi Belona ghee, organic Raagi, whole wheat flour, and organic jaggery, topped with 5 types of nuts and seeds (pumpkin seeds, cashew, almonds, sunflower, melon seeds). 250 grams tin containing 17 cookies in complete box.',
     category: 'Healthy Living',
     price_paise: 55000,
     selling_unit: '250 g tin (17 cookies)',
@@ -109,7 +109,7 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 47900,
     selling_unit: '500 g jar',
-    image_url: 'assets/vegetarian-pickles-menu.jpg',
+    image_url: 'assets/tomato-pickle.jpg',
     stock_quantity: 60
   },
   {
@@ -118,7 +118,7 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 49900,
     selling_unit: '500 g jar',
-    image_url: 'assets/vegetarian-pickles-menu.jpg',
+    image_url: 'assets/gongura-pickle.jpg',
     stock_quantity: 60
   },
   {
@@ -127,7 +127,7 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 49900,
     selling_unit: '500 g jar',
-    image_url: 'assets/vegetarian-pickles-menu.jpg',
+    image_url: 'assets/usirikaya-pickle.jpg',
     stock_quantity: 50
   },
   {
@@ -136,7 +136,7 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 48900,
     selling_unit: '500 g jar',
-    image_url: 'assets/vegetarian-pickles-menu.jpg',
+    image_url: 'assets/pandu-mirchi-pickle.jpg',
     stock_quantity: 55
   },
   {
@@ -145,37 +145,64 @@ export const products = [
     category: 'Indian Pickles',
     price_paise: 44900,
     selling_unit: '500 g jar',
-    image_url: 'assets/vegetarian-pickles-menu.jpg',
+    image_url: 'assets/avakaya-mango-pickle.jpg',
     stock_quantity: 70
   },
 
   // 6. Non-Vegetarian Pickles
   {
-    name: 'Chicken Pickle (Bone)',
-    description: 'Classic spicy bone-in chicken pickle slow-fried in cold-pressed oil with freshly roasted whole spices, garlic, and curry leaves.',
-    category: 'Indian Pickles',
-    price_paise: 35900,
-    selling_unit: '250 g jar',
-    image_url: 'assets/non-vegetarian-pickles-menu.jpg',
-    stock_quantity: 45
-  },
-  {
     name: 'Chicken Pickle (Boneless)',
     description: 'Tender succulent boneless chicken chunks marinated in aromatic spices, fried to perfection, and pickled in cold-pressed oil with curry leaves and garlic.',
     category: 'Indian Pickles',
-    price_paise: 39900,
-    selling_unit: '250 g jar',
-    image_url: 'assets/non-vegetarian-pickles-menu.jpg',
+    price_paise: 84900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/chicken-pickle-boneless.jpg',
     stock_quantity: 50
   },
   {
-    name: 'Mutton Pickle (Bone)',
-    description: 'Rich, aromatic bone-in mutton pickle prepared with selected tender mutton cuts, cloves, cinnamon, garlic, and wood-pressed oil.',
+    name: 'Mutton Pickle (Boneless)',
+    description: 'Succulent boneless mutton chunks slow-cured in traditional cold-pressed oil, ginger-garlic paste, and aromatic spices.',
     category: 'Indian Pickles',
-    price_paise: 54900,
-    selling_unit: '250 g jar',
-    image_url: 'assets/non-vegetarian-pickles-menu.jpg',
+    price_paise: 114900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/mutton-pickle-boneless.jpg',
+    stock_quantity: 40
+  },
+  {
+    name: 'Prawns Pickle',
+    description: 'Juicy coastal prawns slow-cured with ground mustard, fenugreek, and cold-pressed gingelly oil.',
+    category: 'Indian Pickles',
+    price_paise: 104900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/prawns-pickle.jpg',
     stock_quantity: 35
+  },
+  {
+    name: 'Fish Pickle (Boneless)',
+    description: 'Delicate boneless fish fillets slow-cured in wood-pressed sesame oil, fresh ginger, garlic, and curry leaves.',
+    category: 'Indian Pickles',
+    price_paise: 104900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/fish-pickle-boneless.jpg',
+    stock_quantity: 30
+  },
+  {
+    name: 'Gongura Chicken (Boneless)',
+    description: 'Signature Andhra sorrel leaves slow-cooked with tender boneless chicken chunks and byadagi chillies.',
+    category: 'Indian Pickles',
+    price_paise: 114900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/gongura-chicken-pickle.jpg',
+    stock_quantity: 40
+  },
+  {
+    name: 'Gongura Mutton (Boneless)',
+    description: 'Tangy wild gongura leaves paired with tender boneless mutton cuts and fragrant wood-pressed oil.',
+    category: 'Indian Pickles',
+    price_paise: 119900,
+    selling_unit: '500 g jar',
+    image_url: 'assets/gongura-mutton-pickle.jpg',
+    stock_quantity: 30
   }
 ];
 
@@ -191,7 +218,9 @@ export async function seedProducts(pool) {
         'Artisanal Muesli',
         'Gongura Pickle',
         'Boneless Chicken Pickle',
-        'Mutton Pickle'
+        'Mutton Pickle',
+        'Chicken Pickle (Bone)',
+        'Mutton Pickle (Bone)'
       )
     `);
 

@@ -11,6 +11,7 @@ import pg from 'pg';
 import Razorpay from 'razorpay';
 import { runMigrations } from './migrate.js';
 import { seedProducts } from './seed.js';
+import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -571,22 +572,39 @@ app.delete('/api/v1/addresses/:id', { preHandler: app.authenticate }, async (req
   }
 });
 
+// ---------- Delivery Check ----------
+app.get('/api/v1/delivery/check', async (request, reply) => {
+  const pincode = request.query?.pincode;
+  const info = getDeliveryInfo(pincode);
+  return reply.send(info);
+});
+
 // ---------- Orders & Checkout ----------
 app.post('/api/v1/orders', {
   preHandler: app.authenticate,
   config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
 }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const serviceablePins = new Set((process.env.SERVICEABLE_PIN_CODES || '500081,500032,500084,500085,500090,500072,500034,500033').split(',').map((pin) => pin.trim()).filter(Boolean));
-  const deliveryCharge = Number(process.env.DELIVERY_CHARGE_PAISE || '4000');
   const address = safeAddress(request.body?.address);
   const items = request.body?.items;
   if (!address || !Array.isArray(items) || items.length < 1 || items.length > 50) return reply.code(400).send({ error: 'invalid_checkout' });
   const idempotencyKey = request.headers['idempotency-key'] || request.body?.idempotencyKey;
   if (typeof idempotencyKey !== 'string' || !/^[0-9a-f-]{36}$/i.test(idempotencyKey)) return reply.code(400).send({ error: 'missing_idempotency_key' });
-  if (serviceablePins.size > 0 && !serviceablePins.has(address.pincode)) {
-    return reply.code(422).send({ error: 'outside_delivery_area', message: `We do not currently deliver fresh milk to PIN code ${address.pincode}.` });
+
+  const deliveryInfo = getDeliveryInfo(address.pincode);
+  if (!deliveryInfo.inHyderabad) {
+    return reply.code(422).send({
+      error: 'outside_hyderabad',
+      message: `Milvanta delivers across Hyderabad (500001–500096). PIN code ${address.pincode} is outside Hyderabad.`
+    });
   }
+  if (!deliveryInfo.serviceable) {
+    return reply.code(422).send({
+      error: 'outside_delivery_area',
+      message: deliveryInfo.message || `Milvanta delivers across Hyderabad (500001–500096). PIN code ${address.pincode} is outside our delivery zone.`
+    });
+  }
+  const deliveryCharge = deliveryInfo.feePaise || 5000;
 
   const quantities = new Map();
   for (const item of items) {
@@ -652,7 +670,8 @@ app.post('/api/v1/orders', {
         lineTotalPaise: unitPricePaise * quantity
       });
     }
-    const finalDeliveryCharge = subtotal >= 49900 ? 0 : deliveryCharge;
+    // Total amount in Razorpay includes subtotal plus delivery fee (₹50 / ₹80 based on Hafeezpet hub distance)
+    const finalDeliveryCharge = deliveryCharge;
     const total = subtotal + finalDeliveryCharge;
     if (!Number.isSafeInteger(total) || total < 100 || total > 10_000_000) {
       await client.query('ROLLBACK');

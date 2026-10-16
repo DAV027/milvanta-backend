@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Checkout | Milvanta Pure Farm Goodness</title>
+    <meta name="description" content="Complete your Milvanta farm-fresh order in 3 quick steps with doorstep morning delivery between 6:00 AM – 7:00 AM across Hyderabad." />
+    <link rel="icon" href="assets/milvanta-mark.jpg" type="image/jpeg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css?v=20261012-3" />
+    <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
+    <link rel="stylesheet" href="css/checkout.css?v=20261016-2" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <!-- Main Sticky Navigation Header (Same as Home) -->
+      <header class="site-header" role="banner">
+        <!-- Main Top Bar -->
+        <div class="header-main-row">
+          <div class="header-brand-group">
+            <button class="mobile-menu-button" id="menuToggle" type="button" aria-label="Open navigation menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+
+            <a class="brand-wrap" href="index.html#home" aria-label="Milvanta home">
+              <span class="brand-mark" aria-hidden="true">
+                <img src="assets/milvanta-mark.png" alt="Milvanta Mark" width="38" height="38" />
+              </span>
+              <img class="brand-wordmark" src="assets/milvanta-wordmark.png" alt="Milvanta" width="145" height="34" fetchpriority="high" />
+            </a>
+
+            <button class="header-location-pill" id="headerLocationBtn" type="button" aria-label="Change delivery location" title="Click to change delivery pincode">
+              <span class="loc-pin" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              </span>
+              <span class="loc-text">
+                <span class="loc-val" id="currentLocationText">Hafeezpet</span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Centered E-Commerce Search Bar -->
+          <div class="header-search-container">
+            <form action="index.html" method="GET" style="margin: 0; width: 100%;">
+              <label class="search-box" aria-label="Search products">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input id="searchInput" name="search" type="search" placeholder="Search fresh milk, ghee, pickles, brownies..." autocomplete="off" />
+                <button id="clearSearch" class="clear-search" type="button" aria-label="Clear search">×</button>
+              </label>
+            </form>
+          </div>
+
+          <!-- Right Action Tools -->
+          <div class="header-tools">
+            <button class="mobile-search-button" id="mobileSearchToggle" type="button" aria-label="Search products">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+
+            <!-- User Account Wrapper & Dropdown -->
+            <div class="account-menu-wrapper" id="accountMenuWrapper">
+              <button class="header-account-button" id="accountToggle" type="button" aria-label="Account" aria-haspopup="menu" aria-expanded="false" title="Your Account">
+                <span class="btn-icon account-logged-out-icon" id="accountLoggedOutIcon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </span>
+                <span class="account-btn-label" id="accountBtnText">Sign In</span>
+
+                <span class="account-avatar-circle hidden" id="accountAvatarCircle">A</span>
+                <span class="account-chevron-icon hidden" id="accountChevronIcon" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+              </button>
+
+              <!-- Dropdown Menu for Logged-In User -->
+              <div class="user-account-dropdown hidden" id="userAccountDropdown" role="menu" aria-label="User account menu">
+                <div class="user-dropdown-header">
+                  <div class="user-dropdown-name" id="userDropdownName">User</div>
+                  <div class="user-dropdown-sub" id="userDropdownSub">Account</div>
+                </div>
+                <div class="user-dropdown-divider"></div>
+                <div class="user-dropdown-body">
+                  <a href="profile.html?tab=profile" class="user-dropdown-item" id="userMenuProfile" role="menuitem">Profile</a>
+                  <a href="profile.html?tab=orders" class="user-dropdown-item" id="userMenuOrders" role="menuitem">My Orders</a>
+                  <a href="profile.html?tab=addresses" class="user-dropdown-item" id="userMenuAddresses" role="menuitem">Saved Addresses</a>
+                  <a href="profile.html?tab=subscription" class="user-dropdown-item" id="userMenuSubscription" role="menuitem">Subscription</a>
+                </div>
+                <div class="user-dropdown-divider"></div>
+                <div class="user-dropdown-footer">
+                  <button type="button" class="user-dropdown-item user-dropdown-logout" id="userMenuLogout" role="menuitem">Logout</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Cart Button -->
+            <a href="index.html#cart" class="header-cart-button" id="cartToggle" aria-label="Open cart">
+              <span class="btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+              </span>
+              <span class="cart-btn-label">Cart</span>
+              <span class="cart-count-badge" id="cartCount" aria-live="polite" aria-label="0 items in cart">0</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- Secondary Department Navigation Strip (Same as Home) -->
+        <nav class="header-category-strip" aria-label="Product categories">
+          <div class="category-strip-track">
+            <a href="index.html#products" class="strip-link active" data-category-nav="All">
+              <span class="strip-icon">✦</span>
+              <span>All Products</span>
+            </a>
+            <a href="index.html#products" class="strip-link" data-category-nav="Fresh Milk">
+              <span class="strip-icon">🥛</span>
+              <span>Pure Fresh Milk</span>
+            </a>
+            <a href="index.html#products" class="strip-link" data-category-nav="Dairy Products">
+              <span class="strip-icon">🧈</span>
+              <span>Desi Ghee &amp; Paneer</span>
+            </a>
+            <a href="index.html#products" class="strip-link" data-category-nav="Baking Essentials">
+              <span class="strip-icon">🍰</span>
+              <span>Artisan Bakery</span>
+            </a>
+            <a href="index.html#products" class="strip-link" data-category-nav="Healthy Living">
+              <span class="strip-icon">🍪</span>
+              <span>Millet Living</span>
+            </a>
+            <a href="index.html#products" class="strip-link" data-category-nav="Indian Pickles">
+              <span class="strip-icon">🏺</span>
+              <span>Heritage Pickles</span>
+            </a>
+            <span class="strip-divider" aria-hidden="true"></span>
+            <a href="index.html#why-milvanta" class="strip-link strip-link-secondary">
+              <span>Why Milvanta</span>
+            </a>
+            <a href="index.html#contact" class="strip-link strip-link-secondary">
+              <span>Support &amp; Delivery</span>
+            </a>
+          </div>
+        </nav>
+      </header>
+
+      <!-- Main Checkout Content Shell -->
+      <main class="checkout-page-shell" id="checkoutMain">
+        <!-- Top bar with Back Link -->
+        <div class="checkout-top-bar">
+          <a href="index.html#products" class="checkout-back-link">
+            <span>← Continue Shopping</span>
+          </a>
+        </div>
+
+        <!-- 3-Step Progress Stepper -->
+        <div class="checkout-stepper" role="progressbar" aria-label="Checkout Progress">
+          <div class="stepper-step active" id="stepperStep1">
+            <div class="step-node">1</div>
+            <div class="step-label">Details</div>
+          </div>
+          <div class="stepper-line" id="stepperLine1"></div>
+          <div class="stepper-step" id="stepperStep2">
+            <div class="step-node">2</div>
+            <div class="step-label">Address</div>
+          </div>
+          <div class="stepper-line" id="stepperLine2"></div>
+          <div class="stepper-step" id="stepperStep3">
+            <div class="step-node">3</div>
+            <div class="step-label">Payment</div>
+          </div>
+        </div>
+
+        <!-- Login Required Screen (if accessed directly without login) -->
+        <div id="authRequiredView" class="hidden" style="text-align: center; padding: 60px 20px; background: #fff; border-radius: var(--radius-md); border: 1px solid var(--border); max-width: 520px; margin: 40px auto; box-shadow: var(--shadow-sm);">
+          <div style="width: 64px; height: 64px; border-radius: 50%; background: #eff6ff; color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 1.8rem; margin: 0 auto 16px;">🔒</div>
+          <h2 style="font-family: var(--serif); font-size: 1.8rem; margin: 0 0 8px; color: var(--text);">Sign In Required</h2>
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 24px; line-height: 1.5;">Please sign in or create an account to proceed to checkout and complete your order.</p>
+          <a href="index.html?auth=login" class="primary-cart" style="display: inline-block; padding: 13px 32px; text-decoration: none; font-weight: 700; border-radius: var(--radius-sm);">Sign In to Checkout →</a>
+        </div>
+
+        <!-- Empty Cart Notice View (if accessed directly with empty cart) -->
+        <div id="emptyCartView" class="hidden" style="text-align: center; padding: 60px 20px; background: #fff; border-radius: var(--radius-md); border: 1px solid var(--border); max-width: 540px; margin: 0 auto;">
+          <p style="font-size: 3rem; margin: 0 0 12px;">🧺</p>
+          <h2 style="font-family: var(--serif); font-size: 1.8rem; margin: 0 0 8px;">Your cart is empty</h2>
+          <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 24px;">Add fresh milk, artisanal ghee, pickles, or bakes to place an order.</p>
+          <a href="index.html#products" class="primary-cart" style="display: inline-block; padding: 12px 28px; text-decoration: none;">Explore Products →</a>
+        </div>
+
+        <!-- Two-Column Checkout Layout -->
+        <div class="checkout-layout">
+          <!-- Left Column: The 3 Step Panels -->
+          <div class="checkout-main">
+            <!-- STEP 1 PANEL: Details (Fetches user info and allows full editing) -->
+            <section class="checkout-panel" id="panelStep1">
+              <div class="panel-header">
+                <p class="panel-step-kicker">Step 1 of 3</p>
+                <h2 class="panel-title">Contact &amp; Account Details</h2>
+                <p class="panel-subtitle">Your contact details for order confirmation and morning doorstep drop SMS.</p>
+              </div>
+              <div id="step1Content"></div>
+            </section>
+
+            <!-- STEP 2 PANEL: Address -->
+            <section class="checkout-panel hidden" id="panelStep2">
+              <div class="panel-header">
+                <p class="panel-step-kicker">Step 2 of 3</p>
+                <h2 class="panel-title">Delivery Address</h2>
+                <p class="panel-subtitle">Delivered fresh from Hafeezpet hub straight to your doorstep before 7:00 AM.</p>
+              </div>
+              <div id="step2Content"></div>
+            </section>
+
+            <!-- STEP 3 PANEL: Payment -->
+            <section class="checkout-panel hidden" id="panelStep3">
+              <div class="panel-header">
+                <p class="panel-step-kicker">Step 3 of 3</p>
+                <h2 class="panel-title">Review &amp; Payment</h2>
+                <p class="panel-subtitle">Confirm your morning delivery details and complete secure checkout via Razorpay.</p>
+              </div>
+              <div id="step3Content"></div>
+            </section>
+          </div>
+
+          <!-- Right Column: Sticky Order Summary Sidebar -->
+          <aside class="checkout-sidebar">
+            <div class="summary-card">
+              <h3 class="summary-title">Order Summary</h3>
+
+              <!-- Cart Item Rows List (Fetched dynamically from cart & catalog) -->
+              <div class="summary-items-list" id="summaryItemsList"></div>
+
+              <!-- Clean Bill Breakdown: Subtotal with Delivery charges and Total -->
+              <div class="bill-breakdown">
+                <div class="bill-breakdown-row">
+                  <span>Subtotal</span>
+                  <span id="summarySubtotal">₹0</span>
+                </div>
+                <div class="bill-breakdown-row">
+                  <span>Delivery charges</span>
+                  <span id="summaryDeliveryFee">₹50</span>
+                </div>
+                <div class="bill-breakdown-row total">
+                  <span>Total</span>
+                  <span id="summaryTotal">₹0</span>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <!-- Order Success Screen (Revealed on successful payment) -->
+        <div id="orderSuccessScreen" class="order-success-card hidden">
+          <div class="success-icon-wrap">✓</div>
+          <p class="panel-step-kicker" style="color: #15803d;">ORDER CONFIRMED</p>
+          <h2 style="font-family: var(--serif); font-size: 2rem; margin: 0 0 8px;">Thank You for Your Order!</h2>
+          <p style="color: var(--text-muted); font-size: 0.95rem; margin: 0;">We've received your order and our packing team is preparing it for morning cold-chain delivery.</p>
+
+          <div>
+            <span class="success-order-id-pill" id="successOrderNumber">MV-20261016-000000</span>
+          </div>
+
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: var(--radius-sm); padding: 18px 20px; text-align: left; margin: 20px 0; font-size: 0.88rem; line-height: 1.6;">
+            <div style="margin-bottom: 8px;">
+              <span style="color: #64748b; font-weight: 600;">Delivery Address:</span>
+              <div id="successAddress" style="color: var(--text); font-weight: 500;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 8px;">
+              <span style="color: #64748b; font-weight: 600;">Expected Delivery:</span>
+              <span style="color: #15803d; font-weight: 700;">Tomorrow Morning (6:00 AM – 7:00 AM)</span>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 14px; justify-content: center; flex-wrap: wrap;">
+            <a href="profile.html?tab=orders" class="checkout-next-btn" style="text-decoration: none; padding: 12px 24px;">View in My Orders →</a>
+            <a href="index.html#products" class="checkout-prev-btn" style="text-decoration: none; padding: 12px 24px;">Continue Shopping</a>
+          </div>
+        </div>
+      </main>
+
+      <!-- Standard Global Footer (Exact same as Home, without collections) -->
+      <footer class="site-footer" role="contentinfo">
+        <div class="footer-top">
+          <div class="footer-brand-col">
+            <a class="footer-brand" href="index.html#home" aria-label="Milvanta home">
+              <img class="footer-full-logo" src="assets/milvanta-full-logo.png" alt="Milvanta" width="140" height="60" loading="lazy" />
+            </a>
+            <p>Connecting ethical local farms to everyday family tables with pure dairy, honest bakes, and heritage pickles.</p>
+          </div>
+
+          <div class="footer-col">
+            <h4>Customer Support</h4>
+            <ul>
+              <li><a href="index.html#contact">Help Center &amp; FAQs</a></li>
+              <li><a href="index.html#contact">Delivery Schedule (6 AM - 7 AM)</a></li>
+              <li><a href="https://wa.me/919052222256" target="_blank" rel="noopener noreferrer">WhatsApp Support</a></li>
+              <li><a href="index.html#contact">Bulk &amp; Festive Orders</a></li>
+              <li><a href="index.html#contact">Partner With Us</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4>Trust &amp; Compliance</h4>
+            <ul>
+              <li><button class="text-action policy-btn" data-policy="terms" type="button">Terms &amp; Conditions</button></li>
+              <li><button class="text-action policy-btn" data-policy="privacy" type="button">Privacy Policy</button></li>
+              <li><button class="text-action policy-btn" data-policy="shipping" type="button">Shipping &amp; Delivery Policy</button></li>
+              <li><button class="text-action policy-btn" data-policy="refund" type="button">Refund &amp; Cancellation Policy</button></li>
+            </ul>
+          </div>
+
+          <div class="footer-col footer-contact-col">
+            <h4>Get in Touch with Us</h4>
+            <ul class="footer-contact-list">
+              <li>
+                <span class="contact-icon" aria-hidden="true">📍</span>
+                <span>Hyderabad, India</span>
+              </li>
+              <li>
+                <span class="contact-icon" aria-hidden="true">📞</span>
+                <a href="tel:+919052222256">+91 9052222256</a>
+              </li>
+              <li>
+                <span class="contact-icon" aria-hidden="true">✉️</span>
+                <a href="mailto:projects@milvanta.in">projects@milvanta.in</a>
+              </li>
+            </ul>
+            <div class="footer-social-links">
+              <a href="https://www.instagram.com/milvanta.fresh.milk?stkn=MWt5dnEybTI3a3M2dg%3D%3D&utm_source=qr" target="_blank" rel="noopener noreferrer" class="social-link-btn instagram" aria-label="Follow Milvanta on Instagram">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+                </svg>
+                <span>Instagram</span>
+              </a>
+              <a href="https://www.facebook.com/share/19MaSwTzpd/?mibextid=wwXIfr" target="_blank" rel="noopener noreferrer" class="social-link-btn facebook" aria-label="Follow Milvanta on Facebook">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                </svg>
+                <span>Facebook</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bottom">
+          <p>© 2026 Milvanta Foods Pvt Ltd. All rights reserved. Prices inclusive of all applicable taxes.</p>
+          <div class="payment-badges-row">
+            <span>100% Secure Payments:</span>
+            <span class="pay-badge">UPI</span>
+            <span class="pay-badge">RuPay</span>
+            <span class="pay-badge">Visa</span>
+            <span class="pay-badge">Mastercard</span>
+            <span class="pay-badge">Razorpay SSL</span>
+          </div>
+          <a class="footer-top-link" href="#checkoutMain">Back to top ↑</a>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Slide-out Off-Canvas Drawer (Mobile/Tablet, Same as Home) -->
+    <div class="nav-scrim" id="navScrim"></div>
+    <nav class="main-nav" id="mainNav" aria-label="Main navigation" aria-hidden="true">
+      <div class="mobile-nav-header">
+        <a class="brand-wrap" href="index.html#home" aria-label="Milvanta home">
+          <span class="brand-mark"><img src="assets/milvanta-mark.png" alt="" width="34" height="34" /></span>
+          <img class="brand-wordmark" src="assets/milvanta-wordmark.png" alt="Milvanta" width="130" height="30" />
+        </a>
+        <button class="mobile-nav-close" id="menuClose" type="button" aria-label="Close navigation menu">×</button>
+      </div>
+
+      <div class="mobile-nav-body">
+        <div class="mobile-nav-location">
+          <button class="mobile-loc-btn" id="mobileLocBtn" type="button">
+            <span>📍 Delivering to: <strong id="currentLocationDrawer">Hafeezpet</strong> (<span id="currentPincodeDrawer">500049</span>)</span>
+            <span class="loc-change-tag">Change</span>
+          </button>
+        </div>
+
+        <p class="mobile-nav-section-title">Shop by Category</p>
+        <div class="mobile-nav-links">
+          <a href="index.html#products" class="active" data-category-nav="All"><span>✦</span> All Products</a>
+          <a href="index.html#products" data-category-nav="Fresh Milk"><span>🥛</span> Pure Fresh Milk</a>
+          <a href="index.html#products" data-category-nav="Dairy Products"><span>🧈</span> Desi Ghee &amp; Paneer</a>
+          <a href="index.html#products" data-category-nav="Baking Essentials"><span>🍰</span> Artisan Bakery &amp; Brownies</a>
+          <a href="index.html#products" data-category-nav="Healthy Living"><span>🍪</span> Millet Living &amp; Muesli</a>
+          <a href="index.html#products" data-category-nav="Indian Pickles"><span>🏺</span> Traditional Andhra Pickles</a>
+        </div>
+
+        <p class="mobile-nav-section-title" style="margin-top:16px;">Milvanta Story</p>
+        <div class="mobile-nav-links secondary">
+          <a href="index.html#why-milvanta">Why Milvanta</a>
+          <a href="index.html#about">About Our Ethical Sourcing</a>
+          <a href="index.html#contact">Customer Care &amp; Support</a>
+        </div>
+      </div>
+
+      <div class="mobile-nav-footer">
+        <p>📍 Morning Delivery: <strong>6:00 AM – 7:00 AM</strong></p>
+        <p>📞 WhatsApp: <strong><a href="https://wa.me/919052222256" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">+91 9052222256</a></strong></p>
+      </div>
+    </nav>
+
+    <!-- Interactive Pincode Checker Modal -->
+    <div class="modal-overlay hidden" id="pincodeModal" aria-hidden="true">
+      <div class="account-panel pincode-panel" role="dialog" aria-modal="true" aria-labelledby="pincodeTitle">
+        <button type="button" class="modal-close" id="pincodeClose" aria-label="Close pincode selector">×</button>
+        <p class="modal-kicker">DELIVERY AVAILABILITY</p>
+        <h2 id="pincodeTitle">Select your Hyderabad Location</h2>
+        <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:16px;">Delivering fresh whole milk and cold-pressed treats straight to your doorstep before 7:00 AM.</p>
+        <form id="pincodeForm" style="display:flex; gap:10px; margin-bottom:12px;">
+          <input type="text" id="pincodeInput" placeholder="Enter 6-digit PIN code" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required style="flex:1; padding:10px 14px; border:1px solid #cbd5e1; border-radius:6px; font-size:0.9rem;" />
+          <button class="primary-cart" type="submit" style="white-space:nowrap;">Save PIN</button>
+        </form>
+        <p id="pincodeFeedback" style="font-size:0.82rem; margin:0 0 14px; font-weight:600;"></p>
+      </div>
+    </div>
+
+    <!-- Interactive Policy Dialog Modal (Razorpay Compliance) -->
+    <div class="modal-overlay hidden" id="policyModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="policyTitle">
+        <button type="button" class="modal-close" id="policyClose" aria-label="Close policy">×</button>
+        <p class="modal-kicker">LEGAL &amp; COMPLIANCE</p>
+        <h2 id="policyTitle">Store Policy</h2>
+        <div id="policyContent" style="font-size: 0.85rem; line-height: 1.6; color: var(--text-muted); max-height: 60vh; overflow-y: auto;"></div>
+      </div>
+    </div>
+
+    <!-- Backend & Payment Config Scripts -->
+    <script>
+      const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      const forceLocal = window.location.search.includes('api=local') || window.location.search.includes('backend=local');
+      window.MILVANTA_API_URL = window.MILVANTA_API_URL || (
+        forceLocal || (isLocalHost && location.port === '10000')
+          ? 'http://127.0.0.1:10000'
+          : 'https://milvanta-backend.onrender.com'
+      );
+      window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
+    </script>
+    <script src="js/delivery.js?v=20261016-2"></script>
+    <script src="js/checkout.js?v=20261016-2"></script>
+  </body>
+</html>

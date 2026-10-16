@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Milvanta | Farm Fresh Milk, Artisan Bakery & Heritage Pickles</title>
+    <meta name="description" content="Pure fresh milk, wholesome ancient grain bakes, and authentic traditional Indian pickles delivered fresh from farm to family." />
+    <meta name="theme-color" content="#0a3d66" />
+    <meta property="og:title" content="Milvanta | Pure Goodness from Farms to Your Family" />
+    <meta property="og:description" content="Explore Milvanta's collection of pure dairy, guilt-free bakery treats, and slow-cured heritage pickles." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/milvanta-mark.jpg" type="image/jpeg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="css/style.css?v=20261012-3" />
+    <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <!-- Main Sticky Navigation Header -->
+      <header class="site-header" role="banner">
+        <!-- Main Top Bar -->
+        <div class="header-main-row">
+          <div class="header-brand-group">
+            <button class="mobile-menu-button" id="menuToggle" type="button" aria-label="Open navigation menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+            </button>
+
+            <a class="brand-wrap" href="#home" aria-label="Milvanta home">
+              <span class="brand-mark" aria-hidden="true">
+                <img src="assets/milvanta-mark.png" alt="Milvanta Mark" width="38" height="38" />
+              </span>
+              <img class="brand-wordmark" src="assets/milvanta-wordmark.png" alt="Milvanta" width="145" height="34" fetchpriority="high" />
+            </a>
+
+            <button class="header-location-pill" id="headerLocationBtn" type="button" aria-label="Change delivery location" title="Click to change delivery pincode">
+              <span class="loc-pin" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              </span>
+              <span class="loc-text">
+                <span class="loc-val" id="currentLocationText">Hafeezpet</span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Centered E-Commerce Search Bar -->
+          <div class="header-search-container">
+            <label class="search-box" aria-label="Search products">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input id="searchInput" type="search" placeholder="Search fresh milk, ghee, pickles, brownies..." autocomplete="off" />
+              <button id="clearSearch" class="clear-search" type="button" aria-label="Clear search">×</button>
+            </label>
+          </div>
+
+          <!-- Right Action Tools -->
+          <div class="header-tools">
+            <button class="mobile-search-button" id="mobileSearchToggle" type="button" aria-label="Search products">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </button>
+
+            <!-- User Account Wrapper & Dropdown -->
+            <div class="account-menu-wrapper" id="accountMenuWrapper">
+              <button class="header-account-button" id="accountToggle" type="button" aria-label="Account" aria-haspopup="menu" aria-expanded="false" title="Your Account">
+                <span class="btn-icon account-logged-out-icon" id="accountLoggedOutIcon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </span>
+                <span class="account-btn-label" id="accountBtnText">Sign In</span>
+
+                <span class="account-avatar-circle hidden" id="accountAvatarCircle">A</span>
+                <span class="account-chevron-icon hidden" id="accountChevronIcon" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+              </button>
+
+              <!-- Dropdown Menu for Logged-In User -->
+              <div class="user-account-dropdown hidden" id="userAccountDropdown" role="menu" aria-label="User account menu">
+                <div class="user-dropdown-header">
+                  <div class="user-dropdown-name" id="userDropdownName">Akhil</div>
+                  <div class="user-dropdown-sub" id="userDropdownSub">6305974564</div>
+                </div>
+                <div class="user-dropdown-divider"></div>
+                <div class="user-dropdown-body">
+                  <a href="profile.html?tab=profile" class="user-dropdown-item" id="userMenuProfile" role="menuitem">Profile</a>
+                  <a href="profile.html?tab=orders" class="user-dropdown-item" id="userMenuOrders" role="menuitem">My Orders</a>
+                  <a href="profile.html?tab=addresses" class="user-dropdown-item" id="userMenuAddresses" role="menuitem">Saved Addresses</a>
+                  <a href="profile.html?tab=subscription" class="user-dropdown-item" id="userMenuSubscription" role="menuitem">Subscription</a>
+                  <button type="button" class="user-dropdown-item hidden" id="userMenuAdmin" role="menuitem" style="color: var(--accent);">👑 Admin Orders</button>
+                </div>
+                <div class="user-dropdown-divider"></div>
+                <div class="user-dropdown-footer">
+                  <button type="button" class="user-dropdown-item user-dropdown-logout" id="userMenuLogout" role="menuitem">Logout</button>
+                </div>
+              </div>
+            </div>
+
+            <button class="header-cart-button" id="cartToggle" type="button" aria-label="Open cart" aria-haspopup="dialog" aria-expanded="false">
+              <span class="btn-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+              </span>
+              <span class="cart-btn-label">Cart</span>
+              <span class="cart-count-badge" id="cartCount" aria-live="polite" aria-label="0 items in cart">0</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Secondary Department Navigation Strip -->
+        <nav class="header-category-strip" aria-label="Product categories">
+          <div class="category-strip-track">
+            <a href="#products" class="strip-link active" data-category-nav="All">
+              <span class="strip-icon">✦</span>
+              <span>All Products</span>
+            </a>
+            <a href="#products" class="strip-link" data-category-nav="Fresh Milk">
+              <span class="strip-icon">🥛</span>
+              <span>Pure Fresh Milk</span>
+            </a>
+            <a href="#products" class="strip-link" data-category-nav="Dairy Products">
+              <span class="strip-icon">🧈</span>
+              <span>Desi Ghee &amp; Paneer</span>
+            </a>
+            <a href="#products" class="strip-link" data-category-nav="Baking Essentials">
+              <span class="strip-icon">🍰</span>
+              <span>Artisan Bakery</span>
+            </a>
+            <a href="#products" class="strip-link" data-category-nav="Healthy Living">
+              <span class="strip-icon">🍪</span>
+              <span>Millet Living</span>
+            </a>
+            <a href="#products" class="strip-link" data-category-nav="Indian Pickles">
+              <span class="strip-icon">🏺</span>
+              <span>Heritage Pickles</span>
+            </a>
+            <span class="strip-divider" aria-hidden="true"></span>
+            <a href="#why-milvanta" class="strip-link strip-link-secondary">
+              <span>Why Milvanta</span>
+            </a>
+            <a href="#contact" class="strip-link strip-link-secondary">
+              <span>Support &amp; Delivery</span>
+            </a>
+          </div>
+        </nav>
+      </header>
+
+      <main id="home">
+        <p class="store-notice hidden" id="storeNotice" role="status" aria-live="polite"></p>
+
+        <!-- Category Showcase Strip -->
+        <section class="category-strip" aria-label="Product categories">
+          <div class="category-heading">
+            <div>
+              <p class="eyebrow">HANDPICKED COLLECTIONS</p>
+              <h2>Shop by category</h2>
+            </div>
+          </div>
+          <div id="categoryRow" class="category-row">
+            <!-- Dynamically populated or enhanced via JS -->
+          </div>
+        </section>
+
+        <!-- Main Product Catalog Section -->
+        <section class="featured-section" id="products">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow" id="sectionEyebrow">OUR PRODUCTS</p>
+              <h2 id="sectionTitle">Baking Essentials</h2>
+              <p class="section-subtitle" id="sectionSubtitle">Wholesome bakes crafted with natural ingredients for healthier, happier moments.</p>
+            </div>
+
+            <!-- E-Commerce Filter & Sort Controls -->
+            <div class="catalog-controls">
+              <button class="diet-filter-btn active" type="button" data-diet="all">All</button>
+              <button class="diet-filter-btn" type="button" data-diet="veg">🟢 Veg Only</button>
+              <button class="diet-filter-btn" type="button" data-diet="non-veg">🔴 Non-Veg</button>
+              <select class="sort-select" id="sortSelect" aria-label="Sort products">
+                <option value="featured">Featured</option>
+                <option value="price-asc">Price: Low to High</option>
+                <option value="price-desc">Price: High to Low</option>
+              </select>
+              <button class="view-all" id="viewAllBtn" type="button">View All <span aria-hidden="true">→</span></button>
+            </div>
+          </div>
+
+          <div class="product-carousel-wrapper" id="carouselWrapper">
+            <button class="arrow-button prev" id="prevBtn" type="button" aria-label="Previous product">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+            <div id="productCarousel" class="product-carousel" aria-live="polite">
+              <!-- Dynamically populated by script.js -->
+            </div>
+            <button class="arrow-button next" id="nextBtn" type="button" aria-label="Next product">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
+          </div>
+          <div class="carousel-dots" id="carouselDots" aria-label="Choose featured product"></div>
+        </section>
+
+        <!-- Hero Section (Positioned between Featured Products and Why Milvanta) -->
+        <section class="hero">
+          <div class="hero-content">
+            <div class="hero-copy">
+              <span class="hero-eyebrow">THE MILVANTA COLLECTION · 100% PURE</span>
+              <h1 class="hero-title">Good food.<br />Good every day.</h1>
+              <p class="hero-support">Pure fresh milk, ancient grain bakes made with unrefined sweetness, and grandma's authentic sun-cured pickles.</p>
+
+              <div class="benefit-row">
+                <div class="benefit-item">
+                  <div class="benefit-icon" aria-hidden="true">01</div>
+                  <span>Pure Fresh Milk &amp; Dairy</span>
+                </div>
+                <div class="benefit-item">
+                  <div class="benefit-icon" aria-hidden="true">02</div>
+                  <span>Millet &amp; Whole Grain Bakes</span>
+                </div>
+                <div class="benefit-item">
+                  <div class="benefit-icon" aria-hidden="true">03</div>
+                  <span>Heritage Cold-Pressed Pickles</span>
+                </div>
+              </div>
+
+              <div class="hero-actions">
+                <a class="hero-shop-button" href="#products">Explore the collection <span aria-hidden="true">→</span></a>
+                <a class="hero-secondary-btn" href="#products" data-category-nav="Fresh Milk">Shop Pure Fresh Milk</a>
+              </div>
+            </div>
+
+            <!-- Hero Featured Dairy Showcase -->
+            <div class="hero-card-showcase" role="region" aria-label="Milvanta farm fresh dairy collection">
+              <img src="assets/milvanta-dairy-showcase.jpg" alt="Milvanta Farm Fresh Milk, Curd and Pure Desi Ghee" class="hero-showcase-img" fetchpriority="high" />
+            </div>
+          </div>
+        </section>
+
+        <!-- Why Milvanta Storytelling Section -->
+        <section class="story-section" id="why-milvanta" aria-label="Why families choose Milvanta">
+          <div class="story-header">
+            <p class="eyebrow">FARM TO FAMILY COMMITMENT</p>
+            <h2>Why Families Choose Milvanta</h2>
+            <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.5; margin-top: 8px;">We believe families deserve total transparency in the food they share at their tables every morning.</p>
+          </div>
+          <div class="story-grid">
+            <div class="story-card">
+              <div class="story-icon" aria-hidden="true">🧪</div>
+              <h4>Rigorous 18-Point Purity Testing</h4>
+              <p>Every single batch of fresh milk undergoes testing for adulterants, detergents, starch, and synthetic hormones. You receive pure, single-origin whole milk with uncompromised natural fats and cream.</p>
+            </div>
+            <div class="story-card">
+              <div class="story-icon" aria-hidden="true">🌾</div>
+              <h4>Nutrient-Dense Mindful Bakes</h4>
+              <p>We reject white bleached maida and cheap refined palm oils. Our brownies and cakes use organic raagi, whole wheat flour containing 9g protein per 200g, and pure Godavari cocoa.</p>
+            </div>
+            <div class="story-card">
+              <div class="story-icon" aria-hidden="true">🏺</div>
+              <h4>Generational Heritage Pickling</h4>
+              <p>No synthetic vinegars or chemical preservatives. Our pickles are marinated in traditional stone vessels, slow-cured under natural sunlight, and seasoned with cold-pressed oils.</p>
+            </div>
+          </div>
+        </section>
+
+
+
+        <!-- Standard Informational Section Links -->
+        <section class="info-sections">
+          <article class="info-block" id="about">
+            <h3>About Milvanta</h3>
+            <p>Milvanta was founded on a simple conviction: nutritious, unadulterated food should be accessible without second-guessing labels. We bridge ethical farms directly to your breakfast table.</p>
+          </article>
+          <article class="info-block" id="sustainability">
+            <h3>Sustainable Farming</h3>
+            <p>Our partner farms practice ethical cattle rearing with open pastures and zero prophylactic antibiotic use. Glass and recyclable packaging are prioritized wherever cold chains permit.</p>
+          </article>
+          <article class="info-block" id="farm-to-family">
+            <h3>Farm to Doorstep</h3>
+            <p>Milking starts at 4:00 AM, chilling occurs under 4°C within 60 minutes, and temperature-controlled dispatch ensures your morning delivery is waiting before 7:00 AM.</p>
+          </article>
+          <article class="info-block" id="contact">
+            <h3>Customer Care &amp; Support</h3>
+            <p>Need help with your subscription, delivery timings, or special dietary requirements? Email <strong>projects@milvanta.in</strong> or call/WhatsApp us at <strong>+91 9052222256</strong> (Hyderabad, India · 6 AM – 9 PM daily).</p>
+          </article>
+        </section>
+      </main>
+
+      <!-- Comprehensive E-Commerce Footer -->
+      <footer class="site-footer">
+        <div class="footer-top">
+          <div class="footer-brand-col">
+            <a class="footer-brand" href="#home" aria-label="Milvanta home">
+              <img class="footer-full-logo" src="assets/milvanta-full-logo.png" alt="Milvanta" width="140" height="60" loading="lazy" />
+            </a>
+            <p>Connecting ethical local farms to everyday family tables with pure dairy, honest bakes, and heritage pickles.</p>
+          </div>
+
+          <div class="footer-col">
+            <h4>Customer Support</h4>
+            <ul>
+              <li><a href="#contact">Help Center &amp; FAQs</a></li>
+              <li><a href="#contact">Delivery Schedule (6 AM - 7 AM)</a></li>
+              <li><a href="https://wa.me/919052222256" target="_blank" rel="noopener noreferrer">WhatsApp Support</a></li>
+              <li><a href="#contact">Bulk &amp; Festive Orders</a></li>
+              <li><a href="#contact">Partner With Us</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-col">
+            <h4>Trust &amp; Compliance</h4>
+            <ul>
+              <li><button class="text-action policy-btn" data-policy="terms" type="button">Terms &amp; Conditions</button></li>
+              <li><button class="text-action policy-btn" data-policy="privacy" type="button">Privacy Policy</button></li>
+              <li><button class="text-action policy-btn" data-policy="shipping" type="button">Shipping &amp; Delivery Policy</button></li>
+              <li><button class="text-action policy-btn" data-policy="refund" type="button">Refund &amp; Cancellation Policy</button></li>
+            </ul>
+          </div>
+
+          <div class="footer-col footer-contact-col">
+            <h4>Get in Touch with Us</h4>
+            <ul class="footer-contact-list">
+              <li>
+                <span class="contact-icon" aria-hidden="true">📍</span>
+                <span>Hyderabad, India</span>
+              </li>
+              <li>
+                <span class="contact-icon" aria-hidden="true">📞</span>
+                <a href="tel:+919052222256">+91 9052222256</a>
+              </li>
+              <li>
+                <span class="contact-icon" aria-hidden="true">✉️</span>
+                <a href="mailto:projects@milvanta.in">projects@milvanta.in</a>
+              </li>
+            </ul>
+            <div class="footer-social-links">
+              <a href="https://www.instagram.com/milvanta.fresh.milk?stkn=MWt5dnEybTI3a3M2dg%3D%3D&utm_source=qr" target="_blank" rel="noopener noreferrer" class="social-link-btn instagram" aria-label="Follow Milvanta on Instagram">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+                </svg>
+                <span>Instagram</span>
+              </a>
+              <a href="https://www.facebook.com/share/19MaSwTzpd/?mibextid=wwXIfr" target="_blank" rel="noopener noreferrer" class="social-link-btn facebook" aria-label="Follow Milvanta on Facebook">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                </svg>
+                <span>Facebook</span>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bottom">
+          <p>© 2026 Milvanta Foods Pvt Ltd. All rights reserved. Prices inclusive of all applicable taxes.</p>
+          <div class="payment-badges-row">
+            <span>100% Secure Payments:</span>
+            <span class="pay-badge">UPI</span>
+            <span class="pay-badge">RuPay</span>
+            <span class="pay-badge">Visa</span>
+            <span class="pay-badge">Mastercard</span>
+            <span class="pay-badge">Razorpay SSL</span>
+          </div>
+          <a class="footer-top-link" href="#home">Back to top ↑</a>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Slide-out Off-Canvas Drawer (Mobile/Tablet) -->
+    <div class="nav-scrim" id="navScrim"></div>
+    <nav class="main-nav" id="mainNav" aria-label="Main navigation" aria-hidden="true">
+      <div class="mobile-nav-header">
+        <a class="brand-wrap" href="#home" aria-label="Milvanta home">
+          <span class="brand-mark"><img src="assets/milvanta-mark.png" alt="" width="34" height="34" /></span>
+          <img class="brand-wordmark" src="assets/milvanta-wordmark.png" alt="Milvanta" width="130" height="30" />
+        </a>
+        <button class="mobile-nav-close" id="menuClose" type="button" aria-label="Close navigation menu">×</button>
+      </div>
+
+      <div class="mobile-nav-body">
+        <div class="mobile-nav-location">
+          <button class="mobile-loc-btn" id="mobileLocBtn" type="button">
+            <span>📍 Delivering to: <strong id="currentLocationDrawer">Hafeezpet</strong> (<span id="currentPincodeDrawer">500049</span>)</span>
+            <span class="loc-change-tag">Change</span>
+          </button>
+        </div>
+
+        <p class="mobile-nav-section-title">Shop by Category</p>
+        <div class="mobile-nav-links">
+          <a href="#products" class="active" data-category-nav="All"><span>✦</span> All Products</a>
+          <a href="#products" data-category-nav="Fresh Milk"><span>🥛</span> Pure Fresh Milk</a>
+          <a href="#products" data-category-nav="Dairy Products"><span>🧈</span> Desi Ghee &amp; Paneer</a>
+          <a href="#products" data-category-nav="Baking Essentials"><span>🍰</span> Artisan Bakery &amp; Brownies</a>
+          <a href="#products" data-category-nav="Healthy Living"><span>🍪</span> Millet Living &amp; Muesli</a>
+          <a href="#products" data-category-nav="Indian Pickles"><span>🏺</span> Traditional Andhra Pickles</a>
+        </div>
+
+        <p class="mobile-nav-section-title" style="margin-top:16px;">Milvanta Story</p>
+        <div class="mobile-nav-links secondary">
+          <a href="#why-milvanta">Why Milvanta</a>
+          <a href="#about">About Our Ethical Sourcing</a>
+          <a href="#contact">Customer Care &amp; Support</a>
+        </div>
+      </div>
+
+      <div class="mobile-nav-footer">
+        <p>📍 Morning Delivery: <strong>6:00 AM – 7:00 AM</strong></p>
+        <p>📞 WhatsApp: <strong><a href="https://wa.me/919052222256" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">+91 9052222256</a></strong></p>
+      </div>
+    </nav>
+
+    <!-- Slide-out Cart Drawer -->
+    <div class="cart-scrim" id="cartScrim"></div>
+    <aside class="cart-drawer" id="cartDrawer" role="dialog" aria-modal="true" aria-labelledby="cartTitle" aria-hidden="true">
+      <div class="cart-header">
+        <h3 id="cartTitle">Your Cart</h3>
+        <button type="button" class="close-cart" id="closeCart" aria-label="Close cart">×</button>
+      </div>
+      <div id="cartContent" class="cart-content"></div>
+    </aside>
+
+    <!-- Product Detail Modal -->
+    <div class="modal-overlay hidden" id="productModal" aria-hidden="true">
+      <div class="product-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="sheet-grab-bar" aria-hidden="true"></div>
+        <button type="button" class="modal-close" id="modalClose" aria-label="Close product details">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+
+        <div class="modal-scroll-body" id="modalScrollBody">
+          <div class="modal-media">
+            <img id="modalImage" alt="" />
+          </div>
+          <div class="modal-copy">
+            <p class="modal-kicker">MILVANTA ARTISANAL</p>
+            <h3 id="modalTitle">Product</h3>
+            <div class="modal-stock-badge" id="modalStock"><span class="stock-dot">●</span> <span id="modalStockText">In Stock · Farm Fresh Daily</span></div>
+            <p id="modalDescription" class="modal-description"></p>
+            <!-- Interactive Pack Size Variant Selector -->
+            <div class="modal-variants-wrap" id="variantWrap">
+              <div class="variant-header">
+                <span class="variant-title">Choose Pack Size</span>
+                <span class="variant-active-price" id="modalPrice"></span>
+              </div>
+              <div class="variant-chips-grid" id="variantChips" role="radiogroup" aria-label="Pack sizes"></div>
+            </div>
+
+            <!-- Single Size Meta (when no variants) -->
+            <div class="modal-single-size-wrap hidden" id="modalSingleSizeWrap">
+              <div class="single-size-meta">
+                <span class="single-size-badge">Pack size: <strong id="modalSize"></strong></span>
+                <span class="single-size-price" id="modalSinglePrice"></span>
+              </div>
+            </div>
+            <div class="ingredients-block">
+              <h4>Ingredients &amp; Sourcing</h4>
+              <ul id="modalIngredients"></ul>
+            </div>
+            <p class="modal-extra" id="modalExtra"></p>
+            <button type="button" class="view-recipe-trigger-btn hidden" id="modalViewRecipe">
+              <span>📖 View Recipe &amp; Preparation</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Sticky Action Bar (Always visible on mobile & desktop) -->
+        <div class="modal-action-bar">
+          <div class="quantity-row">
+            <button class="qty-btn" data-action="decrease" type="button" aria-label="Decrease quantity">−</button>
+            <span id="modalQty">1</span>
+            <button class="qty-btn" data-action="increase" type="button" aria-label="Increase quantity">+</button>
+          </div>
+          <button class="primary-cart modal-submit-btn" id="modalAddToCart" type="button">
+            <span>Add to cart</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recipe Detail Modal -->
+    <div class="modal-overlay hidden" id="recipeModal" aria-hidden="true">
+      <div class="recipe-modal product-modal" role="dialog" aria-modal="true" aria-labelledby="recipeTitle">
+        <div class="sheet-grab-bar" aria-hidden="true"></div>
+        <button type="button" class="modal-close" id="recipeClose" aria-label="Close recipe">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+
+        <div class="recipe-scroll-container" id="recipeScrollBody">
+          <div class="recipe-header-banner">
+            <p class="modal-kicker">MILVANTA KITCHEN · AUTHENTIC RECIPE</p>
+            <h3 id="recipeTitle">Recipe Name</h3>
+            <div class="recipe-meta-badges" id="recipeMetaBadges">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+
+          <div class="recipe-section">
+            <h4>Ingredients</h4>
+            <ul class="recipe-ingredients-list" id="recipeIngredients"></ul>
+          </div>
+
+          <div class="recipe-section">
+            <h4>Preparation Instructions</h4>
+            <ol class="recipe-instructions-list" id="recipeInstructions"></ol>
+          </div>
+
+          <div class="recipe-section" id="recipeRelatedSection">
+            <h4>Cook With Pure Milvanta Ingredients</h4>
+            <p class="recipe-related-hint">Order essential direct-from-farm ingredients used in this recipe:</p>
+            <div class="recipe-related-grid" id="recipeRelatedGrid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Account & Authentication Modal -->
+    <div class="modal-overlay hidden" id="accountModal" aria-hidden="true">
+      <section class="account-panel" role="dialog" aria-modal="true" aria-labelledby="accountTitle">
+        <button type="button" class="modal-close" id="accountClose" aria-label="Close account">×</button>
+        <p class="modal-kicker">MILVANTA ACCOUNT</p>
+        <h2 id="accountTitle">Sign in to your account</h2>
+        <p class="account-message" id="accountMessage" role="status"></p>
+        
+        <form id="accountForm" class="account-form">
+          <label class="signup-field hidden">Full name<input name="name" type="text" autocomplete="name" minlength="2" maxlength="100" /></label>
+          <label>Email address<input name="email" type="email" autocomplete="email" required maxlength="254" /></label>
+          <label class="signup-field hidden">Phone number (optional)<input name="phone" type="tel" autocomplete="tel-national" inputmode="numeric" pattern="[6-9][0-9]{9}" maxlength="10" placeholder="10-digit mobile number" /></label>
+          <label>Password<input name="password" id="accountPassword" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /></label>
+          <label class="signup-field hidden">Confirm password<input name="confirmPassword" id="accountConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" /></label>
+          <button class="primary-cart" id="accountSubmit" type="submit">Sign in</button>
+        </form>
+        <button class="account-switch" id="accountSwitch" type="button">Create an account</button>
+
+        <section id="accountProfile" class="hidden">
+          <p id="accountGreeting" style="font-weight: 600; color: var(--primary); margin-bottom: 8px;"></p>
+          
+          <nav class="account-tabs" role="tablist">
+            <button type="button" class="account-tab-btn" id="tabProfileBtn" role="tab" aria-selected="false">Profile</button>
+            <button type="button" class="account-tab-btn active" id="tabOrdersBtn" role="tab" aria-selected="true">My Orders</button>
+            <button type="button" class="account-tab-btn" id="tabAddressesBtn" role="tab" aria-selected="false">Saved Addresses</button>
+            <button type="button" class="account-tab-btn hidden" id="tabAdminBtn" role="tab" aria-selected="false" style="color: var(--accent);">👑 Admin Orders</button>
+          </nav>
+
+          <!-- Profile Details Section -->
+          <div id="profileDetailsSection" class="hidden">
+            <div class="profile-card" style="padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #ffffff; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 16px;">
+                <div class="profile-avatar-large" id="profileAvatarLarge" style="width: 52px; height: 52px; border-radius: 50%; background: #0d2137; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; font-weight: 700;">A</div>
+                <div>
+                  <h3 id="profileFullName" style="margin: 0; font-size: 1.15rem; color: var(--text); font-weight: 700;">Akhil</h3>
+                  <p id="profilePhone" style="margin: 3px 0 0; font-size: 0.9rem; color: var(--text-muted);">6305974564</p>
+                </div>
+              </div>
+              <div style="border-top: 1px solid var(--border-light); padding-top: 14px; font-size: 0.88rem; line-height: 1.8;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                  <span style="color: var(--text-muted);">Email</span>
+                  <strong id="profileEmail" style="color: var(--text);">user@example.com</strong>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                  <span style="color: var(--text-muted);">Delivery City</span>
+                  <strong style="color: var(--text);">Hyderabad</strong>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                  <span style="color: var(--text-muted);">Status</span>
+                  <span class="badge" style="background: #ecfdf5; color: #047857; padding: 3px 10px; border-radius: 12px; font-size: 0.76rem; font-weight: 600;">Active Customer</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Orders Section -->
+          <div id="profileOrdersSection">
+            <h3 style="font-size: 1rem; margin-bottom: 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span>Order History</span>
+              <button type="button" class="text-action" id="refreshOrdersBtn" style="font-size: 0.75rem;">↻ Refresh</button>
+            </h3>
+            <div id="orderHistory" class="order-history" style="max-height: 48vh; overflow-y: auto;"></div>
+          </div>
+
+          <!-- Saved Addresses Section -->
+          <div id="profileAddressesSection" class="hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+              <h3 style="font-size: 1rem; margin:0;">Delivery Addresses</h3>
+              <button type="button" class="address-action-btn" id="toggleAddAddressBtn" style="background:var(--primary-light); color:var(--primary); border-color:var(--primary-border);">+ Add New</button>
+            </div>
+            
+            <div id="savedAddressesList" class="address-list" style="max-height: 38vh; overflow-y: auto;"></div>
+
+            <!-- Inline New Address Form -->
+            <form id="newAddressForm" class="account-form hidden" style="border: 1px dashed var(--primary-border); padding: 14px; border-radius: var(--radius-sm); margin-top: 10px; background: #fafcff;">
+              <h4 style="font-size: 0.85rem; margin-top: 0; color: var(--primary);">Add Delivery Address</h4>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <label>Recipient Name<input name="name" autocomplete="shipping name" required maxlength="100" placeholder="e.g. Rahul Sharma" /></label>
+                <label>Mobile Number<input name="phone" type="tel" autocomplete="shipping tel" pattern="[6-9][0-9]{9}" required maxlength="10" placeholder="10 digits" /></label>
+              </div>
+              <label>House / Flat No.<input name="house" autocomplete="shipping address-line1" required maxlength="100" placeholder="Flat 402, Tower B" /></label>
+              <label>Building / Community<input name="building" autocomplete="shipping address-line2" required maxlength="100" placeholder="Greenwood Heights" /></label>
+              <label>Street / Locality<input name="street" autocomplete="shipping address-level3" required maxlength="100" placeholder="Madhapur Main Road" /></label>
+              <label>Landmark (Optional)<input name="landmark" autocomplete="off" maxlength="100" placeholder="Near Cyber Towers" /></label>
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
+                <label>City<input name="city" autocomplete="shipping address-level2" value="Hyderabad" required maxlength="50" /></label>
+                <label>State<input name="state" autocomplete="shipping address-level1" value="Telangana" required maxlength="50" /></label>
+                <label>PIN Code<input name="pincode" autocomplete="shipping postal-code" pattern="[0-9]{6}" required maxlength="6" placeholder="500081" /></label>
+              </div>
+              <label style="display: flex; align-items: center; gap: 8px; font-weight: normal; margin: 8px 0;">
+                <input type="checkbox" name="is_default" style="width: auto; margin: 0;" /> Set as default address
+              </label>
+              <div style="display: flex; gap: 8px; margin-top: 10px;">
+                <button class="primary-cart" type="submit" style="flex: 1;">Save Address</button>
+                <button class="account-switch" type="button" id="cancelAddAddressBtn" style="margin: 0;">Cancel</button>
+              </div>
+              <p id="newAddressMessage" style="font-size: 0.75rem; color: #b91c1c; margin: 6px 0 0;"></p>
+            </form>
+          </div>
+
+          <div style="margin-top: 20px; border-top: 1px solid var(--border-light); padding-top: 14px; display: flex; justify-content: space-between; align-items: center;">
+            <button class="account-switch" id="logoutButton" type="button" style="margin-top: 0; color: #b91c1c;">Sign out</button>
+            <span style="font-size: 0.75rem; color: var(--text-muted);">Milvanta Fresh</span>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <!-- Order Tracking Modal -->
+    <div class="modal-overlay hidden" id="orderTrackingModal" aria-hidden="true">
+      <div class="account-panel tracking-panel" role="dialog" aria-modal="true" aria-labelledby="trackingTitle">
+        <button type="button" class="modal-close" id="trackingClose" aria-label="Close tracking">×</button>
+        <p class="modal-kicker">LIVE ORDER STATUS</p>
+        <div class="tracking-header">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <h2 id="trackingTitle" style="font-size: 1.4rem; margin: 0;">Order #MV-000000</h2>
+            <span id="trackingStatusBadge" class="status-badge placed">Placed</span>
+          </div>
+          <p id="trackingOrderMeta" style="font-size: 0.78rem; color: var(--text-muted); margin: 4px 0 0;"></p>
+        </div>
+
+        <!-- 6-Stage Visual Stepper -->
+        <div class="tracking-stepper" id="trackingStepper">
+          <div class="tracking-step" data-step="placed">
+            <div class="step-node">✓</div>
+            <span class="step-label">Placed</span>
+          </div>
+          <div class="tracking-step" data-step="confirmed">
+            <div class="step-node">2</div>
+            <span class="step-label">Confirmed</span>
+          </div>
+          <div class="tracking-step" data-step="processing">
+            <div class="step-node">3</div>
+            <span class="step-label">Packed</span>
+          </div>
+          <div class="tracking-step" data-step="shipped">
+            <div class="step-node">4</div>
+            <span class="step-label">Shipped</span>
+          </div>
+          <div class="tracking-step" data-step="out_for_delivery">
+            <div class="step-node">5</div>
+            <span class="step-label">Out for Delivery</span>
+          </div>
+          <div class="tracking-step" data-step="delivered">
+            <div class="step-node">6</div>
+            <span class="step-label">Delivered</span>
+          </div>
+        </div>
+
+        <!-- Courier & Delivery Info Box -->
+        <div class="tracking-courier-box" id="trackingCourierBox">
+          <div>
+            <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Delivery Partner</div>
+            <div id="trackingCourierName" style="font-size: 0.88rem; font-weight: 700; color: var(--primary);">Milvanta Cold-Chain</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Tracking Number</div>
+            <div id="trackingNumberCode" style="font-size: 0.88rem; font-weight: 700;">Standard Farm Route</div>
+          </div>
+          <div>
+            <div style="font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Estimated Delivery</div>
+            <div id="trackingEstDelivery" style="font-size: 0.88rem; font-weight: 700; color: var(--accent);">Tomorrow by 7:00 AM</div>
+          </div>
+        </div>
+
+        <!-- Audit Timeline History -->
+        <h4 style="font-size: 0.85rem; margin: 16px 0 8px; color: var(--primary);">Status Timeline</h4>
+        <div class="tracking-audit-log" id="trackingAuditLog"></div>
+
+        <!-- Order Items & Destination -->
+        <div style="margin-top: 16px; border-top: 1px solid var(--border-light); padding-top: 12px; font-size: 0.8rem;">
+          <div style="display:flex; justify-content:space-between; margin-bottom: 4px;">
+            <strong>Items Ordered:</strong>
+            <strong id="trackingTotalAmount">₹0</strong>
+          </div>
+          <p id="trackingItemsList" style="margin: 0 0 8px; color: var(--text-muted);"></p>
+          <div><strong>Delivery Address:</strong> <span id="trackingAddressText" style="color: var(--text-muted);"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Orders Portal Modal -->
+    <div class="modal-overlay hidden" id="adminOrdersModal" aria-hidden="true">
+      <div class="account-panel admin-modal-panel" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
+        <button type="button" class="modal-close" id="adminClose" aria-label="Close admin">×</button>
+        <p class="modal-kicker">MILVANTA STORE ADMINISTRATION</p>
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom: 16px;">
+          <h2 id="adminTitle" style="margin: 0; font-size: 1.8rem;">Order Operations &amp; Fulfillment</h2>
+          <button type="button" class="address-action-btn" id="adminRefreshBtn">↻ Refresh Data</button>
+        </div>
+
+        <!-- Admin Overview Metrics -->
+        <div class="admin-stats-grid">
+          <div class="admin-stat-card">
+            <div class="admin-stat-label">Total Orders</div>
+            <div class="admin-stat-val" id="adminStatTotal">0</div>
+          </div>
+          <div class="admin-stat-card">
+            <div class="admin-stat-label">Active Orders</div>
+            <div class="admin-stat-val" id="adminStatActive" style="color: var(--accent);">0</div>
+          </div>
+          <div class="admin-stat-card">
+            <div class="admin-stat-label">Delivered</div>
+            <div class="admin-stat-val" id="adminStatDelivered" style="color: var(--veg-color);">0</div>
+          </div>
+          <div class="admin-stat-card">
+            <div class="admin-stat-label">Total Revenue</div>
+            <div class="admin-stat-val" id="adminStatRevenue">₹0</div>
+          </div>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div class="admin-toolbar">
+          <div style="display: flex; gap: 8px; flex: 1; min-width: 260px;">
+            <input type="text" id="adminSearchInput" placeholder="Search by Order #, Customer, Phone, or Tracking…" style="padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.82rem; width: 100%;" />
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label style="font-size: 0.78rem; font-weight: 600; margin: 0;">Status:
+              <select id="adminStatusFilter" style="padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 0.82rem; margin-left: 4px;">
+                <option value="all">All Orders</option>
+                <option value="placed">Placed</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="processing">Processing</option>
+                <option value="shipped">Shipped</option>
+                <option value="out_for_delivery">Out for Delivery</option>
+                <option value="delivered">Delivered</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Orders Table -->
+        <div class="admin-orders-table-wrapper">
+          <table class="admin-orders-table">
+            <thead>
+              <tr>
+                <th>Order #</th>
+                <th>Customer</th>
+                <th>Items</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th>Payment</th>
+                <th>Courier / Tracking</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="adminOrdersTableBody">
+              <tr><td colspan="8" style="text-align:center; padding: 20px; color: var(--text-muted);">Loading orders…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Inline Status Update Dialog Drawer -->
+        <div id="adminUpdateDrawer" class="hidden" style="margin-top: 20px; border: 1px solid var(--primary-border); border-radius: var(--radius-sm); padding: 16px; background: #fdfefe;">
+          <h4 style="margin: 0 0 12px; font-size: 0.95rem; color: var(--primary);">Update Order Status: <span id="updateDrawerOrderNum"></span></h4>
+          <form id="adminStatusForm" style="display: grid; gap: 10px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <label style="font-size: 0.78rem; font-weight: 600;">Status
+                <select name="status" id="adminUpdateStatusSelect" required style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);">
+                  <option value="placed">Placed</option>
+                  <option value="confirmed">Confirmed</option>
+                  <option value="processing">Processing</option>
+                  <option value="shipped">Shipped</option>
+                  <option value="out_for_delivery">Out for Delivery</option>
+                  <option value="delivered">Delivered</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </label>
+              <label style="font-size: 0.78rem; font-weight: 600;">Courier Name
+                <input name="courierName" id="adminUpdateCourier" placeholder="e.g. Milvanta Logistics, DTDC, Delhivery" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);" />
+              </label>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+              <label style="font-size: 0.78rem; font-weight: 600;">Tracking Number
+                <input name="trackingNumber" id="adminUpdateTracking" placeholder="e.g. MLV-94821034" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);" />
+              </label>
+              <label style="font-size: 0.78rem; font-weight: 600;">Estimated Delivery
+                <input name="estimatedDelivery" id="adminUpdateEstDelivery" type="datetime-local" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);" />
+              </label>
+            </div>
+            <label style="font-size: 0.78rem; font-weight: 600;">Audit / Customer Note
+              <input name="note" id="adminUpdateNote" placeholder="e.g. Dispatched with chilled morning cold-chain crate" style="width: 100%; padding: 8px; margin-top: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm);" />
+            </label>
+            <div style="display: flex; gap: 8px; margin-top: 4px;">
+              <button class="primary-cart" type="submit" style="flex: 1;">Save &amp; Notify Timeline</button>
+              <button class="account-switch" type="button" id="adminCancelUpdateBtn" style="margin: 0;">Cancel</button>
+            </div>
+            <p id="adminUpdateMessage" style="font-size: 0.75rem; margin: 4px 0 0;"></p>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Interactive Policy Dialog Modal (Razorpay Compliance) -->
+    <div class="modal-overlay hidden" id="policyModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="policyTitle">
+        <button type="button" class="modal-close" id="policyClose" aria-label="Close policy">×</button>
+        <p class="modal-kicker">LEGAL &amp; COMPLIANCE</p>
+        <h2 id="policyTitle">Store Policy</h2>
+        <div id="policyContent" style="font-size: 0.85rem; line-height: 1.6; color: var(--text-muted); max-height: 60vh; overflow-y: auto;"></div>
+      </div>
+    </div>
+
+    <!-- Pincode Checker Modal -->
+    <div class="modal-overlay hidden" id="pincodeModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="pincodeTitle">
+        <button type="button" class="modal-close" id="pincodeClose" aria-label="Close delivery checker">×</button>
+        <p class="modal-kicker">DISPATCH HUB · HAFEEZPET, HYDERABAD</p>
+        <h2 id="pincodeTitle">Check Delivery Pincode</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">Milvanta delivers fresh pure milk, artisan bakes &amp; heritage pickles directly from our hub in <strong>Hafeezpet, Hyderabad</strong>.</p>
+        
+        <!-- Distance Delivery Rates Card -->
+        <div class="hub-delivery-rates" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; font-size: 0.78rem;">
+          <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 8px 10px;">
+            <div style="font-weight: 700; color: #166534;">Within 5 kms</div>
+            <div style="font-size: 0.95rem; font-weight: 800; color: #15803d; margin: 2px 0;">₹50 Delivery</div>
+            <div style="color: #64748b; font-size: 0.72rem;">Hafeezpet, Kondapur, Madhapur, KPHB...</div>
+          </div>
+          <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 8px 10px;">
+            <div style="font-weight: 700; color: #1e40af;">6 km &amp; Core City (500001–96)</div>
+            <div style="font-size: 0.95rem; font-weight: 800; color: #2563eb; margin: 2px 0;">₹80 Delivery</div>
+            <div style="color: #64748b; font-size: 0.72rem;">Abids, Charminar, Secunderabad, Banjara Hills...</div>
+          </div>
+        </div>
+
+        <form id="pincodeForm" style="display: grid; gap: 10px;">
+          <label style="font-size: 0.8rem; font-weight: 600;">Enter your 6-digit Hyderabad PIN code
+            <input id="pincodeInput" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="e.g. 500049, 500084, 500001" required style="width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 1rem; margin-top: 6px;" />
+          </label>
+          <button class="primary-cart" type="submit">Check &amp; Save Pincode</button>
+          <p id="pincodeFeedback" style="font-size: 0.82rem; min-height: 1.4em; margin: 4px 0 0;"></p>
+        </form>
+
+        <div style="margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 10px;">
+          <p style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px;">Popular Hyderabad Delivery Areas (500001–500096):</p>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px;" id="quickPinPills">
+            <button type="button" class="quick-pin-pill" data-pin="500049" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Hafeezpet (500049)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500084" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Kondapur (500084)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500081" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Madhapur (500081)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500032" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Gachibowli (500032)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500034" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Banjara Hills (500034)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500033" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Jubilee Hills (500033)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500001" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Abids (500001)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500002" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Charminar (500002)</button>
+            <button type="button" class="quick-pin-pill" data-pin="500003" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 9px; font-size:0.75rem; cursor:pointer;">Secunderabad (500003)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      const forceLocal = window.location.search.includes('api=local') || window.location.search.includes('backend=local');
+      window.MILVANTA_API_URL = window.MILVANTA_API_URL || (
+        forceLocal || (isLocalHost && location.port === '10000')
+          ? 'http://127.0.0.1:10000'
+          : 'https://milvanta-backend.onrender.com'
+      );
+      window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
+    </script>
+    <script src="js/delivery.js?v=20261015-1"></script>
+    <script src="js/script.js?v=20261015-1"></script>
+  </body>
+</html>
