@@ -613,6 +613,72 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
   return reply.code(201).send({ subscription: rows[0] });
 });
 
+app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
+  if (!razorpay || !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+    return reply.code(503).send({ error: 'razorpay_not_configured' });
+  }
+
+  const {
+    productId,
+    productName,
+    size,
+    monthsCount,
+    daysCount,
+    totalAmountPaise,
+    dailyRatePaise,
+    startOffset
+  } = request.body || {};
+
+  if (!productName || !totalAmountPaise) {
+    return reply.code(400).send({ error: 'invalid_subscription_details' });
+  }
+
+  try {
+    const months = Math.max(1, Math.min(12, Number(monthsCount) || 1));
+    const amountPerMonthPaise = Math.round(Number(totalAmountPaise) / months);
+
+    // Create plan in Razorpay
+    const plan = await razorpay.plans.create({
+      period: 'monthly',
+      interval: 1,
+      item: {
+        name: `Milvanta ${productName} (${size || '500 ml'})`,
+        amount: amountPerMonthPaise,
+        currency: 'INR',
+        description: `${size || '500 ml'} fresh milk delivered every morning`
+      }
+    });
+
+    // Create subscription in Razorpay
+    const rzpSub = await razorpay.subscriptions.create({
+      plan_id: plan.id,
+      total_count: months,
+      quantity: 1,
+      customer_notify: 1,
+      notes: {
+        productName: String(productName),
+        size: String(size || '500 ml'),
+        months: String(months),
+        days: String(daysCount || 30),
+        dailyRate: String(Math.round(Number(dailyRatePaise || 0) / 100))
+      }
+    });
+
+    return {
+      success: true,
+      subscriptionId: rzpSub.id,
+      shortUrl: rzpSub.short_url,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      amount: amountPerMonthPaise,
+      totalAmount: Number(totalAmountPaise),
+      planId: plan.id
+    };
+  } catch (err) {
+    request.log.error({ err }, 'Error creating Razorpay subscription');
+    return reply.code(500).send({ error: 'subscription_creation_failed', message: err.message });
+  }
+});
+
 app.patch('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const subId = Number(request.params.id);
@@ -703,12 +769,14 @@ app.post('/api/v1/orders', {
   const deliveryCharge = deliveryInfo.feePaise || 5000;
 
   const quantities = new Map();
+  const itemMetaMap = new Map();
   for (const item of items) {
     const productId = Number(item?.productId), quantity = Number(item?.quantity);
     if (!Number.isSafeInteger(productId) || productId <= 0 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     const totalQuantity = (quantities.get(productId) || 0) + quantity;
     if (totalQuantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     quantities.set(productId, totalQuantity);
+    itemMetaMap.set(productId, item);
   }
 
   const client = await pool.connect();
@@ -754,13 +822,17 @@ app.post('/api/v1/orders', {
         await client.query('ROLLBACK');
         return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id), message: `Insufficient stock for ${product.name}.` });
       }
-      const unitPricePaise = Number(product.price_paise);
+      const itemMeta = itemMetaMap.get(Number(product.id));
+      const customPricePaise = itemMeta?.customPricePaise || itemMeta?.pricePaise;
+      const unitPricePaise = (customPricePaise && Number.isSafeInteger(Number(customPricePaise)) && Number(customPricePaise) >= 1000)
+        ? Number(customPricePaise)
+        : Number(product.price_paise);
       subtotal += unitPricePaise * quantity;
       orderItems.push({
         productId: Number(product.id),
-        name: product.name,
+        name: itemMeta?.name || product.name,
         category: product.category,
-        unit: product.selling_unit,
+        unit: itemMeta?.notes || (itemMeta?.size ? `${product.selling_unit} (${itemMeta.size})` : product.selling_unit),
         imageUrl: product.image_url,
         quantity,
         unitPricePaise,

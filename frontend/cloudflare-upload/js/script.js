@@ -678,7 +678,11 @@ function updateSubscriptionSummary() {
   if (finalPriceElem) finalPriceElem.textContent = `₹${subTotal.toLocaleString('en-IN')}`;
 
   if (addBtn && state.purchaseMode === 'subscription') {
-    addBtn.innerHTML = `<span>Start Morning Subscription · ₹${subTotal.toLocaleString('en-IN')}</span>`;
+    if (state.subPlanType === 'custom') {
+      addBtn.innerHTML = `<span>Add to cart · ₹${subTotal.toLocaleString('en-IN')}</span>`;
+    } else {
+      addBtn.innerHTML = `<span>Start Subscription · ₹${subTotal.toLocaleString('en-IN')}</span>`;
+    }
   }
 }
 
@@ -743,29 +747,48 @@ function setPurchaseMode(mode) {
   }
 }
 
-function handleStartSubscription(p) {
+function handleCustomDaysAddToCart(p) {
+  const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
+  const rates = getMilkSubscriptionRates(p, variantSize);
+  const input = $('#subDaysInput');
+  const days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
+  const totalAmount = days * rates.dailyRate;
+
+  // Add custom days milk plan to cart as a regular cart item
+  const customPlanVariant = {
+    size: `${variantSize} (${days} Days · ₹${rates.dailyRate}/day)`,
+    price: totalAmount,
+    customDays: days,
+    dailyRate: rates.dailyRate,
+    isCustomDaysPlan: true
+  };
+
+  addToCart(p.id, 1, customPlanVariant);
+  closeProductModal();
+  setCartOpen(true);
+  showStoreToast(`Added ${days}-Day Fresh Milk plan (₹${totalAmount.toLocaleString('en-IN')}) to Cart!`);
+}
+
+async function handleStartSubscription(p) {
   const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
   const rates = getMilkSubscriptionRates(p, variantSize);
 
-  let days = 30;
-  let durationLabel = '';
-
-  if (state.subPlanType === 'month') {
-    const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
-    const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
-    const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
-    const details = getContinuousMonthsDetails(startOffset, monthsCount);
-    days = details.totalDays;
-    durationLabel = details.rangeLabel;
-  } else {
-    const input = $('#subDaysInput');
-    days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
-    durationLabel = `${days} Days Plan`;
-  }
-
+  const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
+  const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+  const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
+  const details = getContinuousMonthsDetails(startOffset, monthsCount);
+  const days = details.totalDays;
   const totalAmount = days * rates.dailyRate;
   const savings = days * (rates.oneTimeRate - rates.dailyRate);
 
+  const addBtn = $('#modalAddToCart');
+  const originalBtnHtml = addBtn ? addBtn.innerHTML : '';
+  if (addBtn) {
+    addBtn.disabled = true;
+    addBtn.innerHTML = '<span>Setting Up Subscription...</span>';
+  }
+
+  // Pre-save local subscription record
   const subItem = {
     id: 'sub-' + Date.now().toString(36),
     product: `${p.name} (${variantSize})`,
@@ -773,8 +796,8 @@ function handleStartSubscription(p) {
     productId: p.id,
     image: p.image,
     size: variantSize,
-    planType: state.subPlanType,
-    durationLabel,
+    planType: 'month',
+    durationLabel: details.rangeLabel,
     days,
     dailyRate: rates.dailyRate,
     totalAmount,
@@ -800,28 +823,43 @@ function handleStartSubscription(p) {
     localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs));
   } catch {}
 
-  // Post to backend API if active
   try {
-    apiRequest('/api/v1/subscriptions', {
+    // Initiate Razorpay subscription payment via API
+    const res = await apiRequest('/api/v1/subscriptions/razorpay-checkout', {
       method: 'POST',
       body: JSON.stringify({
-        productName: subItem.product,
-        imageUrl: subItem.image,
-        frequency: subItem.frequency,
-        timeSlot: subItem.timeSlot,
-        quantity: subItem.quantity,
-        quantityNum: 1,
-        costPerDayPaise: rates.dailyRate * 100,
+        productId: p.id === 101 ? 1 : (p.id === 102 ? 2 : p.id),
+        productName: p.name,
+        size: variantSize,
+        monthsCount,
         daysCount: days,
-        totalAmountPaise: totalAmount * 100
+        totalAmountPaise: totalAmount * 100,
+        dailyRatePaise: rates.dailyRate * 100,
+        startOffset
       })
-    }).then((res) => {
-      if (res?.subscription?.id) {
-        subItem.id = res.subscription.id;
-        try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
-      }
-    }).catch(() => {});
-  } catch {}
+    });
+
+    if (res?.subscriptionId) {
+      subItem.id = res.subscriptionId;
+      subItem.razorpaySubscriptionId = res.subscriptionId;
+      try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+    }
+
+    closeProductModal();
+
+    if (res?.shortUrl) {
+      showStoreToast(`Opening Razorpay Subscription Checkout...`);
+      window.location.href = res.shortUrl;
+      return;
+    }
+  } catch (err) {
+    console.warn('Razorpay subscription checkout notice:', err.message);
+  } finally {
+    if (addBtn) {
+      addBtn.disabled = false;
+      if (originalBtnHtml) addBtn.innerHTML = originalBtnHtml;
+    }
+  }
 
   closeProductModal();
   showStoreToast(`🥛 Morning Subscription Confirmed! Total: ₹${totalAmount.toLocaleString('en-IN')} (Saved ₹${savings})`, 'profile.html?tab=subscription');
@@ -2392,7 +2430,16 @@ async function beginCheckout(form) {
       throw new Error(deliveryInfo.message || `Delivery is currently available across Hyderabad (500001–500096).`);
     }
 
-    const orderBody = { address: values, items: state.cart.map(({ id, quantity }) => ({ productId: id, quantity })) };
+    const orderBody = {
+      address: values,
+      items: state.cart.map((entry) => ({
+        productId: Number(entry.id) === 101 ? 1 : (Number(entry.id) === 102 ? 2 : Number(entry.id)),
+        quantity: Number(entry.quantity) || 1,
+        size: entry.variant?.size || entry.size || '',
+        customPricePaise: entry.variant?.price ? Math.round(Number(entry.variant.price) * 100) : (entry.price ? Math.round(Number(entry.price) * 100) : undefined),
+        notes: entry.variant?.customDays ? `${entry.variant.customDays} Days Plan @ ₹${entry.variant.dailyRate}/day` : undefined
+      }))
+    };
     const fingerprint = JSON.stringify(orderBody);
 
     if (!state.checkoutKey || fingerprint !== state.checkoutFingerprint) {
@@ -2683,7 +2730,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.activeProductId) {
       const p = products.find((item) => item.id === state.activeProductId);
       if (p && state.purchaseMode === 'subscription' && isFreshMilkProduct(p)) {
-        handleStartSubscription(p);
+        if (state.subPlanType === 'custom') {
+          handleCustomDaysAddToCart(p);
+        } else {
+          handleStartSubscription(p);
+        }
         return;
       }
       addToCart(state.activeProductId, state.modalQty, state.selectedVariant);
