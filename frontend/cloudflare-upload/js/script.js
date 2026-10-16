@@ -582,6 +582,33 @@ function updateSubscriptionSummary() {
   }
 }
 
+function getModalUnitPrice() {
+  if (state.selectedVariant) return state.selectedVariant.price;
+  const p = products.find((item) => item.id === state.activeProductId);
+  return p ? p.price : 0;
+}
+
+function updateModalAddToCartBtn() {
+  const addBtn = $('#modalAddToCart');
+  if (!addBtn) return;
+  const p = products.find((item) => item.id === state.activeProductId);
+  const stock = p?.stockQuantity !== undefined ? p.stockQuantity : 50;
+  if (stock <= 0) {
+    addBtn.disabled = true;
+    addBtn.innerHTML = '<span>Out of stock</span>';
+    return;
+  }
+  addBtn.disabled = false;
+  if (state.purchaseMode === 'subscription' && isFreshMilkProduct(p)) {
+    updateSubscriptionSummary();
+    return;
+  }
+  const unitPrice = getModalUnitPrice();
+  const qty = state.modalQty || 1;
+  const total = unitPrice * qty;
+  addBtn.innerHTML = `<span>Add to cart · ₹${total.toLocaleString('en-IN')}</span>`;
+}
+
 function setPurchaseMode(mode) {
   state.purchaseMode = mode;
   const modeSwitch = $('#modalPurchaseModeWrap');
@@ -1346,41 +1373,21 @@ function renderCatalog() {
           <button type="button" class="card-round-cart-btn" data-card-cart="${p.id}" aria-label="Add ${escapeHtml(p.name)} to cart" title="Add to cart">
             <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
           </button>
-        </div>
-        ${isFreshMilkProduct(p) ? `
-          <div class="card-sub-banner" data-sub-prod="${p.id}" title="Start Daily Morning Milk Subscription">
-            <span class="sub-banner-badge">🥛 Daily Subscription from ₹${(p.id === 102 || /buffalo/i.test(p.name)) ? '65' : '55'}/day</span>
-            <span class="sub-banner-action">Subscribe →</span>
-          </div>
-        ` : ''}
         <div class="card-feature-pills">
           ${featuresHtml}
         </div>
       </div>
     `;
 
-    // Click handling:
-    // In Grid view: click any card opens product detail modal directly
-    // In Carousel view: click non-center card centers it; click center card opens modal
+    // Clicking anywhere on product card opens product detail modal
     card.addEventListener('click', (event) => {
       if (event.target.closest('.card-round-cart-btn')) return;
-      const subTrigger = event.target.closest('[data-sub-prod]');
-      if (subTrigger) {
-        event.stopPropagation();
-        openProductModal(p.id, 'subscription');
-        return;
-      }
-      if (state.viewMode === 'grid') {
-        openProductModal(p.id);
-        return;
-      }
       const idx = Number(card.dataset.index);
-      if (idx !== state.carouselIndex) {
+      if (!isNaN(idx)) {
         state.carouselIndex = idx;
         updateCarouselPositions();
-      } else {
-        openProductModal(p.id);
       }
+      openProductModal(p.id);
     });
 
     container.append(card);
@@ -1539,8 +1546,8 @@ function openProductModal(id, initialMode = 'onetime') {
           $('#modalPrice').textContent = `₹${price}`;
           if (state.purchaseMode === 'subscription') {
             updateSubscriptionSummary();
-          } else if (addBtn && stock > 0) {
-            addBtn.innerHTML = `<span>Add to cart · ₹${price * state.modalQty}</span>`;
+          } else {
+            updateModalAddToCartBtn();
           }
         });
       });
@@ -1570,9 +1577,7 @@ function openProductModal(id, initialMode = 'onetime') {
     if (subPlanner) subPlanner.classList.add('hidden');
     if (qtyRow) qtyRow.style.display = '';
     state.purchaseMode = 'onetime';
-    if (addBtn && stock > 0) {
-      addBtn.innerHTML = `<span>Add to cart · ₹${currentPrice * state.modalQty}</span>`;
-    }
+    updateModalAddToCartBtn();
   }
 
   const ingBlock = $('.ingredients-block');
@@ -2551,23 +2556,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  function getModalUnitPrice() {
-    if (state.selectedVariant) return state.selectedVariant.price;
-    const p = products.find((item) => item.id === state.activeProductId);
-    return p ? p.price : 0;
-  }
-
-  function updateModalAddToCartBtn() {
-    if (state.purchaseMode === 'subscription') {
-      updateSubscriptionSummary();
-      return;
-    }
-    const unitPrice = getModalUnitPrice();
-    const addBtn = $('#modalAddToCart');
-    if (addBtn && unitPrice) {
-      addBtn.innerHTML = `<span>Add to cart · ₹${unitPrice * state.modalQty}</span>`;
-    }
-  }
 
   // Variant change
   $('#variantSelect')?.addEventListener('change', (e) => {
