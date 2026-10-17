@@ -1889,7 +1889,7 @@
             theme: {
               color: '#0a3d66'
             },
-            handler: function (response) {
+            handler: async function (response) {
               closeModal();
               subItem.status = 'active';
               subItem.paymentId = response.razorpay_payment_id;
@@ -1897,6 +1897,28 @@
               renderSubscriptions();
               showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
               window.history.replaceState({}, document.title, 'profile.html?tab=subscription');
+
+              // Persist directly into PostgreSQL database
+              try {
+                const res = await apiRequest('/api/v1/subscriptions', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    productName: subItem.product,
+                    imageUrl: subItem.image,
+                    frequency: subItem.frequency,
+                    timeSlot: subItem.timeSlot,
+                    quantity: subItem.quantity,
+                    quantityNum: 1,
+                    costPerDayPaise: calc.dailyRate * 100
+                  })
+                });
+                if (res?.subscription?.id) {
+                  subItem.id = res.subscription.id;
+                  try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+                }
+              } catch (dbErr) {
+                console.warn('Backend subscription DB sync notice:', dbErr);
+              }
             },
             modal: {
               ondismiss: function () {

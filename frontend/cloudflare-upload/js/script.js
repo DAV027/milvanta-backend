@@ -865,11 +865,34 @@ async function handleStartSubscription(p) {
         theme: {
           color: '#0a3d66'
         },
-        handler: function (response) {
+        handler: async function (response) {
           closeProductModal();
           subItem.status = 'active';
           subItem.paymentId = response.razorpay_payment_id;
           try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+
+          // Persist directly into PostgreSQL database if user is authenticated
+          try {
+            const res = await apiRequest('/api/v1/subscriptions', {
+              method: 'POST',
+              body: JSON.stringify({
+                productName: subItem.product,
+                imageUrl: subItem.image,
+                frequency: subItem.frequency,
+                timeSlot: subItem.timeSlot,
+                quantity: subItem.quantity,
+                quantityNum: 1,
+                costPerDayPaise: rates.dailyRate * 100
+              })
+            });
+            if (res?.subscription?.id) {
+              subItem.id = res.subscription.id;
+              try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
+            }
+          } catch (dbErr) {
+            console.warn('Backend subscription DB sync notice:', dbErr);
+          }
+
           // Immediately return customer to home page with celebration
           window.location.href = `${window.location.origin}/?subscription=success`;
         },
