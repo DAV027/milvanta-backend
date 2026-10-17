@@ -1683,3 +1683,136 @@
   padding: 12px 14px;
   margin-top: 12px;
 }
+
+/* ===================================================
+   PHASE 1: ORDER FILTERS, RENEW PLAN & INVOICE PRINTING
+   =================================================== */
+.order-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.order-filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 9999px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: inherit;
+}
+
+.order-filter-pill:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+.order-filter-pill.active {
+  background: #0a3d66;
+  color: #ffffff;
+  border-color: #0a3d66;
+  box-shadow: 0 2px 6px rgba(10, 61, 102, 0.2);
+}
+
+.order-filter-pill span {
+  font-size: 0.78rem;
+  opacity: 0.9;
+}
+
+/* Renew / Extend Subscription Plan Button */
+.btn-renew-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #047857;
+  color: #ffffff;
+  border: 1px solid #047857;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.btn-renew-sub:hover {
+  background: #065f46;
+  border-color: #065f46;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(4, 120, 87, 0.25);
+}
+
+/* Print Invoice Button */
+.btn-print-invoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #0a3d66;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.btn-print-invoice:hover {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.cal-vacation-btn:hover {
+  background: #fef3c7 !important;
+  border-color: #f59e0b !important;
+}
+
+/* Printable Tax Invoice Styles */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #orderDetailsModal,
+  #orderDetailsModal .account-panel,
+  #orderDetailsModal .account-panel * {
+    visibility: visible !important;
+  }
+  #orderDetailsModal {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: #ffffff !important;
+  }
+  #orderDetailsModal .modal-close,
+  #orderDetailsModal #closeOrderModalBtn,
+  #orderDetailsModal #orderModalPrintBtn,
+  #orderDetailsModal #orderModalReorderBtn {
+    display: none !important;
+  }
+  #orderDetailsModal .account-panel {
+    box-shadow: none !important;
+    border: 1px solid #000 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
+

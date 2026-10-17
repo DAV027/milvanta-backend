@@ -238,6 +238,17 @@
                 </div>
                 <a href="index.html#products" class="address-card-btn" style="font-size: 0.88rem; font-weight: 700;">+ New Order</a>
               </div>
+              <div class="order-filter-bar" id="orderFilterBar" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #f1f5f9;">
+                <button type="button" class="order-filter-pill active" data-order-filter="all">
+                  All Orders (<span id="filterCountAll">0</span>)
+                </button>
+                <button type="button" class="order-filter-pill" data-order-filter="subscriptions">
+                  🥛 Subscriptions (<span id="filterCountSubs">0</span>)
+                </button>
+                <button type="button" class="order-filter-pill" data-order-filter="store">
+                  🛍️ Store Orders (<span id="filterCountStore">0</span>)
+                </button>
+              </div>
               <div class="orders-list" id="ordersListContainer">
                 <!-- Dynamically populated by profile.js -->
               </div>
@@ -292,11 +303,12 @@
                 </div>
 
                 <!-- Calendar Navigation Controls -->
-                <div class="calendar-nav-controls" style="display: flex; align-items: center; gap: 8px;">
+                <div class="calendar-nav-controls" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                   <button type="button" class="cal-nav-btn" id="calPrevMonthBtn" aria-label="Previous Month" style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; cursor: pointer; color: #0a3d66;">‹</button>
                   <span id="calCurrentMonthLabel" style="font-size: 0.95rem; font-weight: 700; color: #0a3d66; min-width: 130px; text-align: center;">October 2026</span>
                   <button type="button" class="cal-nav-btn" id="calNextMonthBtn" aria-label="Next Month" style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; cursor: pointer; color: #0a3d66;">›</button>
                   <button type="button" class="cal-today-btn" id="calTodayBtn" style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 8px; padding: 6px 12px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">Today</button>
+                  <button type="button" class="cal-vacation-btn" id="btnOpenVacationModal" style="background: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-radius: 8px; padding: 6px 12px; font-size: 0.8rem; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 5px;">✈️ Vacation Pause</button>
                 </div>
               </div>
 
@@ -510,10 +522,14 @@
         </div>
 
         <!-- Modal Actions -->
-        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <div style="display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;">
           <button type="button" class="btn-sub-pause" id="closeOrderModalBtn" style="padding: 10px 18px; font-weight: 600;">Close</button>
-          <button type="button" class="btn-reorder" id="orderModalReorderBtn" style="flex: 1; justify-content: center; background: #0a3d66; color: #ffffff; border-color: #0a3d66; font-weight: 700;">
-            <span>+ Re-order Items</span>
+          <button type="button" class="btn-print-invoice" id="orderModalPrintBtn" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; font-weight: 700; color: #0a3d66; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+            <span>Print Invoice</span>
+          </button>
+          <button type="button" class="btn-reorder" id="orderModalReorderBtn" style="flex: 1; justify-content: center; background: #0a3d66; color: #ffffff; border-color: #0a3d66; font-weight: 700; min-width: 170px;">
+            <span id="orderModalReorderBtnText">+ Re-order Items</span>
           </button>
         </div>
       </div>
@@ -725,6 +741,58 @@
               Confirm &amp; Start Subscription
             </button>
             <button type="button" class="btn-sub-pause" id="closeCreateSubBtn" style="flex: 0 0 auto; min-height: 44px; padding: 0 16px;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Vacation / Date-Range Multi-Day Pause Modal -->
+    <div class="modal-overlay hidden" id="vacationPauseModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="vacationModalTitle" style="max-width: 500px;">
+        <button type="button" class="modal-close" id="closeVacationModal" aria-label="Close vacation modal">×</button>
+        <p class="modal-kicker">DELIVERY SCHEDULE CONTROL</p>
+        <h2 id="vacationModalTitle" style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 6px;">✈️ Vacation Mode / Date-Range Pause</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 16px;">Going out of town? Select your travel dates to pause milk deliveries for the entire period in one click. Deliveries automatically resume the morning you return.</p>
+        
+        <form id="vacationPauseForm" style="display: grid; gap: 14px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <label style="font-size: 0.8rem; font-weight: 700; color: #1e293b;">
+              Start Date (First Paused Drop)
+              <input type="date" id="vacationStartDate" required style="width: 100%; padding: 8px 10px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px;" />
+            </label>
+            <label style="font-size: 0.8rem; font-weight: 700; color: #1e293b;">
+              End Date (Last Paused Drop)
+              <input type="date" id="vacationEndDate" required style="width: 100%; padding: 8px 10px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 14px;" />
+            </label>
+          </div>
+
+          <!-- Quick Duration Presets -->
+          <div>
+            <span style="font-size: 0.76rem; font-weight: 600; color: #64748b; display: block; margin-bottom: 6px;">Quick Presets from Tomorrow:</span>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;" id="vacationQuickChips">
+              <button type="button" class="sub-quick-pill" data-vacation-days="3" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">Weekend (3 Days)</button>
+              <button type="button" class="sub-quick-pill" data-vacation-days="5" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">5 Days</button>
+              <button type="button" class="sub-quick-pill" data-vacation-days="7" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">1 Week (7 Days)</button>
+              <button type="button" class="sub-quick-pill" data-vacation-days="14" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">2 Weeks (14 Days)</button>
+            </div>
+          </div>
+
+          <!-- Summary Notice Box -->
+          <div id="vacationSummaryBox" style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; padding: 12px 14px; font-size: 0.84rem; color: #92400e; line-height: 1.45;">
+            <strong>Pause Summary:</strong> <span id="vacationSummaryText">Select dates above to calculate pause period.</span>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 4px;">
+            <button class="primary-cart" type="submit" id="btnConfirmVacation" style="flex: 1.5; justify-content: center; border: none; cursor: pointer; padding: 12px; font-weight: 700; background: #b45309; min-height: 44px;">
+              ⏸ Pause Deliveries
+            </button>
+            <button type="button" class="btn-sub-pause" id="btnCancelVacation" style="flex: 1; justify-content: center; min-height: 44px;">Cancel</button>
+          </div>
+
+          <div id="vacationClearSection" style="margin-top: 4px; text-align: center; border-top: 1px solid #f1f5f9; padding-top: 10px;">
+            <button type="button" id="btnClearAllPausedDates" style="background: none; border: none; color: #dc2626; font-size: 0.82rem; font-weight: 600; cursor: pointer; text-decoration: underline;">
+              Clear all paused dates &amp; resume every morning
+            </button>
           </div>
         </form>
       </div>

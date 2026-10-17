@@ -43,6 +43,7 @@
   // App State
   const state = {
     activeTab: 'profile',
+    orderFilter: 'all',
     customer: null,
     orders: [],
     addresses: [],
@@ -644,6 +645,19 @@
     // Filter out any cancelled orders
     const activeOrders = state.orders.filter((order) => String(order.status || '').toLowerCase() !== 'cancelled');
 
+    // Update filter counts
+    const subsCount = activeOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom').length;
+    const storeCount = activeOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom').length;
+
+    if ($('#filterCountAll')) $('#filterCountAll').textContent = activeOrders.length;
+    if ($('#filterCountSubs')) $('#filterCountSubs').textContent = subsCount;
+    if ($('#filterCountStore')) $('#filterCountStore').textContent = storeCount;
+
+    // Highlight active filter pill
+    $$('.order-filter-pill').forEach((pill) => {
+      pill.classList.toggle('active', pill.dataset.orderFilter === state.orderFilter);
+    });
+
     if (!activeOrders.length) {
       container.innerHTML = `
         <div style="text-align: center; padding: 48px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
@@ -656,7 +670,39 @@
       return;
     }
 
-    container.innerHTML = activeOrders.map((order) => {
+    // Filter by selected tab (all, subscriptions, store)
+    let filteredOrders = activeOrders;
+    if (state.orderFilter === 'subscriptions') {
+      filteredOrders = activeOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom');
+    } else if (state.orderFilter === 'store') {
+      filteredOrders = activeOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom');
+    }
+
+    if (!filteredOrders.length) {
+      if (state.orderFilter === 'subscriptions') {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
+            <div style="font-size: 2.5rem; margin-bottom: 10px;">🥛</div>
+            <h3 style="font-size: 1.15rem; font-weight: 700; color: #0f172a; margin: 0 0 8px;">No Subscription Orders Found</h3>
+            <p style="font-size: 0.88rem; color: #64748b; margin-bottom: 18px;">You don't have any daily milk subscriptions yet. Have pure cow or buffalo milk delivered every morning.</p>
+            <button type="button" class="address-card-btn" onclick="document.getElementById('btnOpenCreateSubModal')?.click()" style="padding: 10px 22px; font-weight: 700; cursor: pointer;">+ Start Milk Subscription →</button>
+          </div>
+        `;
+      } else {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
+            <div style="font-size: 2.5rem; margin-bottom: 10px;">🛍️</div>
+            <h3 style="font-size: 1.15rem; font-weight: 700; color: #0f172a; margin: 0 0 8px;">No Store Orders Found</h3>
+            <p style="font-size: 0.88rem; color: #64748b; margin-bottom: 18px;">No one-time grocery or pantry orders found. Explore artisanal brownies, bilona ghee, and traditional Andhra pickles.</p>
+            <a href="index.html#products" class="address-card-btn" style="padding: 10px 22px; font-weight: 700; text-decoration: none; display: inline-block;">Browse Farm Store →</a>
+          </div>
+        `;
+      }
+      return;
+    }
+
+    container.innerHTML = filteredOrders.map((order) => {
+      const isSubOrder = order.orderType === 'subscription_continuous' || order.orderType === 'subscription_custom';
       const itemsHtml = order.items.length > 0
         ? order.items.map((item) => `
             <div class="order-item-detailed-row">
@@ -746,17 +792,21 @@
               <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
             </div>
             <div class="order-actions-group">
-              ${order.orderType === 'subscription_continuous' || order.orderType === 'subscription_custom' ? `
+              ${isSubOrder ? `
                 <button type="button" class="btn-order-view-sub" data-go-sub-tab="true">
                   <span>📅 View Subscription &amp; Calendar →</span>
                 </button>
-              ` : ''}
+                <button type="button" class="btn-renew-sub" data-renew-sub-id="${order.id}">
+                  <span>🔄 Renew / Extend Plan</span>
+                </button>
+              ` : `
+                <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
+                  <span>+ Re-order</span>
+                </button>
+              `}
               <button type="button" class="btn-order-details" data-details-id="${order.id}">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                 <span>View Details</span>
-              </button>
-              <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
-                <span>+ Re-order</span>
               </button>
             </div>
           </div>
@@ -1534,12 +1584,31 @@
       });
     });
 
-    // Orders Actions (Details, Reorder, and View Subscription)
+    // Order Type Filter Pills Bar
+    $('#orderFilterBar')?.addEventListener('click', (e) => {
+      const pill = e.target.closest('.order-filter-pill');
+      if (!pill) return;
+      const filter = pill.dataset.orderFilter;
+      if (filter && filter !== state.orderFilter) {
+        state.orderFilter = filter;
+        renderOrders();
+      }
+    });
+
+    // Orders Actions (Details, Reorder, Renew Subscription, and View Subscription)
     $('#ordersListContainer')?.addEventListener('click', (e) => {
       const goSubBtn = e.target.closest('[data-go-sub-tab]');
       if (goSubBtn) {
         switchTab('subscription');
         $('#profileMonthlyCalendarCard')?.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+
+      const renewSubBtn = e.target.closest('[data-renew-sub-id]');
+      if (renewSubBtn) {
+        const orderId = renewSubBtn.dataset.renewSubId;
+        const order = state.orders.find((o) => o.id === orderId);
+        triggerRenewSubscription(order);
         return;
       }
 
@@ -1815,6 +1884,9 @@
 
     // Create Subscription Modal Setup
     setupCreateSubscriptionModal();
+
+    // Vacation Pause Modal Setup
+    setupVacationPauseModal();
 
     // Policy Links
     $$('.policy-btn').forEach((btn) => {
@@ -2288,6 +2360,161 @@
     });
   }
 
+  // Vacation Mode / Date-Range Multi-Day Pause Modal Setup
+  function setupVacationPauseModal() {
+    const modal = $('#vacationPauseModal');
+    const openBtn = $('#btnOpenVacationModal');
+    const closeBtn = $('#closeVacationModal');
+    const cancelBtn = $('#btnCancelVacation');
+    const form = $('#vacationPauseForm');
+    const startInput = $('#vacationStartDate');
+    const endInput = $('#vacationEndDate');
+    const summaryText = $('#vacationSummaryText');
+    const clearBtn = $('#btnClearAllPausedDates');
+    if (!modal) return;
+
+    function formatYMD(date) {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    function openModal() {
+      const now = new Date();
+      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const defaultEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 5);
+
+      if (startInput) startInput.value = formatYMD(tomorrow);
+      if (endInput) endInput.value = formatYMD(defaultEnd);
+      updateSummary();
+      modal.classList.remove('hidden');
+    }
+
+    function closeModal() {
+      modal.classList.add('hidden');
+    }
+
+    function updateSummary() {
+      if (!startInput || !endInput || !summaryText) return;
+      const startVal = startInput.value;
+      const endVal = endInput.value;
+      if (!startVal || !endVal) {
+        summaryText.textContent = 'Please choose both start and end dates.';
+        return;
+      }
+
+      const [sy, sm, sd] = startVal.split('-').map(Number);
+      const [ey, em, ed] = endVal.split('-').map(Number);
+      const startDate = new Date(sy, sm - 1, sd);
+      const endDate = new Date(ey, em - 1, ed);
+
+      if (endDate < startDate) {
+        summaryText.innerHTML = '<span style="color:#dc2626; font-weight:700;">End date cannot be earlier than start date.</span>';
+        return;
+      }
+
+      const diffTime = endDate.getTime() - startDate.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 3600 * 24)) + 1;
+      const resumeDate = new Date(endDate.getTime() + 24 * 3600 * 1000);
+
+      const sStr = startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const eStr = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const rStr = resumeDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+      summaryText.innerHTML = `Pause <strong>${diffDays} mornings</strong> (${sStr} to ${eStr}). Fresh milk deliveries will automatically resume on <strong>${rStr}</strong> (6:00 AM – 7:00 AM).`;
+    }
+
+    openBtn?.addEventListener('click', openModal);
+    closeBtn?.addEventListener('click', closeModal);
+    cancelBtn?.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target.id === 'vacationPauseModal') closeModal();
+    });
+
+    startInput?.addEventListener('change', () => {
+      if (startInput.value && endInput.value && endInput.value < startInput.value) {
+        endInput.value = startInput.value;
+      }
+      updateSummary();
+    });
+
+    endInput?.addEventListener('change', updateSummary);
+
+    // Quick preset chips
+    document.querySelectorAll('[data-vacation-days]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const days = parseInt(chip.dataset.vacationDays, 10) || 3;
+        const now = new Date();
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        const end = new Date(start.getTime() + (days - 1) * 24 * 3600 * 1000);
+        if (startInput) startInput.value = formatYMD(start);
+        if (endInput) endInput.value = formatYMD(end);
+        updateSummary();
+      });
+    });
+
+    // Form submit
+    form?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const startVal = startInput?.value;
+      const endVal = endInput?.value;
+      if (!startVal || !endVal) return;
+
+      const [sy, sm, sd] = startVal.split('-').map(Number);
+      const [ey, em, ed] = endVal.split('-').map(Number);
+      const startDate = new Date(sy, sm - 1, sd);
+      const endDate = new Date(ey, em - 1, ed);
+
+      if (endDate < startDate) {
+        alert('End date must be on or after start date.');
+        return;
+      }
+
+      let cur = new Date(startDate);
+      let count = 0;
+      while (cur <= endDate) {
+        const key = formatYMD(cur);
+        if (!pausedDates.includes(key)) {
+          pausedDates.push(key);
+        }
+        count++;
+        cur = new Date(cur.getTime() + 24 * 3600 * 1000);
+      }
+
+      try {
+        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
+      } catch {}
+
+      const sStr = startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+      const eStr = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+      const resumeDate = new Date(endDate.getTime() + 24 * 3600 * 1000);
+      const rStr = resumeDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+      closeModal();
+      renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+      showToast(`✈️ Vacation pause active from ${sStr} to ${eStr} (${count} mornings paused). Deliveries resume on ${rStr}!`);
+    });
+
+    // Clear all paused dates
+    clearBtn?.addEventListener('click', () => {
+      if (!pausedDates || pausedDates.length === 0) {
+        showToast('No dates are currently paused.');
+        closeModal();
+        return;
+      }
+      if (confirm('Clear all paused dates and resume morning deliveries for all days?')) {
+        pausedDates = [];
+        try {
+          localStorage.setItem('milvanta-paused-dates', JSON.stringify([]));
+        } catch {}
+        closeModal();
+        renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        showToast('✓ All paused dates cleared. Morning deliveries will arrive every day as scheduled!');
+      }
+    });
+  }
+
   // Order Details Modal with Full Tax Invoice and Items Breakdown
   function openOrderDetailsModal(orderId) {
     const modal = $('#orderDetailsModal');
@@ -2336,13 +2563,34 @@
       `).join('');
     }
 
-    // Modal action buttons
+    // Modal action buttons: Print Invoice & Context-Aware Reorder / Renew
+    const isSubOrder = order.orderType === 'subscription_continuous' || order.orderType === 'subscription_custom';
     const reorderBtn = $('#orderModalReorderBtn');
+    const reorderBtnText = $('#orderModalReorderBtnText');
+    const printBtn = $('#orderModalPrintBtn');
+
+    if (printBtn) {
+      printBtn.onclick = () => printOrderTaxInvoice(order);
+    }
+
     if (reorderBtn) {
-      reorderBtn.onclick = () => {
-        closeOrderDetailsModal();
-        triggerReorder(order);
-      };
+      if (isSubOrder) {
+        if (reorderBtnText) reorderBtnText.textContent = '🔄 Renew / Extend Subscription Plan';
+        reorderBtn.style.background = '#047857';
+        reorderBtn.style.borderColor = '#047857';
+        reorderBtn.onclick = () => {
+          closeOrderDetailsModal();
+          triggerRenewSubscription(order);
+        };
+      } else {
+        if (reorderBtnText) reorderBtnText.textContent = '+ Re-order Items';
+        reorderBtn.style.background = '#0a3d66';
+        reorderBtn.style.borderColor = '#0a3d66';
+        reorderBtn.onclick = () => {
+          closeOrderDetailsModal();
+          triggerReorder(order);
+        };
+      }
     }
 
     modal.classList.remove('hidden');
@@ -2350,6 +2598,173 @@
 
   function closeOrderDetailsModal() {
     $('#orderDetailsModal')?.classList.add('hidden');
+  }
+
+  // Official Milvanta Tax Invoice Printer
+  function printOrderTaxInvoice(order) {
+    if (!order) return;
+    const invoiceNum = `INV-${order.id}`;
+    const printWindow = window.open('', '_blank', 'width=820,height=900');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+
+    const itemsRows = order.items.map((it, idx) => `
+      <tr>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-size: 13px;">${idx + 1}</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px;">
+          <strong>${escapeHtml(it.name)}</strong>
+          ${it.size ? `<br><span style="font-size: 11px; color: #64748b;">${escapeHtml(it.size)}</span>` : ''}
+        </td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-size: 13px;">${it.qty}</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: right; font-size: 13px;">₹${it.unitPrice.toLocaleString('en-IN')}</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: right; font-size: 13px; font-weight: 700;">₹${it.lineTotal.toLocaleString('en-IN')}</td>
+      </tr>
+    `).join('');
+
+    const invoiceHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Tax Invoice - ${invoiceNum} - Milvanta</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0f172a; margin: 0; padding: 24px; }
+          .invoice-box { max-width: 760px; margin: 0 auto; border: 1px solid #cbd5e1; border-radius: 12px; padding: 28px; }
+          .header-row { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0a3d66; padding-bottom: 18px; margin-bottom: 20px; }
+          .brand-title { font-size: 26px; font-weight: 800; color: #0a3d66; letter-spacing: -0.5px; margin: 0; }
+          .brand-sub { font-size: 12px; color: #64748b; margin-top: 3px; }
+          .invoice-badge { text-align: right; }
+          .invoice-badge h2 { font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 4px; }
+          .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 22px; font-size: 13px; }
+          .info-block h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; }
+          .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          .items-table th { background: #f8fafc; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 700; color: #334155; border-bottom: 2px solid #cbd5e1; }
+          .totals-wrap { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+          .totals-table { width: 300px; font-size: 13px; }
+          .totals-table td { padding: 6px 0; }
+          .totals-table tr.grand-total td { font-size: 16px; font-weight: 800; color: #0a3d66; border-top: 2px solid #0a3d66; padding-top: 8px; }
+          .footer-note { border-top: 1px solid #e2e8f0; padding-top: 14px; font-size: 11px; color: #64748b; text-align: center; }
+          @media print {
+            body { padding: 0; }
+            .invoice-box { border: none; padding: 0; }
+            .no-print { display: none !important; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="no-print" style="max-width: 760px; margin: 0 auto 16px; display: flex; justify-content: flex-end; gap: 10px;">
+          <button onclick="window.print()" style="background: #0a3d66; color: #fff; border: none; padding: 8px 18px; border-radius: 6px; font-weight: 700; cursor: pointer;">Print / Save as PDF</button>
+          <button onclick="window.close()" style="background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer;">Close</button>
+        </div>
+        <div class="invoice-box">
+          <div class="header-row">
+            <div>
+              <h1 class="brand-title">MILVANTA</h1>
+              <div class="brand-sub">Pure Dairy · Artisan Bakes · Heritage Pickles</div>
+              <div style="font-size: 11px; color: #475569; margin-top: 6px;">
+                Milvanta Foods Pvt Ltd · FSSAI Lic No: 13624014000452<br>
+                Hafeezpet Cold-Chain Hub, Hyderabad - 500049, Telangana<br>
+                Email: projects@milvanta.in | WhatsApp: +91 9052222256
+              </div>
+            </div>
+            <div class="invoice-badge">
+              <h2>TAX INVOICE</h2>
+              <div style="font-size: 13px; font-weight: 700; color: #0a3d66;">#${order.id}</div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Date: ${order.date}</div>
+              <div style="font-size: 11px; color: #16a34a; font-weight: 700; margin-top: 4px;">✓ ${order.paymentStatus || 'PAID'}</div>
+            </div>
+          </div>
+
+          <div class="info-grid">
+            <div class="info-block">
+              <h4>Billed &amp; Delivered To</h4>
+              <strong>${escapeHtml(order.recipientName || 'Customer')}</strong><br>
+              ${order.recipientPhone ? `Phone: +91 ${escapeHtml(order.recipientPhone)}<br>` : ''}
+              ${escapeHtml(order.address)}
+            </div>
+            <div class="info-block">
+              <h4>Order &amp; Logistics Details</h4>
+              Order Type: <strong>${escapeHtml(order.orderTypeLabel || 'Store Order')}</strong><br>
+              Logistics: ${escapeHtml(order.courier)}<br>
+              Tracking / Slot: ${escapeHtml(order.trackingNum)} (6:00 AM – 7:00 AM)<br>
+              Payment: ${escapeHtml(order.paymentMethod)}
+            </div>
+          </div>
+
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th style="width: 40px; text-align: center;">#</th>
+                <th>Item Description</th>
+                <th style="width: 60px; text-align: center;">Qty</th>
+                <th style="width: 100px; text-align: right;">Unit Price</th>
+                <th style="width: 110px; text-align: right;">Total (INR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsRows}
+            </tbody>
+          </table>
+
+          <div class="totals-wrap">
+            <table class="totals-table">
+              <tr>
+                <td style="color: #64748b;">Subtotal</td>
+                <td style="text-align: right; font-weight: 600;">₹${order.subtotal.toLocaleString('en-IN')}</td>
+              </tr>
+              <tr>
+                <td style="color: #64748b;">Delivery Fee</td>
+                <td style="text-align: right; font-weight: 600;">₹${order.deliveryFee || 50}</td>
+              </tr>
+              <tr>
+                <td style="color: #64748b; font-size: 11px;">GST (Included in price)</td>
+                <td style="text-align: right; font-size: 11px; color: #64748b;">Included</td>
+              </tr>
+              <tr class="grand-total">
+                <td>Grand Total Paid</td>
+                <td style="text-align: right;">₹${order.total.toLocaleString('en-IN')}</td>
+              </tr>
+            </table>
+          </div>
+
+          <div class="footer-note">
+            This is a computer-generated tax invoice issued by Milvanta Foods Pvt Ltd.<br>
+            All milk deliveries are dispatched unadulterated directly from ethical partner farms in temperature-controlled cold chain.<br>
+            Thank you for choosing farm-fresh pure nutrition!
+          </div>
+        </div>
+        <script>
+          window.onload = function() {
+            setTimeout(function() { window.print(); }, 400);
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    printWindow.document.open();
+    printWindow.document.write(invoiceHtml);
+    printWindow.document.close();
+  }
+
+  // Context-aware Renew / Extend Subscription Plan Handler
+  function triggerRenewSubscription(order) {
+    if (!order) return;
+    switchTab('subscription');
+    showToast('Viewing your subscription plan! Choose your duration or renewal options below.');
+    setTimeout(() => {
+      const subCard = document.querySelector('[data-sub-id]');
+      if (subCard) {
+        subCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        subCard.style.transition = 'box-shadow 0.3s ease';
+        subCard.style.boxShadow = '0 0 0 3px #047857';
+        setTimeout(() => { subCard.style.boxShadow = ''; }, 2000);
+      } else {
+        document.getElementById('btnOpenCreateSubModal')?.click();
+      }
+    }, 350);
   }
 
   // One-click Re-order handler
