@@ -798,6 +798,57 @@
       </div>
     </div>
 
+    <!-- Modal: Doorstep Drop Instruction Selector -->
+    <div class="modal-overlay hidden" id="doorstepInstructionModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="doorstepModalTitle" style="max-width: 480px;">
+        <button type="button" class="modal-close" id="closeDoorstepModal" aria-label="Close drop instruction modal">×</button>
+        <p class="modal-kicker">EARLY MORNING DOORSTEP DELIVERY</p>
+        <h2 id="doorstepModalTitle" style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 6px;">🛵 Rider Drop Instruction</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 16px;">Our delivery partners arrive between <strong>6:00 AM – 7:00 AM</strong>. Choose your drop preference so you won't be disturbed.</p>
+        
+        <form id="doorstepInstructionForm" style="display: grid; gap: 10px;">
+          <label class="drop-option-label" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 12px; cursor: pointer; background: #ffffff;">
+            <input type="radio" name="dropInstructionOption" value="silent" style="margin-top: 3px;" />
+            <div>
+              <strong style="color: #0f172a; font-size: 0.9rem; display: block;">🤫 Silent Drop (Do Not Ring Doorbell)</strong>
+              <span style="font-size: 0.78rem; color: #64748b;">Rider places fresh chilled bottle outside your doorstep silently. Ideal for quiet mornings.</span>
+            </div>
+          </label>
+
+          <label class="drop-option-label" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 12px; cursor: pointer; background: #ffffff;">
+            <input type="radio" name="dropInstructionOption" value="ring_once" style="margin-top: 3px;" />
+            <div>
+              <strong style="color: #0f172a; font-size: 0.9rem; display: block;">🔔 Ring Doorbell Once</strong>
+              <span style="font-size: 0.78rem; color: #64748b;">Rider rings doorbell gently once upon leaving the milk crate outside your door.</span>
+            </div>
+          </label>
+
+          <label class="drop-option-label" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 12px; cursor: pointer; background: #ffffff;">
+            <input type="radio" name="dropInstructionOption" value="door_bag" style="margin-top: 3px;" />
+            <div>
+              <strong style="color: #0f172a; font-size: 0.9rem; display: block;">🧺 Leave in Milk Bag / Basket at Door</strong>
+              <span style="font-size: 0.78rem; color: #64748b;">Rider drops the bottle inside your hanging door pouch or milk bag without ringing.</span>
+            </div>
+          </label>
+
+          <label class="drop-option-label" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border: 1.5px solid #cbd5e1; border-radius: 12px; cursor: pointer; background: #ffffff;">
+            <input type="radio" name="dropInstructionOption" value="call_arrival" style="margin-top: 3px;" />
+            <div>
+              <strong style="color: #0f172a; font-size: 0.9rem; display: block;">📞 Call on Arrival</strong>
+              <span style="font-size: 0.78rem; color: #64748b;">Rider calls your registered mobile number as soon as they reach your building/gate.</span>
+            </div>
+          </label>
+
+          <div style="display: flex; gap: 10px; margin-top: 6px;">
+            <button class="primary-cart" type="submit" style="flex: 1.5; justify-content: center; border: none; cursor: pointer; padding: 12px; font-weight: 700;">
+              Save Drop Preference
+            </button>
+            <button type="button" class="btn-sub-pause" id="btnCancelDoorstep" style="flex: 1; justify-content: center;">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Modal 4: Pincode Checker Modal -->
     <div class="modal-overlay hidden" id="pincodeModal" aria-hidden="true">
       <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="pincodeTitle">

@@ -863,6 +863,9 @@
       localStorage.setItem('milvanta-addresses', JSON.stringify(loadedAddresses));
     } catch {}
     renderAddresses();
+    if (state.subscriptions && state.subscriptions.length > 0) {
+      renderSubscriptions();
+    }
   }
 
   function formatAddressRow(row) {
@@ -1057,6 +1060,26 @@
       return;
     }
 
+    let addressesList = state.addresses;
+    if (!addressesList || addressesList.length === 0) {
+      try {
+        addressesList = JSON.parse(localStorage.getItem('milvanta-addresses') || '[]');
+      } catch {}
+    }
+    const defaultAddr = (Array.isArray(addressesList) && addressesList.find((a) => a.isDefault)) || (Array.isArray(addressesList) && addressesList[0]);
+    const activeDeliveryAddress = defaultAddr
+      ? `${defaultAddr.house ? defaultAddr.house + ', ' : ''}${defaultAddr.building ? defaultAddr.building + ', ' : ''}${defaultAddr.street ? defaultAddr.street + ', ' : ''}${defaultAddr.city || 'Hyderabad'} - ${defaultAddr.pincode || '500049'}`
+      : (localStorage.getItem('milvanta-area') ? `${localStorage.getItem('milvanta-area')}, Hyderabad - ${localStorage.getItem('milvanta-pincode') || '500049'}` : 'Hafeezpet, Hyderabad - 500049');
+
+    const DROP_INSTRUCTIONS = {
+      silent: '🤫 Silent Drop (Do Not Ring Doorbell)',
+      ring_once: '🔔 Ring Doorbell Once',
+      door_bag: '🧺 Leave in Milk Bag / Basket at Door',
+      call_arrival: '📞 Call on Arrival'
+    };
+    const dropKey = localStorage.getItem('milvanta-drop-instruction') || 'silent';
+    const dropLabel = DROP_INSTRUCTIONS[dropKey] || DROP_INSTRUCTIONS.silent;
+
     container.innerHTML = state.subscriptions.map((sub) => {
       const isBuffalo = (sub.product || '').toLowerCase().includes('buffalo');
       const is1L = (sub.quantity || sub.product || '').toLowerCase().includes('1');
@@ -1143,6 +1166,20 @@
               </div>
             ` : ''}
             <div class="sub-detail-row">
+              <span class="sub-detail-label">Morning Delivery Address</span>
+              <span class="sub-detail-val" style="color: #0f172a; font-weight: 600; text-align: right;">
+                📍 ${escapeHtml(activeDeliveryAddress)}
+                <button type="button" class="sub-addr-change-btn" data-switch-to-addresses="true" style="margin-left: 6px; color: #0284c7; background: none; border: none; font-size: 0.78rem; font-weight: 700; cursor: pointer; text-decoration: underline;">Change</button>
+              </span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Rider Drop Preference</span>
+              <span class="sub-detail-val" style="display: flex; align-items: center; gap: 6px; justify-content: flex-end;">
+                <span id="currentDropInstructionLabel-${sub.id}" style="color: #0a3d66; font-weight: 700; font-size: 0.82rem;">${dropLabel}</span>
+                <button type="button" class="sub-instruction-change-btn" data-change-drop-instruction="true" style="color: #0284c7; background: none; border: none; font-size: 0.78rem; font-weight: 700; cursor: pointer; text-decoration: underline;">Change</button>
+              </span>
+            </div>
+            <div class="sub-detail-row">
               <span class="sub-detail-label">Status</span>
               <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
                 ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
@@ -1163,11 +1200,31 @@
                 🌱 Milk deliveries arrive every morning between 6:00 AM – 7:00 AM through 31 Oct 2026.
               </div>
             </div>
+            ${customDaysCount <= 3 ? `
+              <div class="sub-low-balance-alert">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 1.3rem;">⚠️</span>
+                  <div>
+                    <strong style="color: #9a3412; font-size: 0.84rem; display: block;">Plan Ending Soon (${customDaysCount} Mornings Left)</strong>
+                    <span style="color: #c2410c; font-size: 0.76rem;">Renew your custom plan now to avoid morning milk delivery interruption.</span>
+                  </div>
+                </div>
+                <button type="button" class="btn-renew-sub" data-quick-extend="${sub.id}" style="padding: 7px 14px; font-size: 0.8rem; background: #ea580c; border-color: #ea580c; cursor: pointer;">
+                  <span>Extend Plan Now →</span>
+                </button>
+              </div>
+            ` : ''}
           ` : `
             <div style="margin-top: 10px; padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 0.78rem; color: #0369a1; font-weight: 600;">
               🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
             </div>
           `}
+
+          <!-- Eco-friendly Glass Bottle Return Reminder -->
+          <div class="sub-bottle-return-pill">
+            <span style="font-size: 1.15rem;">♻️</span>
+            <span><strong>Bottle Return Reminder:</strong> Please rinse and place yesterday's empty glass bottle outside your doorstep before 6:00 AM for morning collection.</span>
+          </div>
         </div>
 
         <div class="subscription-actions-row" style="flex-wrap: wrap; margin-top: 14px;">
@@ -1888,6 +1945,23 @@
     // Vacation Pause Modal Setup
     setupVacationPauseModal();
 
+    // Doorstep Instruction Modal Setup
+    setupDoorstepInstructionModal();
+
+    // Global listener for switching to addresses or extending from subscription card
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('[data-switch-to-addresses]')) {
+        switchTab('addresses');
+        $('#tabPanel-addresses')?.scrollIntoView({ behavior: 'smooth' });
+        showToast('Choose your default morning delivery address or add a new one.');
+        return;
+      }
+
+      if (e.target.closest('[data-quick-extend]')) {
+        document.getElementById('btnOpenCreateSubModal')?.click();
+      }
+    });
+
     // Policy Links
     $$('.policy-btn').forEach((btn) => {
       btn.addEventListener('click', () => openPolicyModal(btn.dataset.policy));
@@ -2095,10 +2169,18 @@
       return { dailyRate, oneTimeRate, days, totalAmount, savings, planLabel, startFormatted, endFormatted };
     }
 
-    openBtn?.addEventListener('click', () => {
+    function openSubModal() {
       populateProfileMonths();
       calculateProfileRates();
       modal.classList.remove('hidden');
+    }
+
+    openBtn?.addEventListener('click', openSubModal);
+
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('[data-quick-extend]')) {
+        openSubModal();
+      }
     });
 
     const closeModal = () => modal.classList.add('hidden');
@@ -2511,6 +2593,68 @@
         closeModal();
         renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
         showToast('✓ All paused dates cleared. Morning deliveries will arrive every day as scheduled!');
+      }
+    });
+  }
+
+  // Early Morning Doorstep Drop Instructions Modal Setup
+  function setupDoorstepInstructionModal() {
+    const modal = $('#doorstepInstructionModal');
+    const closeBtn = $('#closeDoorstepModal');
+    const cancelBtn = $('#btnCancelDoorstep');
+    const form = $('#doorstepInstructionForm');
+    if (!modal) return;
+
+    function openModal() {
+      const current = localStorage.getItem('milvanta-drop-instruction') || 'silent';
+      const radios = form?.querySelectorAll('input[name="dropInstructionOption"]');
+      radios?.forEach((r) => {
+        r.checked = (r.value === current);
+        r.closest('.drop-option-label')?.classList.toggle('active', r.checked);
+      });
+      modal.classList.remove('hidden');
+    }
+
+    function closeModal() {
+      modal.classList.add('hidden');
+    }
+
+    closeBtn?.addEventListener('click', closeModal);
+    cancelBtn?.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+      if (e.target.id === 'doorstepInstructionModal') closeModal();
+    });
+
+    form?.querySelectorAll('.drop-option-label').forEach((label) => {
+      label.addEventListener('click', () => {
+        form.querySelectorAll('.drop-option-label').forEach((l) => l.classList.remove('active'));
+        label.classList.add('active');
+        const radio = label.querySelector('input[type="radio"]');
+        if (radio) radio.checked = true;
+      });
+    });
+
+    form?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const selected = form.querySelector('input[name="dropInstructionOption"]:checked')?.value || 'silent';
+      localStorage.setItem('milvanta-drop-instruction', selected);
+      closeModal();
+      renderSubscriptions();
+
+      const DROP_INSTRUCTIONS = {
+        silent: '🤫 Silent Drop (Do Not Ring Doorbell)',
+        ring_once: '🔔 Ring Doorbell Once',
+        door_bag: '🧺 Leave in Milk Bag / Basket at Door',
+        call_arrival: '📞 Call on Arrival'
+      };
+      const label = DROP_INSTRUCTIONS[selected] || 'Updated';
+      showToast(`Rider drop preference saved: ${label}! Applied for tomorrow morning.`);
+    });
+
+    // Wire global trigger for change buttons
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('[data-change-drop-instruction]')) {
+        openModal();
       }
     });
   }
