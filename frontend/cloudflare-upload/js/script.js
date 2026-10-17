@@ -24,7 +24,7 @@ let products = [
     isVeg: true,
     rating: 4.9,
     reviewsCount: 312,
-    badge: 'Daily Essential',
+    badge: 'Subscription Available',
     variants: [
       { size: '500 ml', price: 60 },
       { size: '1 Litre', price: 110 }
@@ -45,7 +45,7 @@ let products = [
     isVeg: true,
     rating: 4.9,
     reviewsCount: 240,
-    badge: 'Farm Fresh',
+    badge: 'Subscription Available',
     variants: [
       { size: '500 ml', price: 70 },
       { size: '1 Litre', price: 130 }
@@ -1162,7 +1162,7 @@ async function loadCatalog() {
         isVeg: existing.isVeg !== undefined ? existing.isVeg : true,
         rating: existing.rating || 4.8,
         reviewsCount: existing.reviewsCount || 80,
-        badge: existing.badge || (product.category === 'Fresh Milk' ? 'Farm Fresh' : 'Artisanal'),
+        badge: (product.category === 'Fresh Milk' || pName.includes('milk')) ? 'Subscription Available' : (existing.badge || 'Artisanal'),
         details: existing.details || ''
       };
     });
@@ -1257,7 +1257,12 @@ function renderCategories() {
       ? `<span class="category-thumb"><img src="${category.image}" alt="${category.name}"></span>`
       : `<span class="category-thumb" style="background:#edf4fa;color:#0a3d66;font-weight:700;font-size:1.1rem;">✦</span>`;
 
-    button.innerHTML = `${thumbMarkup}<span>${category.label || category.name}</span>`;
+    const isMilkCategory = category.name === 'Fresh Milk' || (category.label && category.label.includes('Milk'));
+    const badgeMarkup = isMilkCategory
+      ? `<span class="category-card-badge">Subscription Available</span>`
+      : '';
+
+    button.innerHTML = `${badgeMarkup}${thumbMarkup}<span>${category.label || category.name}</span>`;
     button.addEventListener('click', () => {
       state.selectedCategory = category.name;
       if (category.name === 'All') {
@@ -1639,9 +1644,13 @@ function renderCatalog() {
       </span>
     `).join('');
 
+    const isMilkProduct = p.category === 'Fresh Milk' || (p.name && p.name.toLowerCase().includes('milk'));
+    const displayBadge = isMilkProduct ? 'Subscription Available' : p.badge;
+    const badgeClass = isMilkProduct ? 'product-card-badge sub-badge' : 'product-card-badge';
+
     card.innerHTML = `
       <div class="product-image">
-        ${p.badge ? `<span class="product-card-badge">${escapeHtml(p.badge)}</span>` : ''}
+        ${displayBadge ? `<span class="${badgeClass}">${escapeHtml(displayBadge)}</span>` : ''}
         <span class="fssai-indicator ${dietClass}" title="${dietTitle}"></span>
         <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" decoding="async" loading="lazy"${p.imagePosition ? ` style="object-position: ${p.imagePosition};"` : ''}>
       </div>

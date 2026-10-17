@@ -341,3 +341,4 @@ function startStaticServer(port = 8088) {
     if (server) server.close();
   }
 })();
+

@@ -11,3 +11,4 @@ CREATE TABLE IF NOT EXISTS password_reset_codes (
 
 CREATE INDEX IF NOT EXISTS password_reset_codes_expiry_idx
   ON password_reset_codes (expires_at);
+
