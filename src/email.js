@@ -987,4 +987,94 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
   return { success: true, results };
 }
 
+/**
+ * Build branded HTML email for Password Reset OTP
+ */
+export function buildPasswordResetEmail({ customerName, otp }) {
+  const safeName = escapeHtml(customerName || 'Valued Customer');
+  const safeOtp = escapeHtml(otp);
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset OTP - Milvanta</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; -webkit-font-smoothing: antialiased;">
+  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #f8fafc; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width: 540px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;">
+          <!-- Brand Header -->
+          <tr>
+            <td style="background-color: #0a3d66; padding: 32px 28px; text-align: center;">
+              <span style="font-size: 13px; font-weight: 700; letter-spacing: 3px; color: #93c5fd; text-transform: uppercase; display: block; margin-bottom: 6px;">MILVANTA FARM DIRECT</span>
+              <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Account Security</h1>
+            </td>
+          </tr>
+
+          <!-- Main Body -->
+          <tr>
+            <td style="padding: 32px 28px;">
+              <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0a3d66;">Hello ${safeName},</p>
+              <p style="margin: 0 0 20px; font-size: 15px; color: #475569; line-height: 1.6;">
+                We received a request to reset the password for your Milvanta account. Please use the 6-digit One-Time Password (OTP) below to verify your identity and set a new password:
+              </p>
+
+              <!-- OTP Highlight Box -->
+              <div style="background-color: #f0f7ff; border: 2px dashed #0284c7; border-radius: 12px; padding: 22px 20px; text-align: center; margin: 26px 0;">
+                <span style="font-size: 12px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 1.5px; display: block; margin-bottom: 8px;">Your One-Time Password (OTP)</span>
+                <span style="font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #0a3d66; display: inline-block;">${safeOtp}</span>
+              </div>
+
+              <!-- Expiry & Security Notice -->
+              <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 10px; padding: 14px 16px; margin-bottom: 24px;">
+                <p style="margin: 0; font-size: 13px; color: #92400e; line-height: 1.5;">
+                  <strong>⏱️ Valid for 10 minutes:</strong> This code can only be used once. For your protection, never share this code with anyone.
+                </p>
+              </div>
+
+              <p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">
+                If you did not request a password reset, you can safely ignore this email. Your existing password remains secure and will not be changed.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f8fafc; padding: 24px 28px; border-top: 1px solid #e2e8f0; text-align: center;">
+              <p style="margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #0a3d66;">Milvanta Customer Care</p>
+              <p style="margin: 0; font-size: 12px; color: #94a3b8;">Fresh Farm-Direct Dairy & Artisanal Essentials · Hyderabad</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
+
+/**
+ * Send password reset email with OTP to customer
+ */
+export async function sendPasswordResetEmail({ to, customerName, otp }) {
+  const subject = `Your Milvanta Password Reset OTP: ${otp}`;
+  const html = buildPasswordResetEmail({ customerName, otp });
+  const text = `Hello ${customerName || 'Valued Customer'},\n\nYour Milvanta password reset OTP is: ${otp}\n\nThis OTP is valid for 10 minutes. If you did not request this, please ignore this email.\n\nTeam Milvanta`;
+
+  const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+  return sendEmail({
+    to,
+    subject,
+    html,
+    text,
+    from: sender
+  });
+}
+
+
 

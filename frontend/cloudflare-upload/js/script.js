@@ -1035,6 +1035,7 @@ function showStoreToast(msg, linkUrl) {
     toast.style.transform = 'translateX(-50%) translateY(100px)';
   }, 6000);
 }
+window.showToast = showStoreToast;
 
 // Policy contents for compliance modals
 const POLICIES = {
@@ -2145,10 +2146,68 @@ window.setCartOpen = setCartOpen;
 window.openProductModal = openProductModal;
 window.state = state;
 
-// Account Authentication Modal
+// Account Authentication Modal & Forgot Password Flow
+let forgotState = {
+  email: '',
+  resetToken: ''
+};
+
+function setForgotStep(step) {
+  $('#accountMessage').textContent = '';
+  $('#forgotStepEmailForm')?.classList.toggle('hidden', step !== 'email');
+  $('#forgotStepOtpForm')?.classList.toggle('hidden', step !== 'otp');
+  $('#forgotStepResetForm')?.classList.toggle('hidden', step !== 'reset');
+
+  if (step === 'email') {
+    $('#accountTitle').textContent = 'Reset Your Password';
+    const emailInput = $('#forgotEmailInput');
+    const loginEmail = $('#accountForm input[name="email"]')?.value?.trim();
+    if (emailInput && loginEmail && !emailInput.value) {
+      emailInput.value = loginEmail;
+    }
+    setTimeout(() => emailInput?.focus(), 50);
+  } else if (step === 'otp') {
+    $('#accountTitle').textContent = 'Enter Verification Code';
+    if ($('#forgotOtpDesc')) {
+      const emailDisplay = forgotState.email ? `<strong>${escapeHtml(forgotState.email)}</strong>` : 'your registered email';
+      $('#forgotOtpDesc').innerHTML = `Enter the 6-digit verification OTP sent to ${emailDisplay}.`;
+    }
+    const otpInput = $('#forgotOtpInput');
+    if (otpInput) {
+      otpInput.value = '';
+      setTimeout(() => otpInput.focus(), 50);
+    }
+  } else if (step === 'reset') {
+    $('#accountTitle').textContent = 'Create New Password';
+    const newPass = $('#forgotNewPassword');
+    const confPass = $('#forgotConfirmPassword');
+    if (newPass) newPass.value = '';
+    if (confPass) confPass.value = '';
+    setTimeout(() => newPass?.focus(), 50);
+  }
+}
+
 function setAccountMode(mode) {
   state.accountMode = mode;
   const registering = mode === 'register';
+  const isForgot = mode === 'forgot';
+
+  if (isForgot) {
+    $('#accountTitle').textContent = 'Reset Your Password';
+    $('#accountForm')?.classList.add('hidden');
+    $('#accountSwitch')?.classList.add('hidden');
+    $('#forgotPasswordContainer')?.classList.remove('hidden');
+    setForgotStep('email');
+    $('#accountMessage').textContent = '';
+    return;
+  }
+
+  // Normal Sign-In or Register
+  $('#forgotPasswordContainer')?.classList.add('hidden');
+  $('#accountForm')?.classList.remove('hidden');
+  $('#accountSwitch')?.classList.remove('hidden');
+  $('#forgotPasswordLinkWrap')?.classList.toggle('hidden', registering);
+
   $('#accountTitle').textContent = registering ? 'Create your account' : 'Sign in to your account';
   $('#accountSubmit').textContent = registering ? 'Create Account' : 'Sign In';
   $('#accountSwitch').textContent = registering ? 'Already have an account? Sign in' : 'New to Milvanta? Create an account';
@@ -2170,6 +2229,7 @@ function openAccount() {
   $('#accountModal')?.setAttribute('aria-hidden', 'false');
   $('#accountForm')?.classList.toggle('hidden', Boolean(state.customer));
   $('#accountSwitch')?.classList.toggle('hidden', Boolean(state.customer));
+  $('#forgotPasswordContainer')?.classList.add('hidden');
   $('#accountProfile')?.classList.toggle('hidden', !state.customer);
 
   if (state.customer) {
@@ -2178,7 +2238,7 @@ function openAccount() {
     $('#tabAdminBtn')?.classList.toggle('hidden', !Boolean(state.customer.is_admin));
     switchAccountTab(state.accountTab || 'orders');
   } else {
-    setAccountMode(state.accountMode);
+    setAccountMode(state.accountMode || 'login');
   }
 }
 
@@ -2779,6 +2839,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#accountToggle')?.addEventListener('click', toggleAccountMenu);
   $('#accountClose')?.addEventListener('click', closeAccount);
   $('#accountSwitch')?.addEventListener('click', () => setAccountMode(state.accountMode === 'login' ? 'register' : 'login'));
+  $('#btnForgotPassword')?.addEventListener('click', () => setAccountMode('forgot'));
+  $('#btnBackToSignIn')?.addEventListener('click', () => setAccountMode('login'));
   $('#tabProfileBtn')?.addEventListener('click', () => switchAccountTab('profile'));
 
   // User Dropdown Item Actions
@@ -3506,6 +3568,145 @@ document.addEventListener('DOMContentLoaded', () => {
       $('#accountMessage').textContent = err.message;
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  // Forgot Password: Step 1 - Send OTP
+  $('#forgotStepEmailForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#btnSendForgotOtp');
+    const email = $('#forgotEmailInput')?.value?.trim().toLowerCase();
+    if (!email) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Generating OTP…';
+    $('#accountMessage').textContent = '';
+
+    try {
+      const res = await apiRequest('/api/v1/auth/forgot-password/send-otp', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+      });
+      forgotState.email = email;
+      setForgotStep('otp');
+      $('#accountMessage').textContent = res.message || 'OTP sent! Please check your registered email.';
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Generate OTP';
+    }
+  });
+
+  // Forgot Password: Step 2 - Resend OTP
+  $('#btnResendForgotOtp')?.addEventListener('click', async () => {
+    if (!forgotState.email) return;
+    const resendBtn = $('#btnResendForgotOtp');
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Sending…';
+    $('#accountMessage').textContent = '';
+
+    try {
+      const res = await apiRequest('/api/v1/auth/forgot-password/send-otp', {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotState.email })
+      });
+      $('#accountMessage').textContent = res.message || 'A fresh OTP has been sent to your email!';
+      showStoreToast('New OTP sent to your registered email.');
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    } finally {
+      setTimeout(() => {
+        if (resendBtn) {
+          resendBtn.disabled = false;
+          resendBtn.textContent = 'Resend OTP';
+        }
+      }, 5000);
+    }
+  });
+
+  // Forgot Password: Step 2 - Verify OTP
+  $('#forgotStepOtpForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#btnVerifyForgotOtp');
+    const otp = $('#forgotOtpInput')?.value?.trim();
+    if (!otp || otp.length !== 6) {
+      $('#accountMessage').textContent = 'Please enter a valid 6-digit verification code.';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Verifying OTP…';
+    $('#accountMessage').textContent = '';
+
+    try {
+      const res = await apiRequest('/api/v1/auth/forgot-password/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ email: forgotState.email, otp })
+      });
+      forgotState.resetToken = res.resetToken;
+      setForgotStep('reset');
+      $('#accountMessage').textContent = 'OTP verified! Now create your new password.';
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Verify OTP';
+    }
+  });
+
+  // Forgot Password: Step 3 - Set New Password & Re-enter Password -> Back to Sign-in
+  $('#forgotStepResetForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#btnSubmitNewPassword');
+    const newPassword = $('#forgotNewPassword')?.value;
+    const confirmPassword = $('#forgotConfirmPassword')?.value;
+
+    if (!newPassword || newPassword.length < 8) {
+      $('#accountMessage').textContent = 'Password must be at least 8 characters long.';
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      $('#accountMessage').textContent = 'Passwords do not match. Please re-enter identical passwords.';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Resetting Password…';
+    $('#accountMessage').textContent = '';
+
+    try {
+      const res = await apiRequest('/api/v1/auth/forgot-password/reset', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: forgotState.email,
+          resetToken: forgotState.resetToken,
+          newPassword
+        })
+      });
+
+      const savedEmail = forgotState.email;
+      forgotState = { email: '', resetToken: '' };
+
+      // Return back to sign-in
+      setAccountMode('login');
+
+      // Pre-fill email and clear/focus password field
+      const emailField = $('#accountForm input[name="email"]');
+      if (emailField) emailField.value = savedEmail;
+      const passField = $('#accountPassword');
+      if (passField) {
+        passField.value = '';
+        passField.focus();
+      }
+
+      $('#accountMessage').textContent = '✅ ' + (res.message || 'Password reset successfully! Please sign in with your new password.');
+      showStoreToast('Password reset successfully! Please sign in.');
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Reset Password';
     }
   });
 

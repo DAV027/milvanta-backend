@@ -637,10 +637,52 @@
           <label>Email address<input name="email" type="email" autocomplete="email" required maxlength="254" /></label>
           <label class="signup-field hidden">Phone number (optional)<input name="phone" type="tel" autocomplete="tel-national" inputmode="numeric" pattern="[6-9][0-9]{9}" maxlength="10" placeholder="10-digit mobile number" /></label>
           <label>Password<input name="password" id="accountPassword" type="password" autocomplete="current-password" minlength="8" maxlength="128" required /></label>
+          <div class="forgot-password-link-wrap" id="forgotPasswordLinkWrap">
+            <button type="button" class="btn-forgot-password" id="btnForgotPassword">Forgot Password?</button>
+          </div>
           <label class="signup-field hidden">Confirm password<input name="confirmPassword" id="accountConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" /></label>
           <button class="primary-cart" id="accountSubmit" type="submit">Sign in</button>
         </form>
         <button class="account-switch" id="accountSwitch" type="button">Create an account</button>
+
+        <!-- Forgot Password Flow Container -->
+        <div id="forgotPasswordContainer" class="forgot-password-box hidden">
+          <!-- Step 1: Enter Registered Email to Generate OTP -->
+          <form id="forgotStepEmailForm" class="account-form">
+            <p class="forgot-step-desc">Enter your registered email address and we'll send a 6-digit OTP to reset your password.</p>
+            <label>Registered Email Address
+              <input type="email" id="forgotEmailInput" name="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" />
+            </label>
+            <button class="primary-cart" id="btnSendForgotOtp" type="submit">Generate OTP</button>
+          </form>
+
+          <!-- Step 2: Enter 6-digit OTP -->
+          <form id="forgotStepOtpForm" class="account-form hidden">
+            <p class="forgot-step-desc" id="forgotOtpDesc">Enter the 6-digit verification OTP sent to your registered email.</p>
+            <label>6-Digit Verification Code (OTP)
+              <input type="text" id="forgotOtpInput" name="otp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="• • • • • •" style="font-size: 1.25rem; letter-spacing: 6px; text-align: center; font-weight: 700; font-family: monospace;" />
+            </label>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin: -2px 0 10px;">
+              <span id="forgotOtpTimer" style="font-size: 0.78rem; color: var(--text-muted);">Valid for 10 minutes</span>
+              <button type="button" id="btnResendForgotOtp" class="btn-text-action" style="font-size: 0.8rem; background: none; border: none; color: var(--primary); font-weight: 600; cursor: pointer; text-decoration: underline;">Resend OTP</button>
+            </div>
+            <button class="primary-cart" id="btnVerifyForgotOtp" type="submit">Verify OTP</button>
+          </form>
+
+          <!-- Step 3: Set New Password & Re-enter Password -->
+          <form id="forgotStepResetForm" class="account-form hidden">
+            <p class="forgot-step-desc">Create a strong new password for your Milvanta account.</p>
+            <label>New Password
+              <input type="password" id="forgotNewPassword" name="newPassword" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="Minimum 8 characters" />
+            </label>
+            <label>Re-enter Password
+              <input type="password" id="forgotConfirmPassword" name="confirmPassword" autocomplete="new-password" minlength="8" maxlength="128" required placeholder="Re-enter your new password" />
+            </label>
+            <button class="primary-cart" id="btnSubmitNewPassword" type="submit">Reset Password</button>
+          </form>
+
+          <button class="account-switch" id="btnBackToSignIn" type="button" style="margin-top: 14px;">← Back to Sign In</button>
+        </div>
 
         <section id="accountProfile" class="hidden">
           <p id="accountGreeting" style="font-weight: 600; color: var(--primary); margin-bottom: 8px;"></p>

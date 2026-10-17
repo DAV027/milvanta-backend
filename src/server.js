@@ -12,7 +12,7 @@ import Razorpay from 'razorpay';
 import { runMigrations } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
-import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails } from './email.js';
+import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail } from './email.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -435,6 +435,195 @@ app.patch('/api/v1/auth/me', { preHandler: app.authenticate }, async (request, r
     [request.customer.id, fullName]
   );
   return { user: publicUser(rows[0]), customer: publicUser(rows[0]) };
+});
+
+// ---------- Forgot Password Flow (Send OTP -> Verify OTP -> Reset Password) ----------
+app.post('/api/v1/auth/forgot-password/send-otp', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['email'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const email = request.body.email.trim().toLowerCase();
+
+  // Verify that customer exists
+  const { rows } = await pool.query(
+    'SELECT id, full_name, email FROM customers WHERE LOWER(email) = $1',
+    [email]
+  );
+  const customer = rows[0];
+  if (!customer) {
+    return reply.code(404).send({
+      error: 'email_not_registered',
+      message: 'No registered Milvanta account found with this email address.'
+    });
+  }
+
+  // Check rate limit on OTP generation (at least 30s resend buffer)
+  const existingRes = await pool.query(
+    'SELECT resend_after FROM password_reset_codes WHERE email = $1',
+    [email]
+  );
+  if (existingRes.rows.length > 0 && new Date(existingRes.rows[0].resend_after) > new Date()) {
+    const waitSec = Math.ceil((new Date(existingRes.rows[0].resend_after) - new Date()) / 1000);
+    return reply.code(429).send({
+      error: 'resend_throttled',
+      message: `Please wait ${waitSec} seconds before requesting another OTP.`
+    });
+  }
+
+  // Generate 6-digit cryptographic OTP
+  const otp = String(crypto.randomInt(100000, 999999));
+  const otpHash = crypto.createHash('sha256').update(otp + email).digest('hex');
+
+  await pool.query(`
+    INSERT INTO password_reset_codes (email, otp_hash, reset_token, expires_at, resend_after, attempts, created_at)
+    VALUES ($1, $2, NULL, NOW() + INTERVAL '10 minutes', NOW() + INTERVAL '30 seconds', 0, NOW())
+    ON CONFLICT (email) DO UPDATE
+    SET otp_hash = EXCLUDED.otp_hash,
+        reset_token = NULL,
+        expires_at = EXCLUDED.expires_at,
+        resend_after = EXCLUDED.resend_after,
+        attempts = 0,
+        created_at = NOW()
+  `, [email, otpHash]);
+
+  // Dispatch live email & log for audit/dev
+  console.log(`[Password Reset] Generated OTP for ${email}: ${otp}`);
+  sendPasswordResetEmail({
+    to: customer.email,
+    customerName: customer.full_name,
+    otp
+  }).catch((err) => request.log.error({ err }, 'Failed to deliver password reset email'));
+
+  return {
+    success: true,
+    message: 'A 6-digit verification OTP has been sent to your registered email address.'
+  };
+});
+
+app.post('/api/v1/auth/forgot-password/verify-otp', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['email', 'otp'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 },
+        otp: { type: 'string', minLength: 6, maxLength: 6 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const email = request.body.email.trim().toLowerCase();
+  const otp = request.body.otp.trim();
+
+  const { rows } = await pool.query(
+    'SELECT otp_hash, expires_at, attempts FROM password_reset_codes WHERE email = $1',
+    [email]
+  );
+  const record = rows[0];
+
+  if (!record || new Date(record.expires_at) < new Date()) {
+    return reply.code(400).send({
+      error: 'otp_expired',
+      message: 'This OTP has expired or is invalid. Please request a new OTP.'
+    });
+  }
+
+  if (record.attempts >= 5) {
+    return reply.code(429).send({
+      error: 'too_many_attempts',
+      message: 'Too many incorrect attempts. Please request a new OTP.'
+    });
+  }
+
+  const candidateHash = crypto.createHash('sha256').update(otp + email).digest('hex');
+  if (candidateHash !== record.otp_hash) {
+    await pool.query('UPDATE password_reset_codes SET attempts = attempts + 1 WHERE email = $1', [email]);
+    return reply.code(400).send({
+      error: 'invalid_otp',
+      message: 'Incorrect OTP. Please enter the valid 6-digit code sent to your email.'
+    });
+  }
+
+  // OTP verified! Generate single-use reset token valid for 15 minutes
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  await pool.query(
+    `UPDATE password_reset_codes SET reset_token = $1, expires_at = NOW() + INTERVAL '15 minutes' WHERE email = $2`,
+    [resetToken, email]
+  );
+
+  return {
+    success: true,
+    resetToken,
+    message: 'OTP verified successfully. You may now create your new password.'
+  };
+});
+
+app.post('/api/v1/auth/forgot-password/reset', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['email', 'resetToken', 'newPassword'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 },
+        resetToken: { type: 'string', minLength: 32, maxLength: 128 },
+        newPassword: { type: 'string', minLength: 8, maxLength: 128 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const email = request.body.email.trim().toLowerCase();
+  const { resetToken, newPassword } = request.body;
+
+  // Validate reset token
+  const { rows } = await pool.query(
+    'SELECT email, expires_at FROM password_reset_codes WHERE email = $1 AND reset_token = $2 AND expires_at >= NOW()',
+    [email, resetToken]
+  );
+  if (rows.length === 0) {
+    return reply.code(400).send({
+      error: 'invalid_or_expired_token',
+      message: 'Password reset session has expired or is invalid. Please restart the forgot password process.'
+    });
+  }
+
+  // Hash new password using scrypt
+  const [passwordSalt, passwordDigest] = (await hashPassword(newPassword)).split(':');
+
+  // Update customer password
+  const updateRes = await pool.query(
+    'UPDATE customers SET password_salt = $1, password_hash = $2 WHERE LOWER(email) = $3 RETURNING id',
+    [passwordSalt, passwordDigest, email]
+  );
+  const customerId = updateRes.rows[0]?.id;
+
+  // Cleanup reset code
+  await pool.query('DELETE FROM password_reset_codes WHERE email = $1', [email]);
+
+  // Invalidate any active sessions for this customer
+  if (customerId) {
+    await pool.query('DELETE FROM customer_sessions WHERE customer_id = $1', [customerId]);
+  }
+
+  return {
+    success: true,
+    message: 'Password reset successfully! You can now sign in with your new password.'
+  };
 });
 
 app.get('/api/v1/products', async (_request, reply) => {
