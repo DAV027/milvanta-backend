@@ -3,3 +3,4 @@ ALTER TABLE customer_subscriptions ADD COLUMN IF NOT EXISTS plan_type TEXT DEFAU
 ALTER TABLE customer_subscriptions ADD COLUMN IF NOT EXISTS duration_label TEXT DEFAULT '';
 ALTER TABLE customer_subscriptions ADD COLUMN IF NOT EXISTS total_amount_paise INTEGER DEFAULT 0;
 ALTER TABLE customer_subscriptions ADD COLUMN IF NOT EXISTS notes JSONB DEFAULT '{}'::jsonb;
+

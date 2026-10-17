@@ -1185,12 +1185,24 @@
 
   // Display Order Success Screen
   function showOrderSuccess(orderNumber, isSubscription = false) {
-    const hasAnySub = isSubscription || state.cart.some((i) => i.isSubscriptionPlan || i.isCustomDaysPlan || i.isContinuousMonthsPlan || i.variant?.isSubscriptionPlan || i.variant?.isCustomDaysPlan || i.variant?.isContinuousMonthsPlan);
+    const continuousItem = state.cart.find((i) => i.isContinuousMonthsPlan || i.variant?.isContinuousMonthsPlan);
+    const customItem = state.cart.find((i) => i.isCustomDaysPlan || i.variant?.isCustomDaysPlan);
+    const hasContinuous = isSubscription || Boolean(continuousItem);
+    const hasCustom = Boolean(customItem);
+    const hasAnySub = hasContinuous || hasCustom || state.cart.some((i) => i.isSubscriptionPlan || i.variant?.isSubscriptionPlan);
+
+    const orderType = hasContinuous ? 'subscription_continuous' : (hasCustom ? 'subscription_custom' : 'regular');
+    const orderTypeLabel = hasContinuous 
+      ? 'Continuous Monthly Subscription Payment' 
+      : (hasCustom ? 'Custom Days Plan Payment' : 'Store Order');
+
     try {
       const { total, subtotal, deliveryFee } = getOrderFinancials();
       const existingOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
       const newOrderRecord = {
         order_number: orderNumber,
+        orderType: orderType,
+        orderTypeLabel: orderTypeLabel,
         items: state.cart.map((item) => {
           const prod = findProductInCatalog(item);
           const unitPrice = Number(item.variant?.price || item.price || prod.price || 0);
@@ -1204,7 +1216,9 @@
             qty: qty,
             unitPrice: unitPrice,
             price: unitPrice,
-            lineTotal: unitPrice * qty
+            lineTotal: unitPrice * qty,
+            isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.isContinuousMonthsPlan || item.variant?.isSubscriptionPlan || item.variant?.isContinuousMonthsPlan),
+            isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan)
           };
         }),
         address: state.addressDraft,
@@ -1216,7 +1230,9 @@
         total_paise: Math.round(total * 100),
         order_status: 'placed',
         payment_status: 'paid',
-        paymentMethod: isSubscription ? 'Paid via Subscription Autopay' : 'Paid Online via Razorpay',
+        paymentMethod: hasContinuous 
+          ? 'Paid via Subscription Autopay (Razorpay Recurring)' 
+          : (hasCustom ? 'Paid Online via Razorpay (One-Time Upfront)' : 'Paid Online via Razorpay'),
         courier_name: 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
         tracking_number: `MLV-${orderNumber}`,
         estimated_delivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM',

@@ -386,6 +386,79 @@
       }
     } catch {}
 
+    // 3. Integrate subscription payments into Order History so customer sees payments of both
+    try {
+      let subs = [];
+      try {
+        subs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+      } catch {}
+      if (!Array.isArray(subs) || subs.length === 0) {
+        subs = state.subscriptions || [];
+      }
+
+      subs.forEach((sub) => {
+        if (!sub || sub.status === 'cancelled') return;
+        const subId = String(sub.id || '');
+        const isCustom = sub.planType === 'custom' || (sub.durationLabel || '').toLowerCase().includes('custom');
+        const expectedOrderNum = sub.orderNumber || (isCustom ? `ORD-CUST-${subId.replace(/^sub-/, '')}` : `SUB-REC-${subId.replace(/^sub-/, '')}`);
+
+        // Check if an order already exists for this subscription
+        const alreadyExists = loadedOrders.some((o) =>
+          o.id === expectedOrderNum ||
+          o.id === subId ||
+          (o.items && o.items.some((it) => it.name === sub.product && (isCustom ? (it.isCustomDays || it.isCustomDaysPlan) : (it.isSubscription || it.isSubscriptionPlan))))
+        );
+
+        if (!alreadyExists) {
+          const isBuffalo = (sub.product || '').toLowerCase().includes('buffalo');
+          const is1L = (sub.quantity || sub.product || '').toLowerCase().includes('1');
+          const defaultDailyRate = isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55);
+          const rate = Number(sub.costPerDay || sub.dailyRate || defaultDailyRate);
+          const days = Number(sub.days || (isCustom ? 14 : 30));
+          const totalVal = Number(sub.totalAmount || (rate * days));
+
+          loadedOrders.push({
+            id: expectedOrderNum,
+            rawDate: sub.created_at || new Date().toISOString(),
+            date: sub.created_at ? new Date(sub.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Active Subscription',
+            status: 'confirmed',
+            statusLabel: isCustom ? 'Custom Days Active' : 'Autopay Active',
+            orderType: isCustom ? 'subscription_custom' : 'subscription_continuous',
+            orderTypeLabel: isCustom ? 'Custom Days Plan Payment' : 'Continuous Monthly Subscription Payment',
+            items: [
+              {
+                productId: sub.productId || (isBuffalo ? 2 : 1),
+                name: sub.product,
+                size: `${sub.quantity || (is1L ? '1 Litre' : '500 ml')} (${sub.durationLabel || (isCustom ? `${days} Days Custom Plan` : 'Continuous Monthly')} · Daily 6:00 AM – 7:00 AM)`,
+                image: sub.image || (isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg'),
+                qty: 1,
+                unitPrice: totalVal,
+                price: totalVal,
+                lineTotal: totalVal,
+                isSubscription: !isCustom,
+                isCustomDays: isCustom,
+                days: days,
+                dailyRate: rate
+              }
+            ],
+            subtotal: totalVal,
+            deliveryFee: 0,
+            total: totalVal,
+            recipientName: state.customer?.name || 'Customer',
+            recipientPhone: state.customer?.phone || '',
+            address: localStorage.getItem('milvanta-area') ? `${localStorage.getItem('milvanta-area')}, Hyderabad - ${localStorage.getItem('milvanta-pincode') || '500049'}` : 'Hafeezpet, Hyderabad - 500049',
+            paymentStatus: 'PAID',
+            paymentMethod: isCustom ? 'Paid Online via Razorpay (One-Time Upfront)' : 'Paid via Subscription Autopay (Razorpay Recurring)',
+            courier: 'Milvanta Cold-Chain Fleet (Morning Express)',
+            trackingNum: `MLV-SUB-${subId.slice(-6)}`,
+            estDelivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM'
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('Subscription orders integration notice:', e);
+    }
+
     // Exclude any cancelled order
     loadedOrders = loadedOrders.filter((o) => String(o.status || '').toLowerCase() !== 'cancelled');
 
@@ -460,7 +533,9 @@
         qty,
         unitPrice,
         price: unitPrice,
-        lineTotal
+        lineTotal,
+        isCustomDaysPlan: Boolean(it.isCustomDaysPlan || it.isCustomDays),
+        isSubscriptionPlan: Boolean(it.isSubscriptionPlan || it.isSubscription)
       };
     });
 
@@ -507,12 +582,41 @@
       addrStr = row.address;
     }
 
+    // Determine order category & plan type
+    const isCustomOrder = Boolean(
+      row.orderType === 'subscription_custom' ||
+      row.isCustomDaysPlan ||
+      (row.paymentMethod && row.paymentMethod.toLowerCase().includes('custom')) ||
+      items.some((it) => it.isCustomDaysPlan || (it.size && it.size.toLowerCase().includes('custom')) || (it.name && it.name.toLowerCase().includes('custom')))
+    );
+
+    const isContinuousOrder = Boolean(
+      !isCustomOrder && (
+        row.orderType === 'subscription_continuous' ||
+        row.isSubscription ||
+        (row.paymentMethod && (row.paymentMethod.toLowerCase().includes('subscription') || row.paymentMethod.toLowerCase().includes('autopay'))) ||
+        items.some((it) => it.isSubscriptionPlan || it.isContinuousMonthsPlan || (it.size && it.size.toLowerCase().includes('continuous')) || (it.name && it.name.toLowerCase().includes('continuous')))
+      )
+    );
+
+    let orderType = 'store_order';
+    let orderTypeLabel = 'Store Order';
+    if (isCustomOrder) {
+      orderType = 'subscription_custom';
+      orderTypeLabel = 'Custom Days Plan Payment';
+    } else if (isContinuousOrder) {
+      orderType = 'subscription_continuous';
+      orderTypeLabel = 'Continuous Monthly Subscription Payment';
+    }
+
     return {
       id,
       rawDate,
       date: formattedDate,
       status,
       statusLabel,
+      orderType,
+      orderTypeLabel,
       items,
       subtotal,
       deliveryFee,
@@ -521,10 +625,10 @@
       recipientPhone,
       address: addrStr,
       paymentStatus: (row.payment_status || 'paid').toUpperCase(),
-      paymentMethod: row.paymentMethod || 'Paid Online via Razorpay',
+      paymentMethod: row.paymentMethod || (isCustomOrder ? 'Paid Online via Razorpay (One-Time Upfront)' : isContinuousOrder ? 'Paid via Subscription Autopay (Razorpay Recurring)' : 'Paid Online via Razorpay'),
       courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
       trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
-      estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning'
+      estDelivery: row.estimated_delivery || row.estDelivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM'
     };
   }
 
@@ -574,6 +678,21 @@
         <article class="order-card" data-order-id="${order.id}">
           <div class="order-card-header">
             <div class="order-id-group">
+              <div class="order-type-badge-row">
+                ${order.orderType === 'subscription_continuous' ? `
+                  <span class="order-type-badge badge-sub-continuous">
+                    🔄 Continuous Subscription Payment · Auto-renewing
+                  </span>
+                ` : order.orderType === 'subscription_custom' ? `
+                  <span class="order-type-badge badge-sub-custom">
+                    🗓️ Custom Days Plan Payment · Upfront Paid
+                  </span>
+                ` : `
+                  <span class="order-type-badge badge-store-order">
+                    🛍️ Store Order · One-Time
+                  </span>
+                `}
+              </div>
               <span class="order-id">#${order.id}</span>
               <span class="order-date">Placed on ${order.date}</span>
             </div>
@@ -623,6 +742,11 @@
               <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
             </div>
             <div class="order-actions-group">
+              ${order.orderType === 'subscription_continuous' || order.orderType === 'subscription_custom' ? `
+                <button type="button" class="btn-order-view-sub" data-go-sub-tab="true">
+                  <span>📅 View Subscription &amp; Calendar →</span>
+                </button>
+              ` : ''}
               <button type="button" class="btn-order-details" data-details-id="${order.id}">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                 <span>View Details</span>
@@ -887,10 +1011,11 @@
       const totalDisplay = sub.totalAmount ? Number(sub.totalAmount).toLocaleString('en-IN') : fallbackTotal.toLocaleString('en-IN');
 
       const isCustom = sub.planType === 'custom' || (sub.durationLabel || '').toLowerCase().includes('custom');
-      const subTag = isCustom ? 'Custom Days Plan' : 'Continuous Subscription';
+      const customDaysCount = Number(sub.days || sub.customDays || 14);
+      const subTag = isCustom ? '🗓️ Custom Days Plan' : '🔄 Continuous Subscription';
       const tagStyle = isCustom ? 'background:#dcfce7; color:#15803d; border:1px solid #bbf7d0;' : 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
-      const planDuration = sub.durationLabel || (sub.days ? `${sub.days} Days Plan` : 'Continuous Monthly');
-      const paymentMode = isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)';
+      const planDuration = sub.durationLabel || (isCustom ? `${customDaysCount} Days Custom Plan` : 'Continuous Monthly');
+      const paymentMode = isCustom ? 'Paid Online via Razorpay (One-Time Upfront)' : 'Subscription Autopay (Razorpay Recurring)';
       const planTypeDesc = isCustom ? 'Custom Days (Upfront Paid)' : 'Continuous Months (Recurring Autopay)';
 
       return `
@@ -904,15 +1029,27 @@
               <p class="subscription-item-meta">${escapeHtml(sub.frequency)}${sub.timeSlot ? ` • ${escapeHtml(sub.timeSlot)}` : ''}</p>
             </div>
           </div>
+
           <div class="subscription-details-list">
             <div class="sub-detail-row">
               <span class="sub-detail-label">Plan Type</span>
               <span class="sub-detail-val" style="color: #0f172a; font-weight: 700;">${planTypeDesc}</span>
             </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Plan Duration</span>
-              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
-            </div>
+            ${isCustom ? `
+              <div class="sub-detail-row">
+                <span class="sub-detail-label">Custom Days Booked</span>
+                <span class="sub-detail-val" style="color: #15803d; font-weight: 800; font-size: 0.95rem;">🗓️ ${customDaysCount} Days Selected</span>
+              </div>
+              <div class="sub-detail-row">
+                <span class="sub-detail-label">Booking Schedule</span>
+                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">18 Oct 2026 – 31 Oct 2026 (${customDaysCount} Mornings)</span>
+              </div>
+            ` : `
+              <div class="sub-detail-row">
+                <span class="sub-detail-label">Plan Duration</span>
+                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
+              </div>
+            `}
             <div class="sub-detail-row">
               <span class="sub-detail-label">Daily Quantity</span>
               <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
@@ -937,6 +1074,12 @@
               <span class="sub-detail-label">Next Scheduled Delivery</span>
               <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
             </div>
+            ${isCustom ? `
+              <div class="sub-detail-row">
+                <span class="sub-detail-label">Deliveries Remaining</span>
+                <span class="sub-detail-val" style="color: #15803d; font-weight: 700;">${customDaysCount} Mornings Remaining (0 Delivered)</span>
+              </div>
+            ` : ''}
             <div class="sub-detail-row">
               <span class="sub-detail-label">Status</span>
               <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
@@ -944,8 +1087,28 @@
               </span>
             </div>
           </div>
+
+          ${isCustom ? `
+            <div class="custom-days-progress-box">
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 700; color: #166534; margin-bottom: 6px;">
+                <span>🗓️ Custom Plan Progress</span>
+                <span>0 / ${customDaysCount} Mornings Delivered (${customDaysCount} Left)</span>
+              </div>
+              <div style="width: 100%; height: 8px; background: #dcfce7; border-radius: 9999px; overflow: hidden;">
+                <div style="width: 7%; height: 100%; background: #16a34a; border-radius: 9999px;"></div>
+              </div>
+              <div style="font-size: 0.74rem; color: #15803d; margin-top: 6px; font-weight: 500;">
+                🌱 Milk deliveries arrive every morning between 6:00 AM – 7:00 AM through 31 Oct 2026.
+              </div>
+            </div>
+          ` : `
+            <div style="margin-top: 10px; padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 0.78rem; color: #0369a1; font-weight: 600;">
+              🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
+            </div>
+          `}
         </div>
-        <div class="subscription-actions-row" style="flex-wrap: wrap;">
+
+        <div class="subscription-actions-row" style="flex-wrap: wrap; margin-top: 14px;">
           <button type="button" class="btn-sub-pause" data-toggle-sub="${sub.id}">
             ${sub.status === 'active' ? '⏸ Pause' : '▶ Resume'}
           </button>
@@ -1003,6 +1166,9 @@
 
     const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
     const hasActiveSubs = activeSubs.length > 0;
+    const customSub = activeSubs.find((s) => s.planType === 'custom' || (s.durationLabel || '').toLowerCase().includes('custom'));
+    const contSub = activeSubs.find((s) => s.planType !== 'custom' && !(s.durationLabel || '').toLowerCase().includes('custom'));
+    const customDaysTotal = customSub ? Number(customSub.days || customSub.customDays || 14) : 0;
 
     let scheduledCount = 0;
     let deliveredCount = 0;
@@ -1038,6 +1204,9 @@
       let badgeHtml = '';
       let statusType = 'none';
 
+      const dayOffset = isCurrentCalendarMonth ? (day - todayDate) : 0;
+      const isWithinCustom = customSub && dayOffset >= 1 && dayOffset <= customDaysTotal;
+
       if (!hasActiveSubs) {
         badgeHtml = `<span class="month-cal-day-badge badge-none">No Drop</span>`;
       } else if (isDatePaused) {
@@ -1055,11 +1224,17 @@
       } else if (isTomorrow) {
         scheduledCount++;
         statusType = 'tomorrow';
-        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow</span>`;
-      } else {
+        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow${customSub ? ' (D1)' : ''}</span>`;
+      } else if (isWithinCustom) {
+        scheduledCount++;
+        statusType = 'custom_scheduled';
+        badgeHtml = `<span class="month-cal-day-badge badge-custom-day">🗓️ Day ${dayOffset} of ${customDaysTotal}</span>`;
+      } else if (contSub) {
         scheduledCount++;
         statusType = 'scheduled';
         badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
+      } else {
+        badgeHtml = `<span class="month-cal-day-badge badge-plan-ended">Plan Ended</span>`;
       }
 
       gridHtml += `
@@ -1092,6 +1267,7 @@
         <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
         <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
         ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused</span>` : ''}
+        ${customSub ? `<span style="background:#ecfdf5; color:#047857; padding:3px 8px; border-radius:6px; font-weight:700;">🗓️ ${customDaysTotal} Custom Days Active</span>` : ''}
         <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
       `;
     }
@@ -1118,6 +1294,16 @@
     const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
     const subNames = activeSubs.map((s) => `${s.quantity || '500 ml'} ${s.product}`).join(' + ') || 'Pure Farm Fresh Milk (500 ml)';
 
+    const customSub = activeSubs.find((s) => s.planType === 'custom' || (s.durationLabel || '').toLowerCase().includes('custom'));
+    const contSub = activeSubs.find((s) => s.planType !== 'custom' && !(s.durationLabel || '').toLowerCase().includes('custom'));
+    const customDaysTotal = customSub ? Number(customSub.days || customSub.customDays || 14) : 0;
+    const now = new Date();
+    const isCurrentCalendarMonth = (now.getFullYear() === year && now.getMonth() === month);
+    const todayDate = now.getDate();
+    const dayOffset = isCurrentCalendarMonth ? (day - todayDate) : 0;
+    const isWithinCustom = customSub && dayOffset >= 1 && dayOffset <= customDaysTotal;
+    const isAfterCustomEnded = !contSub && customSub && dayOffset > customDaysTotal;
+
     let statusBadge = '';
     let actionBtn = '';
 
@@ -1127,9 +1313,20 @@
     } else if (status === 'delivered') {
       statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered at 6:15 AM</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Delivered by Hafeezpet Route Van</span>`;
+    } else if (isAfterCustomEnded) {
+      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🗓️ Custom Plan Ended</span>`;
+      actionBtn = `<a href="index.html#products" style="display:inline-block; background:#0a3d66; color:#fff; border-radius:8px; padding:8px 16px; font-size:0.82rem; font-weight:700; text-decoration:none;">+ Extend Plan</a>`;
     } else {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip / Pause This Day</button>`;
+    }
+
+    let planTagHtml = '';
+    if (isWithinCustom) {
+      planTagHtml = `<span class="order-type-badge badge-sub-custom" style="font-size:0.72rem; padding:2px 8px;">🗓️ Custom Days Plan: Day ${dayOffset} of ${customDaysTotal}</span>`;
+    }
+    if (contSub) {
+      planTagHtml += `<span class="order-type-badge badge-sub-continuous" style="font-size:0.72rem; padding:2px 8px; margin-left:4px;">🔄 Continuous Monthly Plan</span>`;
     }
 
     inspector.innerHTML = `
@@ -1137,9 +1334,10 @@
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap;">
           <h5 style="margin: 0; font-size: 1rem; color: #0f172a; font-weight: 700;">${formattedDate}</h5>
           ${statusBadge}
+          ${planTagHtml}
         </div>
         <div style="font-size: 0.88rem; color: #334155; margin-bottom: 4px;">
-          Scheduled: <strong>${escapeHtml(subNames)}</strong>
+          ${isAfterCustomEnded ? 'No delivery scheduled for this date (Custom days plan completed).' : `Scheduled: <strong>${escapeHtml(subNames)}</strong>`}
         </div>
         <div style="font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
           <span>⏰ Delivery Slot: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
@@ -1324,8 +1522,15 @@
       });
     });
 
-    // Orders Actions (Details & Reorder)
+    // Orders Actions (Details, Reorder, and View Subscription)
     $('#ordersListContainer')?.addEventListener('click', (e) => {
+      const goSubBtn = e.target.closest('[data-go-sub-tab]');
+      if (goSubBtn) {
+        switchTab('subscription');
+        $('#profileMonthlyCalendarCard')?.scrollIntoView({ behavior: 'smooth' });
+        return;
+      }
+
       const detailsBtn = e.target.closest('[data-details-id]');
       if (detailsBtn) {
         const orderId = detailsBtn.dataset.detailsId;
