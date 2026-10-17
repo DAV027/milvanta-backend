@@ -1219,12 +1219,6 @@
               🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
             </div>
           `}
-
-          <!-- Eco-friendly Glass Bottle Return Reminder -->
-          <div class="sub-bottle-return-pill">
-            <span style="font-size: 1.15rem;">♻️</span>
-            <span><strong>Bottle Return Reminder:</strong> Please rinse and place yesterday's empty glass bottle outside your doorstep before 6:00 AM for morning collection.</span>
-          </div>
         </div>
 
         <div class="subscription-actions-row" style="flex-wrap: wrap; margin-top: 14px;">

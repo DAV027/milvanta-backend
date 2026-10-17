@@ -218,14 +218,17 @@ function startStaticServer(port = 8089) {
     await page.click('#closeCreateSubModal');
     await page.waitForSelector('#createSubscriptionModal.hidden', { timeout: 3000 });
 
-    // 4. Verify Eco-Friendly Glass Bottle Return Reminder Badge
-    console.log('Testing Glass Bottle Return Reminder Badge...');
+    // 4. Verify Glass Bottle Return Reminder has been removed
+    console.log('Verifying Bottle Return Reminder is removed...');
     const bottleBadges = await page.$$('.sub-bottle-return-pill');
-    if (bottleBadges.length === 0) {
-      throw new Error('Expected .sub-bottle-return-pill on subscription cards!');
+    if (bottleBadges.length > 0) {
+      throw new Error('Expected .sub-bottle-return-pill to be removed from subscription cards!');
     }
-    const bottleText = await page.$eval('.sub-bottle-return-pill', el => el.innerText);
-    console.log(`✓ Found Bottle Return Reminder on card: "${bottleText}"`);
+    const cardContentAfter = await page.$eval('#subscriptionsGridContainer', el => el.innerText);
+    if (cardContentAfter.includes('Bottle Return Reminder')) {
+      throw new Error('Bottle Return Reminder text still present on subscription cards!');
+    }
+    console.log('✓ Verified: Bottle Return Reminder is completely removed from all subscription cards.');
 
     // Capture comprehensive screenshot of verified Phase 2 subscription cards
     const subsGrid = await page.$('#subscriptionsGridContainer');
