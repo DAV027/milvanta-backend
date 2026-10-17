@@ -139,6 +139,12 @@
     url.searchParams.set('tab', tabId);
     window.history.replaceState({}, '', url);
 
+    // Re-render subscriptions & delivery calendar if switching to subscription tab
+    if (tabId === 'subscription') {
+      renderSubscriptions();
+      renderMonthlyDeliveryCalendar();
+    }
+
     // Scroll smoothly to top of content if on mobile
     if (window.innerWidth < 768) {
       $('.profile-content-container')?.scrollIntoView({ behavior: 'smooth' });
@@ -280,19 +286,33 @@
 
   // Helper to resolve accurate product image, pack size, and unit price
   function resolveProductInfo(item) {
-    const rawName = String(item.name || item.product_name || '').trim();
+    const rawName = String(item.name || item.product_name || item.product || '').trim();
     const lower = rawName.toLowerCase();
     const id = Number(item.productId || item.id || 0);
 
-    // 1. Direct ID match
-    if (id > 0) {
-      const match = productsCatalog.find((p) => Number(p.id) === id);
-      if (match) return match;
+    // 1. Check specific fresh milk names first (prevents PostgreSQL ID 1 & 2 conflict with brownie & cake)
+    if (lower.includes('buffalo milk') || (lower.includes('buffalo') && lower.includes('milk'))) {
+      return { id: 102, name: 'Pure Buffalo Milk', size: item.size || item.unit || '500 ml bottle', price: 70, image: 'assets/milvanta-buffalo-milk.jpg' };
+    }
+    if (lower.includes('cow milk') || (lower.includes('cow') && lower.includes('milk'))) {
+      return { id: 101, name: 'Pure Fresh Cow Milk', size: item.size || item.unit || '500 ml pouch', price: 60, image: 'assets/milvanta-cow-milk.jpg' };
     }
 
     // 2. Exact or substring match in catalog name
-    const byName = productsCatalog.find((p) => p.name.toLowerCase() === lower || lower.includes(p.name.toLowerCase()));
+    const byName = productsCatalog.find((p) => p.name.toLowerCase() === lower || (rawName && lower.includes(p.name.toLowerCase())));
     if (byName) return byName;
+
+    // 3. Direct ID match (avoiding 1 & 2 if name is generic)
+    if (id > 0) {
+      if (id === 1 && !lower.includes('brownie')) {
+        return { id: 1, name: 'Pure Fresh Cow Milk', size: '500 ml pouch', price: 60, image: 'assets/milvanta-cow-milk.jpg' };
+      }
+      if (id === 2 && !lower.includes('cake')) {
+        return { id: 2, name: 'Pure Buffalo Milk', size: '500 ml bottle', price: 70, image: 'assets/milvanta-buffalo-milk.jpg' };
+      }
+      const match = productsCatalog.find((p) => Number(p.id) === id);
+      if (match) return match;
+    }
 
     // 3. Keyword matching for all Milvanta specialties
     if (lower.includes('gongura mutton')) return { id: 18, name: 'Gongura Mutton (Boneless)', size: '500 g jar', price: 1199, image: 'assets/gongura-mutton-pickle.jpg' };
@@ -855,6 +875,7 @@
           <button type="button" class="address-card-btn" onclick="document.getElementById('btnOpenCreateSubModal')?.click()" style="text-decoration: none; padding: 10px 20px; display: inline-block;">+ Subscribe to Morning Fresh Milk</button>
         </div>
       `;
+      renderMonthlyDeliveryCalendar();
       return;
     }
 
@@ -869,6 +890,8 @@
       const subTag = isCustom ? 'Custom Days Plan' : 'Continuous Subscription';
       const tagStyle = isCustom ? 'background:#dcfce7; color:#15803d; border:1px solid #bbf7d0;' : 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
       const planDuration = sub.durationLabel || (sub.days ? `${sub.days} Days Plan` : 'Continuous Monthly');
+      const paymentMode = isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)';
+      const planTypeDesc = isCustom ? 'Custom Days (Upfront Paid)' : 'Continuous Months (Recurring Autopay)';
 
       return `
       <div class="subscription-card" data-sub-id="${sub.id}">
@@ -883,6 +906,14 @@
           </div>
           <div class="subscription-details-list">
             <div class="sub-detail-row">
+              <span class="sub-detail-label">Plan Type</span>
+              <span class="sub-detail-val" style="color: #0f172a; font-weight: 700;">${planTypeDesc}</span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Plan Duration</span>
+              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
+            </div>
+            <div class="sub-detail-row">
               <span class="sub-detail-label">Daily Quantity</span>
               <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
             </div>
@@ -891,12 +922,20 @@
               <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${rate}/day</span>
             </div>
             <div class="sub-detail-row">
-              <span class="sub-detail-label">Plan Duration</span>
-              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 600;">${escapeHtml(planDuration)}</span>
-            </div>
-            <div class="sub-detail-row">
               <span class="sub-detail-label">Total Plan Value</span>
               <span class="sub-detail-val" style="color: #0a3d66; font-weight: 800;">₹${totalDisplay}</span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Payment Method</span>
+              <span class="sub-detail-val" style="color: #334155; font-size: 0.82rem; font-weight: 600;">${paymentMode}</span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Delivery Slot</span>
+              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">Daily 6:00 AM – 7:00 AM</span>
+            </div>
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Next Scheduled Delivery</span>
+              <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
             </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Status</span>
@@ -904,18 +943,17 @@
                 ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
               </span>
             </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Next Scheduled Delivery</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
-            </div>
           </div>
         </div>
-        <div class="subscription-actions-row">
+        <div class="subscription-actions-row" style="flex-wrap: wrap;">
           <button type="button" class="btn-sub-pause" data-toggle-sub="${sub.id}">
             ${sub.status === 'active' ? '⏸ Pause' : '▶ Resume'}
           </button>
           <button type="button" class="btn-sub-modify" data-modify-sub="${sub.id}">
             ✎ Modify Qty
+          </button>
+          <button type="button" class="btn-sub-view-cal" data-view-cal="${sub.id}" style="background: #f0f9ff; border: 1px solid #bae6fd; color: #0369a1; border-radius: 8px; padding: 9px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">
+            📅 Calendar
           </button>
           <button type="button" class="btn-sub-pause" data-cancel-sub="${sub.id}" style="color: #ef4444; border-color: #fee2e2; background: #fff5f5;">
             Cancel
@@ -924,42 +962,208 @@
       </div>
     `;
     }).join('');
+
+    renderMonthlyDeliveryCalendar();
   }
 
-  // Dynamic 7-Day Morning Calendar Strip
-  function renderCalendarDays() {
-    const track = $('#profileCalendarDaysTrack');
-    if (!track) return;
+  // Comprehensive One-Month Morning Delivery Calendar
+  let currentCalYear = 2026;
+  let currentCalMonth = 9; // 0-indexed: 9 = October
+  let selectedCalDate = 18; // Tomorrow
+  let pausedDates = [];
+  try {
+    pausedDates = JSON.parse(localStorage.getItem('milvanta-paused-dates') || '[]');
+    if (!Array.isArray(pausedDates)) pausedDates = [];
+  } catch {
+    pausedDates = [];
+  }
 
-    const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const now = new Date();
-    const daysHtml = [];
-    for (let offset = -2; offset <= 4; offset++) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-      const isToday = offset === 0;
-      const isPast = offset < 0;
-      const dayName = daysOfWeek[d.getDay()];
-      const dayNum = d.getDate();
+  function renderMonthlyDeliveryCalendar(year = currentCalYear, month = currentCalMonth) {
+    currentCalYear = year;
+    currentCalMonth = month;
 
-      let statusBadge = '';
-      if (isPast) {
-        statusBadge = `<span class="calendar-status-dot" style="background: #f1f5f9; color: #64748b;">Delivered</span>`;
-      } else if (isToday) {
-        statusBadge = `<span class="calendar-status-dot">Today</span>`;
-      } else {
-        statusBadge = `<span class="calendar-status-dot">Scheduled</span>`;
-      }
+    const grid = $('#profileMonthlyCalendarGrid');
+    const label = $('#calCurrentMonthLabel');
+    const statsBar = $('#calMonthStatsBar');
+    if (!grid) return;
 
-      daysHtml.push(`
-        <div class="calendar-day-box ${isToday ? 'is-today' : ''}">
-          <span class="calendar-day-name">${dayName}</span>
-          <span class="calendar-day-num">${dayNum}</span>
-          ${statusBadge}
-        </div>
-      `);
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    if (label) {
+      label.textContent = `${monthNames[month]} ${year}`;
     }
 
-    track.innerHTML = daysHtml.join('');
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const prevMonthDays = new Date(year, month, 0).getDate();
+
+    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
+    const hasActiveSubs = activeSubs.length > 0;
+
+    let scheduledCount = 0;
+    let deliveredCount = 0;
+    let pausedCount = 0;
+
+    const now = new Date();
+    const isCurrentCalendarMonth = (now.getFullYear() === year && now.getMonth() === month);
+    const todayDate = now.getDate();
+
+    let gridHtml = weekdays.map((day) => `<div class="month-cal-weekday">${day}</div>`).join('');
+
+    // Previous month filler days
+    for (let i = firstDayIndex - 1; i >= 0; i--) {
+      const prevDate = prevMonthDays - i;
+      gridHtml += `
+        <div class="month-cal-day-cell is-other-month">
+          <span class="month-cal-day-num">${prevDate}</span>
+          <span class="month-cal-day-badge badge-none">–</span>
+        </div>
+      `;
+    }
+
+    // Days of current month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const isToday = isCurrentCalendarMonth && day === todayDate;
+      const isPast = isCurrentCalendarMonth ? day < todayDate : (year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth()));
+      const isTomorrow = isCurrentCalendarMonth && day === todayDate + 1;
+      const isSelected = day === selectedCalDate;
+
+      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const isDatePaused = pausedDates.includes(dateKey);
+
+      let badgeHtml = '';
+      let statusType = 'none';
+
+      if (!hasActiveSubs) {
+        badgeHtml = `<span class="month-cal-day-badge badge-none">No Drop</span>`;
+      } else if (isDatePaused) {
+        pausedCount++;
+        statusType = 'paused';
+        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Paused</span>`;
+      } else if (isPast) {
+        deliveredCount++;
+        statusType = 'delivered';
+        badgeHtml = `<span class="month-cal-day-badge badge-delivered">✔ Delivered</span>`;
+      } else if (isToday) {
+        scheduledCount++;
+        statusType = 'today';
+        badgeHtml = `<span class="month-cal-day-badge badge-today">🚚 Today</span>`;
+      } else if (isTomorrow) {
+        scheduledCount++;
+        statusType = 'tomorrow';
+        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow</span>`;
+      } else {
+        scheduledCount++;
+        statusType = 'scheduled';
+        badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
+      }
+
+      gridHtml += `
+        <div class="month-cal-day-cell ${isToday ? 'is-today' : ''} ${isSelected ? 'is-selected' : ''}" data-day="${day}" data-date-key="${dateKey}" data-status="${statusType}">
+          <span class="month-cal-day-num">${day}</span>
+          ${badgeHtml}
+        </div>
+      `;
+    }
+
+    grid.innerHTML = gridHtml;
+
+    // Attach click handlers to days
+    grid.querySelectorAll('.month-cal-day-cell:not(.is-other-month)').forEach((cell) => {
+      cell.addEventListener('click', () => {
+        const d = Number(cell.dataset.day);
+        selectedCalDate = d;
+        grid.querySelectorAll('.month-cal-day-cell').forEach((c) => c.classList.remove('is-selected'));
+        cell.classList.add('is-selected');
+        renderSelectedDayInspector(year, month, d, cell.dataset.dateKey, cell.dataset.status);
+      });
+    });
+
+    // Update stats bar
+    if (statsBar) {
+      statsBar.innerHTML = `
+        <div style="display:flex; align-items:center; gap:6px;">
+          <strong style="color:#0f172a;">${monthNames[month]} Overview:</strong>
+        </div>
+        <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
+        <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
+        ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused</span>` : ''}
+        <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
+      `;
+    }
+
+    const selectedKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(selectedCalDate).padStart(2, '0')}`;
+    const selectedCell = grid.querySelector(`[data-day="${selectedCalDate}"]`);
+    const currentStatus = selectedCell ? selectedCell.dataset.status : 'scheduled';
+    renderSelectedDayInspector(year, month, selectedCalDate, selectedKey, currentStatus);
+  }
+
+  function renderSelectedDayInspector(year, month, day, dateKey, status) {
+    const inspector = $('#calSelectedDayCard');
+    if (!inspector) return;
+
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const dObj = new Date(year, month, day);
+    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dObj.getDay()];
+    const formattedDate = `${dayName}, ${day} ${monthNames[month]} ${year}`;
+
+    const isDatePaused = pausedDates.includes(dateKey);
+    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
+    const subNames = activeSubs.map((s) => `${s.quantity || '500 ml'} ${s.product}`).join(' + ') || 'Pure Farm Fresh Milk (500 ml)';
+
+    let statusBadge = '';
+    let actionBtn = '';
+
+    if (isDatePaused) {
+      statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏸ Delivery Paused For This Day</span>`;
+      actionBtn = `<button type="button" class="btn-resume-day" id="btnToggleDayDelivery" style="background:#059669; color:#fff; border:none; border-radius:8px; padding:8px 16px; font-weight:700; cursor:pointer;">▶ Resume Delivery For This Day</button>`;
+    } else if (status === 'delivered') {
+      statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered at 6:15 AM</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Delivered by Hafeezpet Route Van</span>`;
+    } else {
+      statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
+      actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip / Pause This Day</button>`;
+    }
+
+    inspector.innerHTML = `
+      <div style="flex: 1; min-width: 260px;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap;">
+          <h5 style="margin: 0; font-size: 1rem; color: #0f172a; font-weight: 700;">${formattedDate}</h5>
+          ${statusBadge}
+        </div>
+        <div style="font-size: 0.88rem; color: #334155; margin-bottom: 4px;">
+          Scheduled: <strong>${escapeHtml(subNames)}</strong>
+        </div>
+        <div style="font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+          <span>⏰ Delivery Slot: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
+          <span>📍 Hub: <strong>Hafeezpet Cold-Chain Hub</strong></span>
+        </div>
+      </div>
+      <div>
+        ${actionBtn}
+      </div>
+    `;
+
+    $('#btnToggleDayDelivery')?.addEventListener('click', () => {
+      if (pausedDates.includes(dateKey)) {
+        pausedDates = pausedDates.filter((k) => k !== dateKey);
+        showToast(`▶ Delivery resumed for ${formattedDate}!`);
+      } else {
+        pausedDates.push(dateKey);
+        showToast(`⏸ Delivery paused for ${formattedDate}. You will not receive milk on this date.`);
+      }
+      try {
+        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
+      } catch {}
+      renderMonthlyDeliveryCalendar(year, month);
+    });
   }
 
   // Check Return from Razorpay Subscription Checkout
@@ -2040,7 +2244,51 @@
     const initialTab = params.get('tab') || 'profile';
 
     setupListeners();
-    renderCalendarDays();
+    renderMonthlyDeliveryCalendar();
+
+    // Monthly Calendar Navigation Listeners
+    $('#calPrevMonthBtn')?.addEventListener('click', () => {
+      let newMonth = currentCalMonth - 1;
+      let newYear = currentCalYear;
+      if (newMonth < 0) {
+        newMonth = 11;
+        newYear--;
+      }
+      renderMonthlyDeliveryCalendar(newYear, newMonth);
+    });
+
+    $('#calNextMonthBtn')?.addEventListener('click', () => {
+      let newMonth = currentCalMonth + 1;
+      let newYear = currentCalYear;
+      if (newMonth > 11) {
+        newMonth = 0;
+        newYear++;
+      }
+      renderMonthlyDeliveryCalendar(newYear, newMonth);
+    });
+
+    $('#calTodayBtn')?.addEventListener('click', () => {
+      const today = new Date();
+      currentCalYear = today.getFullYear();
+      currentCalMonth = today.getMonth();
+      selectedCalDate = today.getDate();
+      renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+    });
+
+    // View Calendar button click from subscription card
+    document.addEventListener('click', (e) => {
+      const viewCalBtn = e.target.closest('[data-view-cal]');
+      if (viewCalBtn) {
+        const card = $('#profileMonthlyCalendarCard');
+        if (card) {
+          card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          card.style.transition = 'box-shadow 0.3s ease';
+          card.style.boxShadow = '0 0 0 3px #0284c7';
+          setTimeout(() => { card.style.boxShadow = ''; }, 1500);
+        }
+      }
+    });
+
     checkSubscriptionReturn();
     switchTab(initialTab);
     updateCartBadge();

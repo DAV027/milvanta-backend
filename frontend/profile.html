@@ -280,50 +280,50 @@
               <!-- Dynamically populated by profile.js -->
             </div>
 
-            <!-- Upcoming 7-Day Morning Delivery Calendar Strip -->
-            <div class="morning-calendar-card">
-              <div class="section-header-row" style="margin-bottom: 8px;">
+            <!-- One Month Morning Delivery Calendar & Interactive Schedule -->
+            <div class="morning-calendar-card" id="profileMonthlyCalendarCard">
+              <div class="calendar-card-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 14px;">
                 <div>
-                  <h4 style="font-size: 1.05rem; font-weight: 700; margin: 0; color: #0f172a;">This Week's Delivery Schedule</h4>
-                  <p style="font-size: 0.82rem; color: #64748b; margin: 2px 0 0;">Early morning doorstep delivery</p>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 1.25rem;">📅</span>
+                    <h4 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: #0f172a;">Monthly Milk Delivery Calendar</h4>
+                  </div>
+                  <p style="font-size: 0.84rem; color: #64748b; margin: 4px 0 0;">Early morning doorstep drop (6:00 AM – 7:00 AM) · Click any day to inspect details or pause delivery</p>
+                </div>
+
+                <!-- Calendar Navigation Controls -->
+                <div class="calendar-nav-controls" style="display: flex; align-items: center; gap: 8px;">
+                  <button type="button" class="cal-nav-btn" id="calPrevMonthBtn" aria-label="Previous Month" style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; cursor: pointer; color: #0a3d66;">‹</button>
+                  <span id="calCurrentMonthLabel" style="font-size: 0.95rem; font-weight: 700; color: #0a3d66; min-width: 130px; text-align: center;">October 2026</span>
+                  <button type="button" class="cal-nav-btn" id="calNextMonthBtn" aria-label="Next Month" style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; cursor: pointer; color: #0a3d66;">›</button>
+                  <button type="button" class="cal-today-btn" id="calTodayBtn" style="background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; border-radius: 8px; padding: 6px 12px; font-size: 0.8rem; font-weight: 700; cursor: pointer;">Today</button>
                 </div>
               </div>
-              <div class="calendar-days-track" id="profileCalendarDaysTrack">
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Mon</span>
-                  <span class="calendar-day-num">13</span>
-                  <span class="calendar-status-dot" style="background: #f1f5f9; color: #64748b;">Delivered</span>
+
+              <!-- Month Deliveries Summary Stats Bar -->
+              <div class="cal-month-stats-bar" id="calMonthStatsBar" style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; background: #f8fafc; border-radius: 10px; border: 1px solid #e2e8f0; margin-bottom: 14px; font-size: 0.82rem;">
+                <!-- Populated dynamically: Delivered, Scheduled, Paused counts -->
+              </div>
+
+              <!-- 7-Column Monthly Calendar Grid -->
+              <div class="monthly-calendar-container" style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
+                <div class="monthly-calendar-grid" id="profileMonthlyCalendarGrid">
+                  <!-- Dynamically populated by profile.js: weekdays + all days of the month -->
                 </div>
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Tue</span>
-                  <span class="calendar-day-num">14</span>
-                  <span class="calendar-status-dot" style="background: #f1f5f9; color: #64748b;">Delivered</span>
-                </div>
-                <div class="calendar-day-box is-today">
-                  <span class="calendar-day-name">Wed</span>
-                  <span class="calendar-day-num">15</span>
-                  <span class="calendar-status-dot">Today</span>
-                </div>
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Thu</span>
-                  <span class="calendar-day-num">16</span>
-                  <span class="calendar-status-dot">Scheduled</span>
-                </div>
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Fri</span>
-                  <span class="calendar-day-num">17</span>
-                  <span class="calendar-status-dot">Scheduled</span>
-                </div>
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Sat</span>
-                  <span class="calendar-day-num">18</span>
-                  <span class="calendar-status-dot">Scheduled</span>
-                </div>
-                <div class="calendar-day-box">
-                  <span class="calendar-day-name">Sun</span>
-                  <span class="calendar-day-num">19</span>
-                  <span class="calendar-status-dot">Scheduled</span>
-                </div>
+              </div>
+
+              <!-- Interactive Selected Day Delivery Inspector Card -->
+              <div class="cal-selected-day-card" id="calSelectedDayCard" style="margin-top: 16px; padding: 16px 18px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;">
+                <!-- Populated dynamically when a day is clicked -->
+              </div>
+
+              <!-- Calendar Legend -->
+              <div class="calendar-legend-bar" style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 0.78rem; color: #64748b; padding-top: 12px; border-top: 1px solid #f1f5f9;">
+                <span style="font-weight: 600; color: #334155;">Legend:</span>
+                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #10b981; display: inline-block;"></span> Delivered</span>
+                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #0284c7; display: inline-block;"></span> Scheduled (6:00 AM – 7:00 AM)</span>
+                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; display: inline-block;"></span> Today's Delivery</span>
+                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444; display: inline-block;"></span> Paused / No Drop</span>
               </div>
             </div>
           </section>

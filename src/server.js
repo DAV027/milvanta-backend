@@ -12,7 +12,7 @@ import Razorpay from 'razorpay';
 import { runMigrations } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
-import { sendOrderPaidEmails } from './email.js';
+import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails } from './email.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -578,7 +578,7 @@ app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reques
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { rows } = await pool.query(
     `SELECT id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
-            cost_per_day_paise, status, next_delivery, created_at, updated_at
+            cost_per_day_paise, plan_type, duration_label, total_amount_paise, notes, status, next_delivery, created_at, updated_at
      FROM customer_subscriptions
      WHERE customer_id = $1 AND status != 'cancelled'
      ORDER BY created_at DESC`,
@@ -589,14 +589,29 @@ app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reques
 
 app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const { productId, productName, imageUrl, frequency, timeSlot, quantity, quantityNum, costPerDayPaise } = request.body || {};
+  const {
+    productId,
+    productName,
+    imageUrl,
+    frequency,
+    timeSlot,
+    quantity,
+    quantityNum,
+    costPerDayPaise,
+    planType,
+    durationLabel,
+    totalAmountPaise,
+    notes,
+    paymentId
+  } = request.body || {};
   if (!productName) return reply.code(400).send({ error: 'product_name_required' });
 
   const { rows } = await pool.query(
     `INSERT INTO customer_subscriptions (
-       customer_id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num, cost_per_day_paise, status, next_delivery
+       customer_id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
+       cost_per_day_paise, plan_type, duration_label, total_amount_paise, notes, status, next_delivery
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', 'Tomorrow, 6:00 AM'
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', 'Tomorrow, 6:00 AM'
      ) RETURNING *`,
     [
       request.customer.id,
@@ -607,10 +622,26 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
       timeSlot || '6:00 AM – 7:00 AM',
       quantity || '1 Litre',
       Number(quantityNum) || 1,
-      Number(costPerDayPaise) || 6000
+      Number(costPerDayPaise) || 6000,
+      planType || 'month',
+      durationLabel || '',
+      Number(totalAmountPaise) || 0,
+      JSON.stringify(notes || {})
     ]
   );
-  return reply.code(201).send({ subscription: rows[0] });
+
+  const createdSub = rows[0];
+
+  // Send subscription confirmation email asynchronously
+  sendSubscriptionConfirmationEmails(pool, createdSub, {
+    paymentId: paymentId || '',
+    customerEmail: request.customer.email,
+    customerName: request.customer.full_name
+  }).catch((err) => {
+    app.log.error({ err }, '[Email] Failed to send subscription confirmation email on POST /api/v1/subscriptions');
+  });
+
+  return reply.code(201).send({ subscription: createdSub });
 });
 
 app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
@@ -691,11 +722,21 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR id::text = $1",
         [subId]
       );
+      sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
+        app.log.error({ err }, '[Email] Failed to send subscription confirmation email on callback');
+      });
     } catch {}
   }
 
   const separator = returnUrl.includes('?') ? '&' : '?';
   return reply.redirect(303, `${returnUrl}${separator}subscription=success${paymentId ? `&payment_id=${paymentId}` : ''}`);
+});
+
+// Explicit endpoint to trigger or resend subscription confirmation emails
+app.post('/api/v1/subscriptions/send-confirmation', async (request, reply) => {
+  const paymentId = request.body?.paymentId || '';
+  const result = await sendSubscriptionConfirmationEmails(pool, request.body, { paymentId });
+  return reply.send(result);
 });
 
 app.patch('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {

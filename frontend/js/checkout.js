@@ -65,6 +65,26 @@
     { id: 18, name: 'Gongura Mutton (Boneless)', price: 1199, size: '500 g jar', image: 'assets/gongura-mutton-pickle.jpg' }
   ];
 
+  function findProductInCatalog(idOrItem) {
+    const item = typeof idOrItem === 'object' && idOrItem !== null ? idOrItem : { id: idOrItem };
+    const numId = Number(item.id || item.productId || 0);
+    const rawName = String(item.name || item.product_name || item.product || '').toLowerCase();
+
+    if (rawName.includes('buffalo milk') || (rawName.includes('buffalo') && rawName.includes('milk')) || numId === 102) {
+      return { id: 102, name: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' };
+    }
+    if (rawName.includes('cow milk') || (rawName.includes('cow') && rawName.includes('milk')) || numId === 101) {
+      return { id: 101, name: 'Cow Milk', price: 60, size: '500 ml pouch', image: 'assets/milvanta-cow-milk.jpg' };
+    }
+    if (numId === 1 && !rawName.includes('brownie')) {
+      return { id: 101, name: 'Cow Milk', price: 60, size: '500 ml pouch', image: 'assets/milvanta-cow-milk.jpg' };
+    }
+    if (numId === 2 && !rawName.includes('cake')) {
+      return { id: 102, name: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' };
+    }
+    return productsCatalog.find(p => Number(p.id) === numId) || {};
+  }
+
   // Store Policy Contents for Compliance Dialog (Same as index.html)
   const POLICIES = {
     terms: {
@@ -198,7 +218,7 @@
   // Calculate Order Financials (Strictly: Subtotal, Delivery Fee, Total)
   function getOrderFinancials() {
     const subtotal = state.cart.reduce((sum, item) => {
-      const prod = productsCatalog.find(p => Number(p.id) === Number(item.id)) || {};
+      const prod = findProductInCatalog(item);
       const unitPrice = Number(item.variant?.price || item.price || prod.price || 0);
       const qty = Number(item.quantity || 1);
       return sum + (unitPrice * qty);
@@ -238,7 +258,7 @@
     }
 
     listEl.innerHTML = state.cart.map((entry) => {
-      const prod = productsCatalog.find(p => Number(p.id) === Number(entry.id)) || {};
+      const prod = findProductInCatalog(entry);
       const name = entry.name || entry.variant?.name || prod.name || 'Milvanta Product';
       const size = entry.size || entry.variant?.size || prod.size || '';
       const image = entry.image || prod.image || 'assets/milvanta-mark.png';
@@ -728,7 +748,7 @@
 
       const planType = isContinuous ? 'month' : 'custom';
       const subData = item.subscriptionPlan || item.variant?.subscriptionPlan || {};
-      const prod = productsCatalog.find(p => Number(p.id) === Number(item.id)) || {};
+      const prod = findProductInCatalog(item);
       const productName = item.name || subData.productName || prod.name || 'Fresh Milk';
       const sizeStr = item.size || item.variant?.size || prod.size || '500 ml';
       const cleanSize = sizeStr.split('(')[0].trim();
@@ -785,6 +805,16 @@
             quantity: subItem.quantity,
             quantityNum: 1,
             costPerDayPaise: dailyRate * 100,
+            planType: subItem.planType,
+            durationLabel: subItem.durationLabel,
+            totalAmountPaise: totalPlanAmount * 100,
+            notes: {
+              subscriptionId: subId,
+              planType: subItem.planType,
+              durationLabel: subItem.durationLabel,
+              days: days,
+              paymentId: paymentInfo.paymentId || ''
+            },
             status: 'active'
           })
         });
@@ -993,11 +1023,33 @@
             },
             theme: { color: '#0a3d66' },
             handler: async (response) => {
+              const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
               await activateSubscriptionsFromCart(state.cart, {
                 subscriptionId: res.subscriptionId,
-                paymentId: response?.razorpay_payment_id || res.subscriptionId
+                paymentId: paymentRef
               });
-              showOrderSuccess(response?.razorpay_payment_id || res.subscriptionId, true);
+
+              // Trigger subscription confirmation email
+              try {
+                await api('/api/v1/subscriptions/send-confirmation', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    subscriptionId: res.subscriptionId,
+                    paymentId: paymentRef,
+                    cart: state.cart,
+                    address: state.addressDraft,
+                    customer: {
+                      name: state.addressDraft.name,
+                      email: state.addressDraft.email,
+                      phone: state.addressDraft.phone
+                    }
+                  })
+                });
+              } catch (emErr) {
+                console.warn('Subscription email trigger notice:', emErr);
+              }
+
+              showOrderSuccess(paymentRef, true);
             },
             modal: {
               ondismiss: () => {
@@ -1080,6 +1132,29 @@
             });
           } catch {}
 
+          // If cart contains custom days or subscription plan, trigger subscription confirmation email
+          const hasSubPlan = state.cart.some((i) => i.isCustomDaysPlan || i.isSubscriptionPlan || i.variant?.isCustomDaysPlan || i.variant?.isSubscriptionPlan);
+          if (hasSubPlan) {
+            try {
+              await api('/api/v1/subscriptions/send-confirmation', {
+                method: 'POST',
+                body: JSON.stringify({
+                  orderNumber: order.orderNumber,
+                  paymentId: response?.razorpay_payment_id || '',
+                  cart: state.cart,
+                  address: state.addressDraft,
+                  customer: {
+                    name: state.addressDraft.name,
+                    email: state.addressDraft.email,
+                    phone: state.addressDraft.phone
+                  }
+                })
+              });
+            } catch (subEmErr) {
+              console.warn('Custom days subscription email trigger notice:', subEmErr);
+            }
+          }
+
           // Activate any Custom Days plan (or subscription items) in profile subscriptions & PostgreSQL!
           await activateSubscriptionsFromCart(state.cart, {
             paymentId: response?.razorpay_payment_id || ''
@@ -1117,7 +1192,7 @@
       const newOrderRecord = {
         order_number: orderNumber,
         items: state.cart.map((item) => {
-          const prod = productsCatalog.find((p) => Number(p.id) === Number(item.id)) || {};
+          const prod = findProductInCatalog(item);
           const unitPrice = Number(item.variant?.price || item.price || prod.price || 0);
           const qty = Number(item.quantity || 1);
           return {

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import nodemailer from 'nodemailer';
 
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
@@ -10,6 +11,56 @@ const escapeHtml = (s) =>
     '"': '&quot;',
     "'": '&#39;'
   }[c]));
+
+/**
+ * Unified email dispatcher: tries Resend first, then Nodemailer (SMTP) fallback.
+ */
+export async function sendEmail({ to, subject, html, text, from }) {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const smtpHost = process.env.SMTP_HOST?.trim();
+  const smtpUser = process.env.SMTP_USER?.trim();
+  const smtpPass = process.env.SMTP_PASS?.trim();
+  let sender = (from || process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+
+  // 1. Try Resend if configured
+  if (apiKey) {
+    const resendRes = await sendEmailViaResend({ to, subject, html, text, from: sender });
+    if (resendRes.success) return resendRes;
+    console.warn('[Email Dispatch] Resend failed, checking SMTP fallback...', resendRes.error);
+  }
+
+  // 2. Try SMTP/Nodemailer if configured
+  if (smtpHost && smtpUser && smtpPass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: Number(process.env.SMTP_PORT || 587),
+        secure: process.env.SMTP_SECURE === 'true' || Number(process.env.SMTP_PORT || 587) === 465,
+        auth: { user: smtpUser, pass: smtpPass }
+      });
+      const info = await transporter.sendMail({
+        from: sender,
+        to: Array.isArray(to) ? to.join(', ') : to,
+        subject,
+        html,
+        text
+      });
+      console.log('[SMTP Success] Email dispatched successfully:', { id: info.messageId, to, subject });
+      return { success: true, id: info.messageId, provider: 'smtp' };
+    } catch (smtpErr) {
+      console.error('[SMTP Error] Failed to send email via SMTP:', smtpErr.message);
+      return { success: false, error: smtpErr.message, provider: 'smtp' };
+    }
+  }
+
+  console.warn('[Email Warning] No active email credentials (RESEND_API_KEY or SMTP_HOST/USER/PASS) in environment. Skipping email dispatch to:', to);
+  return {
+    success: false,
+    skipped: true,
+    error: 'NO_EMAIL_CREDENTIALS_CONFIGURED',
+    message: 'Configure RESEND_API_KEY or SMTP credentials in .env to deliver live emails.'
+  };
+}
 
 /**
  * Send an email using Resend REST API
@@ -438,11 +489,17 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
 
   const client = await pool.connect();
   try {
+    const isNumericId = typeof orderId === 'number' || (/^\d+$/.test(String(orderId).trim()) && !String(orderId).includes('-'));
     const res = await client.query(
-      `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name, c.phone AS customer_phone
-       FROM customer_orders co
-       LEFT JOIN customers c ON c.id = co.customer_id
-       WHERE co.id = $1 OR co.order_number = $1::text`,
+      isNumericId
+        ? `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name, c.phone AS customer_phone
+           FROM customer_orders co
+           LEFT JOIN customers c ON c.id = co.customer_id
+           WHERE co.id = $1`
+        : `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name, c.phone AS customer_phone
+           FROM customer_orders co
+           LEFT JOIN customers c ON c.id = co.customer_id
+           WHERE co.order_number = $1`,
       [orderId]
     );
 
@@ -469,7 +526,7 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
 
     const recipientCustomerEmail = customer.email?.trim();
     const adminEmail = process.env.ADMIN_EMAIL?.trim() || 'projects@milvanta.in';
-    const sender = (process.env.RESEND_FROM_EMAIL || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+    const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
 
     const results = {
       customerEmail: null,
@@ -488,7 +545,7 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
 
       const customerText = `Thank you for your order, ${customer.name || 'Valued Customer'}!\n\nYour order #${order.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(order.total_paise, true)}\n\nDelivering To:\n${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nTeam Milvanta\nHafeezpet Hub, Hyderabad`;
 
-      results.customerEmail = await sendEmailViaResend({
+      results.customerEmail = await sendEmail({
         to: recipientCustomerEmail,
         subject: `Order Confirmed: #${order.order_number} - Milvanta Farm Fresh`,
         html: customerHtml,
@@ -511,7 +568,7 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
 
       const adminText = `ALERT: New Paid Order #${order.order_number}\nAmount: ${formatInr(order.total_paise, true)}\nCustomer: ${customer.name} (${customer.phone}, ${customer.email})\nAddress: ${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
 
-      results.adminEmail = await sendEmailViaResend({
+      results.adminEmail = await sendEmail({
         to: adminEmail,
         subject: `🚨 New Paid Order #${order.order_number} - ${formatInr(order.total_paise, true)} (${customer.name})`,
         html: adminHtml,
@@ -545,4 +602,367 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
     client.release();
   }
 }
+
+/**
+ * Generate Customer Subscription Confirmation Email HTML
+ */
+export function buildCustomerSubscriptionEmail({ subscription, customer, address, paymentId }) {
+  const customerName = escapeHtml(customer?.name || customer?.full_name || address?.name || 'Valued Customer');
+  const productName = escapeHtml(subscription?.productName || subscription?.product || 'Pure Fresh Milk');
+  const size = escapeHtml(subscription?.quantity || subscription?.size || '500 ml');
+  const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
+  const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
+  const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
+  const planTag = isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription';
+  const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
+  const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
+  const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
+  const dailyRateStr = formatInr(dailyRate);
+  const totalAmountStr = formatInr(totalAmount);
+  const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM');
+  const imgUrl = subscription?.image || subscription?.image_url || (productName.toLowerCase().includes('buffalo') ? 'https://milvanta.in/assets/milvanta-buffalo-milk.jpg' : 'https://milvanta.in/assets/milvanta-cow-milk.jpg');
+  const paymentMethod = isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)';
+
+  const addressLines = [
+    address?.house,
+    address?.building,
+    address?.street,
+    address?.landmark ? `Landmark: ${address.landmark}` : null,
+    address?.city ? `${address.city} - ${address.pincode || ''}` : null
+  ].filter(Boolean).map(escapeHtml).join('<br/>');
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Your Morning Milk Subscription is Confirmed - Milvanta</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 600px; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06); border: 1px solid #e2e8f0;">
+          
+          <!-- Header Banner -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #0a3d66 0%, #065f46 100%); padding: 32px 28px; text-align: center;">
+              <h1 style="color: #ffffff; margin: 0 0 6px; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">🥛 Milvanta Farm Fresh</h1>
+              <p style="color: #d1fae5; margin: 0; font-size: 14px; font-weight: 500;">Direct from Ethical Local Dairy Farms to Your Doorstep</p>
+            </td>
+          </tr>
+
+          <!-- Welcome Body -->
+          <tr>
+            <td style="padding: 28px 28px 16px;">
+              <div style="display: inline-block; background: ${isCustom ? '#dcfce7' : '#e0f2fe'}; color: ${isCustom ? '#15803d' : '#0369a1'}; border: 1px solid ${isCustom ? '#bbf7d0' : '#bae6fd'}; border-radius: 9999px; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 12px;">
+                ${planTag}
+              </div>
+              <h2 style="color: #0f172a; margin: 0 0 10px; font-size: 20px; font-weight: 700;">Welcome to Morning Fresh Milk, ${customerName}!</h2>
+              <p style="color: #475569; margin: 0 0 20px; font-size: 14px; line-height: 1.6;">
+                Your daily milk subscription has been activated successfully! Fresh, chilled, unadulterated milk will be placed right at your doorstep every morning.
+              </p>
+
+              <!-- Subscription Highlight Box -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 22px;">
+                <tr>
+                  <td width="70" style="vertical-align: top; padding-right: 14px;">
+                    <img src="${escapeHtml(imgUrl)}" alt="${productName}" width="70" height="70" style="border-radius: 10px; object-fit: cover; display: block; border: 1px solid #cbd5e1;" />
+                  </td>
+                  <td style="vertical-align: top;">
+                    <h3 style="margin: 0 0 4px; font-size: 16px; color: #0f172a;">${productName}</h3>
+                    <div style="font-size: 13px; color: #64748b; margin-bottom: 8px;">${size} · ${frequency}</div>
+                    <div style="font-size: 13px; color: #0284c7; font-weight: 600;">⏰ ${timeSlot}</div>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Delivery & Plan Metrics -->
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="6" style="font-size: 13px; color: #475569; margin-bottom: 20px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 14px;">
+                <tr>
+                  <td style="color: #64748b;">Plan Duration</td>
+                  <td style="text-align: right; font-weight: 700; color: #0f172a;">${durationLabel}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Daily Rate</td>
+                  <td style="text-align: right; font-weight: 700; color: #059669;">${dailyRateStr}/day</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Total Amount Paid</td>
+                  <td style="text-align: right; font-weight: 800; font-size: 15px; color: #0a3d66;">${totalAmountStr}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Payment Method</td>
+                  <td style="text-align: right; font-weight: 600; color: #0f172a;">${paymentMethod}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">First Delivery Scheduled</td>
+                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${nextDelivery}</td>
+                </tr>
+              </table>
+
+              <!-- Delivery Address Box -->
+              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 22px;">
+                <div style="font-size: 12px; font-weight: 700; color: #0f172a; text-transform: uppercase; margin-bottom: 6px;">📍 Doorstep Delivery Destination</div>
+                <div style="font-size: 13px; color: #334155; line-height: 1.5;">${addressLines}</div>
+              </div>
+
+              <!-- Customer Profile Self-Service Help -->
+              <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px;">
+                <div style="font-size: 13px; font-weight: 700; color: #065f46; margin-bottom: 4px;">📅 Complete Flexibility at Your Fingertips</div>
+                <div style="font-size: 12px; color: #047857; line-height: 1.5;">
+                  Going out of station or need extra milk for guests? You can <strong>pause delivery</strong>, <strong>resume</strong>, or <strong>modify bottle quantities</strong> anytime with one click in your <a href="https://milvanta.in/profile.html?tab=subscription" style="color: #065f46; font-weight: 700;">Milvanta Profile Subscriptions Tab</a>.
+                </div>
+              </div>
+
+              <div style="font-size: 11px; color: #94a3b8; padding-top: 10px; border-top: 1px solid #f1f5f9;">
+                Reference Payment ID: <code>${escapeHtml(paymentId || 'N/A')}</code> · Dispatch Hub: Hafeezpet Cold-Chain Center, Hyderabad
+              </div>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background: #f1f5f9; padding: 20px; text-align: center; color: #64748b; font-size: 12px; line-height: 1.5;">
+              Milvanta Artisanal Foods & Dairy · Hafeezpet Hub, Hyderabad, Telangana 500049<br/>
+              Need assistance? WhatsApp us at <a href="https://wa.me/919052222256" style="color: #0a3d66; font-weight: 700; text-decoration: none;">+91 9052222256</a> or email <a href="mailto:orders@milvanta.in" style="color: #0a3d66; text-decoration: none;">orders@milvanta.in</a>.
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
+
+/**
+ * Generate Admin Subscription Notification Email HTML
+ */
+export function buildAdminSubscriptionEmail({ subscription, customer, address, paymentId }) {
+  const customerName = escapeHtml(customer?.name || customer?.full_name || address?.name || 'Customer');
+  const customerEmail = escapeHtml(customer?.email || address?.email || 'N/A');
+  const customerPhone = escapeHtml(customer?.phone || address?.phone || 'N/A');
+  const productName = escapeHtml(subscription?.productName || subscription?.product || 'Fresh Milk');
+  const size = escapeHtml(subscription?.quantity || subscription?.size || '500 ml');
+  const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
+  const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
+  const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
+  const planTag = isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription';
+  const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
+  const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
+  const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
+
+  const addressLines = [
+    address?.house,
+    address?.building,
+    address?.street,
+    address?.landmark ? `Landmark: ${address.landmark}` : null,
+    address?.city ? `${address.city} - ${address.pincode || ''}` : null
+  ].filter(Boolean).map(escapeHtml).join('<br/>');
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ALERT: New Morning Milk Subscription</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #cbd5e1;">
+          
+          <tr style="background: #0a3d66; color: #ffffff;">
+            <td style="padding: 20px 24px;">
+              <h2 style="margin: 0 0 4px; font-size: 20px; color: #ffffff;">🚨 ACTION REQUIRED: New Morning Milk Subscription</h2>
+              <div style="font-size: 13px; color: #93c5fd;">Add customer to tomorrow's early morning route sheet</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 20px 24px;">
+              <div style="display: inline-block; background: ${isCustom ? '#dcfce7' : '#e0f2fe'}; color: ${isCustom ? '#15803d' : '#0369a1'}; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 700; margin-bottom: 12px;">
+                ${planTag}
+              </div>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="6" style="font-size: 13px; margin-bottom: 16px;">
+                <tr>
+                  <td width="140" style="color: #64748b;">Customer</td>
+                  <td><strong>${customerName}</strong></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Phone</td>
+                  <td><a href="tel:${customerPhone}" style="color: #0a3d66; font-weight: 700;">${customerPhone}</a></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Email</td>
+                  <td><a href="mailto:${customerEmail}" style="color: #0a3d66;">${customerEmail}</a></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Product</td>
+                  <td><strong>${productName} (${size})</strong></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Schedule</td>
+                  <td><strong>${frequency} · ${timeSlot}</strong></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Plan Duration</td>
+                  <td><strong>${durationLabel}</strong></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Daily Rate</td>
+                  <td style="color: #059669; font-weight: 700;">₹${dailyRate}/day</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Total Paid</td>
+                  <td style="color: #0a3d66; font-weight: 800; font-size: 15px;">₹${totalAmount.toLocaleString('en-IN')}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Payment / Sub ID</td>
+                  <td><code>${escapeHtml(paymentId || 'N/A')}</code></td>
+                </tr>
+              </table>
+
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                <div style="font-size: 12px; font-weight: 700; color: #0f172a; text-transform: uppercase; margin-bottom: 4px;">📍 Delivery Route Drop Address</div>
+                <div style="font-size: 13px; color: #334155; line-height: 1.4;">${addressLines}</div>
+              </div>
+
+              <div style="font-size: 11px; color: #64748b;">
+                Hafeezpet Hub Logistics Notification · Recorded at ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST
+              </div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
+
+/**
+ * Send subscription confirmation emails to both customer and admin
+ */
+export async function sendSubscriptionConfirmationEmails(pool, subData, options = {}) {
+  const paymentId = options.paymentId || subData?.paymentId || '';
+  const customer = subData?.customer || {};
+  const address = subData?.address || {};
+  let subscription = subData?.subscription || subData || {};
+
+  // If subData is an ID or order number, lookup in DB
+  if (pool && (typeof subData === 'string' || typeof subData === 'number' || subData.subscriptionId || subData.orderNumber)) {
+    const lookupId = subData.subscriptionId || subData.orderNumber || subData;
+    try {
+      const client = await pool.connect();
+      try {
+        const isNumeric = typeof lookupId === 'number' || (/^\d+$/.test(String(lookupId).trim()) && !String(lookupId).includes('-'));
+        const subRes = await client.query(
+          isNumeric
+            ? `SELECT cs.*, c.full_name, c.email, c.phone 
+               FROM customer_subscriptions cs 
+               JOIN customers c ON c.id = cs.customer_id 
+               WHERE cs.id = $1`
+            : `SELECT cs.*, c.full_name, c.email, c.phone 
+               FROM customer_subscriptions cs 
+               JOIN customers c ON c.id = cs.customer_id 
+               WHERE cs.id::text = $1 OR cs.notes->>'subscriptionId' = $1`,
+          [lookupId]
+        );
+        if (subRes.rows[0]) {
+          const row = subRes.rows[0];
+          subscription = {
+            id: row.id,
+            productName: row.product_name,
+            quantity: row.quantity,
+            frequency: row.frequency,
+            timeSlot: row.time_slot,
+            costPerDay: Math.round(row.cost_per_day_paise / 100),
+            planType: row.plan_type || 'month',
+            durationLabel: row.duration_label || '',
+            totalAmount: Math.round((row.total_amount_paise || 0) / 100),
+            image: row.image_url,
+            status: row.status,
+            nextDelivery: row.next_delivery
+          };
+          customer.name = customer.name || row.full_name;
+          customer.email = customer.email || row.email;
+          customer.phone = customer.phone || row.phone;
+        }
+      } finally {
+        client.release();
+      }
+    } catch (e) {
+      console.warn('[Subscription Email] DB lookup error:', e.message);
+    }
+  }
+
+  // Fallback: check if subData has cart items
+  if (Array.isArray(subData?.cart)) {
+    const subItem = subData.cart.find(i => i.isContinuousMonthsPlan || i.isCustomDaysPlan || i.isSubscriptionPlan || i.variant?.isContinuousMonthsPlan || i.variant?.isCustomDaysPlan || i.variant?.isSubscriptionPlan);
+    if (subItem) {
+      const isCont = Boolean(subItem.isContinuousMonthsPlan || subItem.variant?.isContinuousMonthsPlan);
+      const subPlan = subItem.subscriptionPlan || subItem.variant?.subscriptionPlan || {};
+      subscription = {
+        productName: subItem.name || subPlan.productName || 'Fresh Milk',
+        quantity: subItem.size || subPlan.size || '500 ml',
+        frequency: subPlan.frequency || 'Daily (Every Morning)',
+        timeSlot: subPlan.timeSlot || '6:00 AM – 7:00 AM',
+        planType: isCont ? 'month' : 'custom',
+        durationLabel: subPlan.rangeLabel || subItem.variant?.rangeLabel || (isCont ? `${subPlan.monthsCount || 1} Month Continuous` : `${subPlan.days || 7} Days Custom Plan`),
+        costPerDay: subPlan.dailyRate || subItem.variant?.dailyRate || 55,
+        totalAmount: subItem.price || subItem.variant?.price || 0,
+        image: subItem.image || 'assets/milvanta-cow-milk.jpg',
+        nextDelivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM'
+      };
+    }
+  }
+
+  const recipientCustomerEmail = (customer?.email || address?.email || options.customerEmail || '').trim();
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+
+  const results = { customerEmail: null, adminEmail: null };
+
+  // 1. Send Customer Subscription Email
+  if (recipientCustomerEmail && recipientCustomerEmail.includes('@')) {
+    const custHtml = buildCustomerSubscriptionEmail({ subscription, customer, address, paymentId });
+    const custText = `Your Milvanta Milk Subscription is Confirmed!\n\nProduct: ${subscription.productName} (${subscription.quantity})\nSchedule: ${subscription.frequency} (${subscription.timeSlot})\nDuration: ${subscription.durationLabel}\nDaily Rate: ₹${subscription.costPerDay}/day\nNext Delivery: Tomorrow at 6:00 AM\n\nDelivering to:\n${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nManage anytime from your Milvanta Profile.\nTeam Milvanta`;
+
+    results.customerEmail = await sendEmail({
+      to: recipientCustomerEmail,
+      subject: `🥛 Subscription Confirmed: ${subscription.productName} - Milvanta Farm Fresh`,
+      html: custHtml,
+      text: custText,
+      from: sender
+    });
+  } else {
+    console.warn('[Subscription Email] No valid customer email found for subscription dispatch');
+  }
+
+  // 2. Send Admin Notification Email
+  if (adminEmail && adminEmail.includes('@')) {
+    const admHtml = buildAdminSubscriptionEmail({ subscription, customer, address, paymentId });
+    const admText = `ALERT: New Morning Milk Subscription!\nCustomer: ${customer.name || address.name} (${customer.phone || address.phone}, ${customer.email || address.email})\nProduct: ${subscription.productName} (${subscription.quantity})\nPlan: ${subscription.planType === 'custom' ? 'Custom Days' : 'Continuous Monthly'} (${subscription.durationLabel})\nDaily Rate: ₹${subscription.costPerDay}/day\nAddress: ${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
+
+    results.adminEmail = await sendEmail({
+      to: adminEmail,
+      subject: `🚨 New Morning Milk Subscription! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`,
+      html: admHtml,
+      text: admText,
+      from: sender
+    });
+  }
+
+  return { success: true, results };
+}
+
 
