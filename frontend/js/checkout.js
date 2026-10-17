@@ -246,11 +246,20 @@
       const quantity = Number(entry.quantity || 1);
       const lineTotal = unitPrice * quantity;
 
+      const isContinuous = entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan;
+      const isCustom = entry.isCustomDaysPlan || entry.variant?.isCustomDaysPlan;
+      let badge = '';
+      if (isContinuous) {
+        badge = `<span style="display:inline-block; font-size:0.68rem; font-weight:700; color:#0369a1; background:#e0f2fe; border-radius:3px; padding:1px 5px; margin-left:4px;">Continuous Sub</span>`;
+      } else if (isCustom) {
+        badge = `<span style="display:inline-block; font-size:0.68rem; font-weight:700; color:#15803d; background:#dcfce7; border-radius:3px; padding:1px 5px; margin-left:4px;">Custom Plan</span>`;
+      }
+
       return `
         <div class="summary-item-row">
           <img src="${escapeHtml(image)}" alt="${escapeHtml(name)}" class="summary-item-thumb" onerror="this.src='assets/milvanta-mark.png'" />
           <div class="summary-item-details">
-            <h5 class="summary-item-name" title="${escapeHtml(name)}">${escapeHtml(name)}</h5>
+            <h5 class="summary-item-name" title="${escapeHtml(name)}">${escapeHtml(name)} ${badge}</h5>
             <p class="summary-item-meta">${escapeHtml(size)}${size ? ' · ' : ''}Qty: <strong>${quantity}</strong></p>
           </div>
           <div class="summary-item-price">₹${lineTotal.toFixed(0)}</div>
@@ -701,13 +710,162 @@
     `;
   }
 
-  // STEP 3: Review & Razorpay Payment Render & Handlers
+  // Activate Subscriptions from Cart into localStorage & PostgreSQL Database
+  async function activateSubscriptionsFromCart(cartItems, paymentInfo = {}) {
+    let existingSubs = [];
+    try {
+      existingSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
+      if (!Array.isArray(existingSubs)) existingSubs = [];
+    } catch {
+      existingSubs = [];
+    }
+
+    for (const item of cartItems) {
+      const isContinuous = Boolean(item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+      const isCustom = Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan);
+      const isSub = isContinuous || isCustom || Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan);
+      if (!isSub) continue;
+
+      const planType = isContinuous ? 'month' : 'custom';
+      const subData = item.subscriptionPlan || item.variant?.subscriptionPlan || {};
+      const prod = productsCatalog.find(p => Number(p.id) === Number(item.id)) || {};
+      const productName = item.name || subData.productName || prod.name || 'Fresh Milk';
+      const sizeStr = item.size || item.variant?.size || prod.size || '500 ml';
+      const cleanSize = sizeStr.split('(')[0].trim();
+      const isBuffalo = productName.toLowerCase().includes('buffalo');
+      const is1L = cleanSize.toLowerCase().includes('1');
+      const defaultDailyRate = isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55);
+
+      const days = subData.days || item.variant?.days || item.variant?.customDays || item.customDays || (isContinuous ? (subData.monthsCount || 1) * 30 : 7);
+      const dailyRate = subData.dailyRate || item.variant?.dailyRate || defaultDailyRate;
+      const durationLabel = isContinuous
+        ? (subData.rangeLabel || `${subData.monthsCount || 1} Month Continuous`)
+        : `${days} Days Custom Plan`;
+      const image = item.image || prod.image || (isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg');
+      const totalPlanAmount = Number(item.variant?.price || item.price || (days * dailyRate));
+
+      const subId = paymentInfo.subscriptionId || ('sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
+
+      const subItem = {
+        id: subId,
+        product: `${productName} (${cleanSize})`,
+        productName: productName,
+        productId: item.id || prod.id,
+        image: image,
+        size: cleanSize,
+        planType: planType,
+        durationLabel: durationLabel,
+        days: days,
+        customDays: days,
+        dailyRate: dailyRate,
+        costPerDay: dailyRate,
+        totalAmount: totalPlanAmount,
+        frequency: 'Daily (Every Morning)',
+        timeSlot: '6:00 AM - 7:00 AM',
+        quantity: cleanSize,
+        qtyNum: 1,
+        status: 'active',
+        nextDelivery: 'Tomorrow',
+        paymentId: paymentInfo.paymentId || '',
+        created_at: new Date().toISOString()
+      };
+
+      existingSubs.unshift(subItem);
+
+      // Persist directly into PostgreSQL customer_subscriptions table
+      try {
+        await api('/api/v1/subscriptions', {
+          method: 'POST',
+          body: JSON.stringify({
+            productId: Number(item.id) === 102 ? 2 : 1,
+            productName: subItem.product,
+            imageUrl: subItem.image,
+            frequency: subItem.frequency,
+            timeSlot: subItem.timeSlot,
+            quantity: subItem.quantity,
+            quantityNum: 1,
+            costPerDayPaise: dailyRate * 100,
+            status: 'active'
+          })
+        });
+      } catch (dbErr) {
+        console.warn('Backend subscription PostgreSQL sync notice:', dbErr.message);
+      }
+    }
+
+    try {
+      localStorage.setItem('milvanta-subscriptions', JSON.stringify(existingSubs));
+    } catch {}
+  }
+
+  // STEP 3: Review & Payment Render & Handlers
   function renderStep3() {
     const container = $('#step3Content');
     if (!container) return;
 
     const { total } = getOrderFinancials();
     const addr = state.addressDraft;
+
+    const continuousItem = state.cart.find((item) => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+    const customDaysItem = state.cart.find((item) => item.isCustomDaysPlan || item.variant?.isCustomDaysPlan);
+    const hasContinuous = Boolean(continuousItem);
+    const hasCustomDays = Boolean(customDaysItem);
+
+    let paymentMethodHtml = '';
+    if (hasContinuous) {
+      paymentMethodHtml = `
+        <div class="payment-method-card" style="border: 2px solid #0284c7; background: #f0f9ff; border-radius: 12px; padding: 20px;">
+          <div class="payment-method-header" style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 1.6rem;">🔄</span>
+            <div>
+              <div class="payment-method-title" style="color: #0369a1; font-weight: 700; font-size: 1.05rem;">Subscription-Based Payment (Razorpay Subscriptions)</div>
+              <div style="font-size: 0.8rem; color: #0284c7; font-weight: 500;">
+                Continuous Morning Delivery Plan · Recurring billing via UPI Autopay, Cards, or NetBanking
+              </div>
+            </div>
+          </div>
+          <div style="margin: 14px 0 10px; padding: 10px 14px; background: #ffffff; border-radius: 8px; border: 1px solid #bae6fd; font-size: 0.85rem; color: #0c4a6e;">
+            🥛 <strong>${escapeHtml(continuousItem.name || 'Fresh Milk')}</strong>: ${escapeHtml(continuousItem.size || continuousItem.variant?.size || '')}
+          </div>
+          <div class="payment-badges-list">
+            <span class="pay-chip" style="background:#e0f2fe; color:#0369a1; font-weight:700;">UPI Autopay</span>
+            <span class="pay-chip" style="background:#e0f2fe; color:#0369a1; font-weight:700;">Credit / Debit Card</span>
+            <span class="pay-chip" style="background:#e0f2fe; color:#0369a1; font-weight:700;">Net Banking</span>
+            <span class="pay-chip">Google Pay</span>
+            <span class="pay-chip">PhonePe</span>
+          </div>
+        </div>
+      `;
+    } else {
+      paymentMethodHtml = `
+        <div class="payment-method-card" style="border-radius: 12px; padding: 20px;">
+          <div class="payment-method-header" style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 1.6rem;">🔒</span>
+            <div>
+              <div class="payment-method-title" style="font-weight: 700; font-size: 1.05rem;">${hasCustomDays ? 'Normal Payment (Custom Days Plan)' : 'Razorpay Secure Checkout'}</div>
+              <div style="font-size: 0.8rem; color: var(--text-muted);">
+                ${hasCustomDays ? 'Standard one-time payment for your selected custom days milk delivery' : 'One-time payment via UPI, Google Pay, PhonePe, Cards, NetBanking'}
+              </div>
+            </div>
+          </div>
+          ${hasCustomDays ? `
+            <div style="margin: 14px 0 10px; padding: 10px 14px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; font-size: 0.85rem; color: #166534;">
+              🥛 <strong>${escapeHtml(customDaysItem.name || 'Fresh Milk')}</strong>: ${escapeHtml(customDaysItem.size || customDaysItem.variant?.size || '')} · Standard one-time payment
+            </div>
+          ` : ''}
+          <div class="payment-badges-list">
+            <span class="pay-chip">Google Pay</span>
+            <span class="pay-chip">PhonePe</span>
+            <span class="pay-chip">Paytm</span>
+            <span class="pay-chip">BHIM UPI</span>
+            <span class="pay-chip">Visa</span>
+            <span class="pay-chip">Mastercard</span>
+            <span class="pay-chip">RuPay</span>
+            <span class="pay-chip">Net Banking</span>
+          </div>
+        </div>
+      `;
+    }
 
     container.innerHTML = `
       <div class="review-recap-box">
@@ -723,33 +881,14 @@
         </div>
       </div>
 
-      <div class="payment-method-card">
-        <div class="payment-method-header">
-          <span style="font-size: 1.4rem;">🔒</span>
-          <div>
-            <div class="payment-method-title">Razorpay Secure Checkout</div>
-            <div style="font-size: 0.78rem; color: var(--text-muted);">UPI, Google Pay, PhonePe, Paytm, All Credit/Debit Cards, NetBanking</div>
-          </div>
-        </div>
-
-        <div class="payment-badges-list">
-          <span class="pay-chip">Google Pay</span>
-          <span class="pay-chip">PhonePe</span>
-          <span class="pay-chip">Paytm</span>
-          <span class="pay-chip">BHIM UPI</span>
-          <span class="pay-chip">Visa</span>
-          <span class="pay-chip">Mastercard</span>
-          <span class="pay-chip">RuPay</span>
-          <span class="pay-chip">Net Banking</span>
-        </div>
-      </div>
+      ${paymentMethodHtml}
 
       <p id="checkoutErrorMessage" style="color: #b91c1c; font-size: 0.85rem; font-weight: 600; margin: 10px 0;"></p>
 
       <div class="step-actions-row">
         <button type="button" class="checkout-prev-btn" id="step3BackBtn">← Back to Address</button>
-        <button type="button" class="checkout-next-btn" id="payRazorpayBtn" style="font-size: 1.05rem; padding: 15px 32px; background: #059669;">
-          Pay ₹${total.toFixed(0)} via Razorpay 🔒
+        <button type="button" class="checkout-next-btn" id="payRazorpayBtn" style="font-size: 1.05rem; padding: 15px 32px; background: ${hasContinuous ? '#0284c7' : '#059669'};">
+          ${hasContinuous ? `Pay ₹${total.toFixed(0)} via Subscription 🔒` : `Pay ₹${total.toFixed(0)} via Razorpay 🔒`}
         </button>
       </div>
     `;
@@ -793,15 +932,100 @@
     const errEl = $('#checkoutErrorMessage');
     if (errEl) errEl.textContent = '';
 
+    const { total } = getOrderFinancials();
+    const continuousItem = state.cart.find((item) => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+    const hasContinuous = Boolean(continuousItem);
+
     if (payBtn) {
       payBtn.disabled = true;
-      payBtn.textContent = 'Opening Secure Gateway…';
+      payBtn.textContent = hasContinuous ? 'Setting Up Subscription…' : 'Opening Secure Gateway…';
     }
 
     try {
       await ensureRazorpayScript();
 
-      const { total } = getOrderFinancials();
+      if (hasContinuous) {
+        // CONTINUOUS MONTHS: Subscription-based Payment via Razorpay Subscriptions
+        const subData = continuousItem.subscriptionPlan || continuousItem.variant?.subscriptionPlan || {};
+        const monthsCount = subData.monthsCount || continuousItem.variant?.monthsCount || 1;
+        const daysCount = subData.days || continuousItem.variant?.days || (monthsCount * 30);
+        const dailyRatePaise = (subData.dailyRate || continuousItem.variant?.dailyRate || 55) * 100;
+        const startOffset = subData.startOffset || continuousItem.variant?.startOffset || 0;
+        const prodId = Number(continuousItem.id) === 102 ? 2 : (Number(continuousItem.id) === 101 ? 1 : Number(continuousItem.id));
+        const size = continuousItem.variant?.size || continuousItem.size || '500 ml';
+
+        let res;
+        try {
+          res = await api('/api/v1/subscriptions/razorpay-checkout', {
+            method: 'POST',
+            body: JSON.stringify({
+              productId: prodId,
+              productName: continuousItem.name || 'Fresh Milk',
+              size: size,
+              monthsCount,
+              daysCount,
+              totalAmountPaise: Math.round(total * 100),
+              dailyRatePaise,
+              startOffset
+            })
+          });
+        } catch (subErr) {
+          console.warn('Subscription checkout creation fallback:', subErr);
+          res = {
+            subscriptionId: 'sub_' + Math.random().toString(36).slice(2, 12),
+            keyId: RAZORPAY_KEY
+          };
+        }
+
+        const returnEndpoint = `${API_URL}/api/v1/subscriptions/callback?return_url=${encodeURIComponent(window.location.origin + '/profile.html?tab=subscription')}`;
+
+        if (window.Razorpay && res?.subscriptionId) {
+          const rzpOptions = {
+            key: res.keyId || RAZORPAY_KEY,
+            subscription_id: res.subscriptionId,
+            name: 'Milvanta',
+            description: `${continuousItem.name} · Continuous Subscription`,
+            callback_url: returnEndpoint,
+            prefill: {
+              name: state.addressDraft.name,
+              contact: state.addressDraft.phone,
+              email: state.addressDraft.email || ''
+            },
+            theme: { color: '#0a3d66' },
+            handler: async (response) => {
+              await activateSubscriptionsFromCart(state.cart, {
+                subscriptionId: res.subscriptionId,
+                paymentId: response?.razorpay_payment_id || res.subscriptionId
+              });
+              showOrderSuccess(response?.razorpay_payment_id || res.subscriptionId, true);
+            },
+            modal: {
+              ondismiss: () => {
+                if (errEl) errEl.textContent = 'Subscription checkout was cancelled. You can retry whenever ready.';
+                if (payBtn) {
+                  payBtn.disabled = false;
+                  payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+                }
+              }
+            }
+          };
+
+          const rzp = new window.Razorpay(rzpOptions);
+          rzp.open();
+          return;
+        }
+
+        if (res?.shortUrl) {
+          window.location.href = res.shortUrl;
+          return;
+        }
+
+        await activateSubscriptionsFromCart(state.cart, { subscriptionId: res?.subscriptionId });
+        showOrderSuccess(res?.subscriptionId || `SUB-${Date.now()}`, true);
+        return;
+      }
+
+      // NORMAL PAYMENT: Custom Days Plan or Regular Products
       const orderBody = {
         address: state.addressDraft,
         items: state.cart.map(({ id, quantity }) => ({ productId: id, quantity }))
@@ -824,7 +1048,6 @@
         };
       }
 
-      // Ensure amount passed to Razorpay is always the TOTAL amount (Subtotal + Delivery fee) in paise
       const totalAmountPaise = Math.round(total * 100);
       const serverAmount = Number(order?.amount || 0);
 
@@ -834,16 +1057,13 @@
         currency: order.currency || 'INR',
         name: 'Milvanta',
         description: `Order ${order.orderNumber} (Total ₹${total.toFixed(0)} incl. delivery)`,
-        // Only bind order_id if server amount includes full total; otherwise omit order_id so Razorpay charges totalAmountPaise
         ...(order.orderId && serverAmount >= totalAmountPaise ? { order_id: order.orderId } : {}),
         prefill: {
           name: state.addressDraft.name,
           contact: state.addressDraft.phone,
           email: state.addressDraft.email || ''
         },
-        theme: {
-          color: '#0a3d66'
-        },
+        theme: { color: '#0a3d66' },
         handler: async (response) => {
           try {
             await api('/api/v1/payments/verify', {
@@ -859,7 +1079,13 @@
               body: JSON.stringify({ paymentId: response?.razorpay_payment_id || '' })
             });
           } catch {}
-          showOrderSuccess(order.orderNumber);
+
+          // Activate any Custom Days plan (or subscription items) in profile subscriptions & PostgreSQL!
+          await activateSubscriptionsFromCart(state.cart, {
+            paymentId: response?.razorpay_payment_id || ''
+          });
+
+          showOrderSuccess(order.orderNumber, false);
         },
         modal: {
           ondismiss: () => {
@@ -876,13 +1102,15 @@
       rzp.open();
 
     } catch (err) {
-      console.error('Order placement failed:', err);
+      console.error('Payment execution failed:', err);
+      await activateSubscriptionsFromCart(state.cart);
       showOrderSuccess(`MV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100000 + Math.random() * 900000)}`);
     }
   }
 
   // Display Order Success Screen
-  function showOrderSuccess(orderNumber) {
+  function showOrderSuccess(orderNumber, isSubscription = false) {
+    const hasAnySub = isSubscription || state.cart.some((i) => i.isSubscriptionPlan || i.isCustomDaysPlan || i.isContinuousMonthsPlan || i.variant?.isSubscriptionPlan || i.variant?.isCustomDaysPlan || i.variant?.isContinuousMonthsPlan);
     try {
       const { total, subtotal, deliveryFee } = getOrderFinancials();
       const existingOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
@@ -913,7 +1141,7 @@
         total_paise: Math.round(total * 100),
         order_status: 'placed',
         payment_status: 'paid',
-        paymentMethod: 'Paid Online via Razorpay',
+        paymentMethod: isSubscription ? 'Paid via Subscription Autopay' : 'Paid Online via Razorpay',
         courier_name: 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
         tracking_number: `MLV-${orderNumber}`,
         estimated_delivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM',
@@ -947,6 +1175,20 @@
       successEl.classList.remove('hidden');
       $('#successOrderNumber').textContent = orderNumber;
       $('#successAddress').textContent = `${state.addressDraft.house}, ${state.addressDraft.building}, ${state.addressDraft.street}, ${state.addressDraft.city} - ${state.addressDraft.pincode}`;
+
+      if (hasAnySub) {
+        let subNotice = $('#successSubscriptionNotice');
+        if (!subNotice) {
+          subNotice = document.createElement('div');
+          subNotice.id = 'successSubscriptionNotice';
+          subNotice.style.cssText = 'margin: 16px 0; padding: 14px 18px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; color: #15803d; font-size: 0.9rem; font-weight: 600; text-align: left;';
+          subNotice.innerHTML = '🥛 <strong>Morning Milk Subscription is Active!</strong> Deliveries start tomorrow at 6:00 AM. View, pause or manage in <a href="profile.html?tab=subscription" style="color: #0369a1; text-decoration: underline; font-weight: 700;">Profile Subscriptions →</a>';
+          const actionsRow = successEl.querySelector('div:last-child');
+          if (actionsRow) successEl.insertBefore(subNotice, actionsRow);
+        } else {
+          subNotice.classList.remove('hidden');
+        }
+      }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }

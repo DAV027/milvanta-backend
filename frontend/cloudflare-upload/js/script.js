@@ -607,8 +607,21 @@ function populateSubscriptionMonths(selectElem) {
   }
 }
 
+function findProductById(id) {
+  const numId = Number(id);
+  const found = products.find((item) => {
+    const itemId = Number(item.id);
+    if (itemId === numId) return true;
+    if ((numId === 101 && itemId === 1) || (numId === 1 && itemId === 101)) return true;
+    if ((numId === 102 && itemId === 2) || (numId === 2 && itemId === 102)) return true;
+    return false;
+  });
+  return found || products.find((item) => String(item.id) === String(id));
+}
+window.findProductById = findProductById;
+
 function updateSubscriptionSummary() {
-  const p = products.find((item) => item.id === state.activeProductId);
+  const p = findProductById(state.activeProductId);
   if (!p || !isFreshMilkProduct(p)) return;
 
   const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
@@ -678,24 +691,20 @@ function updateSubscriptionSummary() {
   if (finalPriceElem) finalPriceElem.textContent = `₹${subTotal.toLocaleString('en-IN')}`;
 
   if (addBtn && state.purchaseMode === 'subscription') {
-    if (state.subPlanType === 'custom') {
-      addBtn.innerHTML = `<span>Add to cart · ₹${subTotal.toLocaleString('en-IN')}</span>`;
-    } else {
-      addBtn.innerHTML = `<span>Start Subscription · ₹${subTotal.toLocaleString('en-IN')}</span>`;
-    }
+    addBtn.innerHTML = `<span>Add to cart · ₹${subTotal.toLocaleString('en-IN')}</span>`;
   }
 }
 
 function getModalUnitPrice() {
   if (state.selectedVariant) return state.selectedVariant.price;
-  const p = products.find((item) => item.id === state.activeProductId);
+  const p = findProductById(state.activeProductId);
   return p ? p.price : 0;
 }
 
 function updateModalAddToCartBtn() {
   const addBtn = $('#modalAddToCart');
   if (!addBtn) return;
-  const p = products.find((item) => item.id === state.activeProductId);
+  const p = findProductById(state.activeProductId);
   const stock = p?.stockQuantity !== undefined ? p.stockQuantity : 50;
   if (stock <= 0) {
     addBtn.disabled = true;
@@ -739,7 +748,7 @@ function setPurchaseMode(mode) {
     if (subPlanner) subPlanner.classList.add('hidden');
     if (qtyRow) qtyRow.style.display = '';
     if (actionBar) actionBar.style.justifyContent = 'space-between';
-    const p = products.find((item) => item.id === state.activeProductId);
+    const p = findProductById(state.activeProductId);
     if (p?.ingredients?.length) $('.ingredients-block')?.classList.remove('hidden');
     if (p?.details) $('#modalExtra')?.classList.remove('hidden');
     if (hasRecipe(p)) $('#modalViewRecipe')?.classList.remove('hidden');
@@ -753,20 +762,83 @@ function handleCustomDaysAddToCart(p) {
   const input = $('#subDaysInput');
   const days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
   const totalAmount = days * rates.dailyRate;
+  const savings = days * (rates.oneTimeRate - rates.dailyRate);
 
-  // Add custom days milk plan to cart as a regular cart item
   const customPlanVariant = {
     size: `${variantSize} (${days} Days · ₹${rates.dailyRate}/day)`,
     price: totalAmount,
     customDays: days,
+    days: days,
     dailyRate: rates.dailyRate,
-    isCustomDaysPlan: true
+    oneTimeRate: rates.oneTimeRate,
+    savings: savings,
+    planLabel: `${days} Days Plan`,
+    isCustomDaysPlan: true,
+    isSubscriptionPlan: true,
+    subscriptionPlan: {
+      planType: 'custom',
+      productName: p.name,
+      productId: p.id,
+      size: variantSize,
+      days: days,
+      customDays: days,
+      dailyRate: rates.dailyRate,
+      planLabel: `${days} Days Plan`,
+      frequency: 'Daily (Every Morning)',
+      timeSlot: '6:00 AM - 7:00 AM'
+    }
   };
 
   addToCart(p.id, 1, customPlanVariant);
   closeProductModal();
   setCartOpen(true);
   showStoreToast(`Added ${days}-Day Fresh Milk plan (₹${totalAmount.toLocaleString('en-IN')}) to Cart!`);
+}
+
+function handleContinuousMonthsAddToCart(p) {
+  const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
+  const rates = getMilkSubscriptionRates(p, variantSize);
+
+  const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
+  const startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+  const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
+  const details = getContinuousMonthsDetails(startOffset, monthsCount);
+  const days = details.totalDays;
+  const totalAmount = days * rates.dailyRate;
+  const savings = days * (rates.oneTimeRate - rates.dailyRate);
+
+  const continuousPlanVariant = {
+    size: `${variantSize} (${details.rangeLabel} · ₹${rates.dailyRate}/day)`,
+    price: totalAmount,
+    monthsCount: monthsCount,
+    days: days,
+    dailyRate: rates.dailyRate,
+    oneTimeRate: rates.oneTimeRate,
+    savings: savings,
+    startOffset: startOffset,
+    rangeLabel: details.rangeLabel,
+    planLabel: details.rangeLabel,
+    isContinuousMonthsPlan: true,
+    isSubscriptionPlan: true,
+    subscriptionPlan: {
+      planType: 'month',
+      productName: p.name,
+      productId: p.id,
+      size: variantSize,
+      monthsCount: monthsCount,
+      days: days,
+      dailyRate: rates.dailyRate,
+      rangeLabel: details.rangeLabel,
+      startOffset: startOffset,
+      frequency: 'Daily (Every Morning)',
+      timeSlot: '6:00 AM - 7:00 AM'
+    }
+  };
+
+  addToCart(p.id, 1, continuousPlanVariant);
+  closeProductModal();
+  setCartOpen(true);
+  showStoreToast(`Added ${monthsCount}-Month Continuous Subscription (${details.rangeLabel}) to Cart!`);
 }
 
 async function handleStartSubscription(p) {
@@ -1671,9 +1743,9 @@ function renderCarouselDots(total, current) {
 
 // Product Detail Modal
 function openProductModal(id, initialMode = 'onetime') {
-  const p = products.find((item) => item.id === id);
+  const p = findProductById(id);
   if (!p) return;
-  state.activeProductId = id;
+  state.activeProductId = p.id;
   state.modalQty = 1;
 
   $('#modalQty').textContent = '1';
@@ -1882,9 +1954,9 @@ function closeRecipeModal() {
 
 // Cart Management
 function addToCart(id, quantity = 1, variant = null) {
-  const numId = Number(id);
-  const p = products.find((entry) => Number(entry.id) === numId);
+  const p = findProductById(id);
   if (!p) return;
+  const numId = Number(p.id);
 
   // Prevent adding out-of-stock items
   const stock = p.stockQuantity !== undefined ? p.stockQuantity : 50;
@@ -1895,7 +1967,7 @@ function addToCart(id, quantity = 1, variant = null) {
     return;
   }
 
-  const existing = state.cart.find((entry) => Number(entry.id) === numId && (entry.variant?.size || '') === (variant?.size || ''));
+  const existing = state.cart.find((entry) => Number(entry.id) === numId && (entry.variant?.size || entry.size || '') === (variant?.size || ''));
   if ((existing?.quantity || 0) + quantity > 25) {
     state.checkoutNotice = 'You can add up to 25 units per item.';
     renderCart();
@@ -1908,6 +1980,16 @@ function addToCart(id, quantity = 1, variant = null) {
     if (!existing.price) existing.price = variant?.price || p.price;
     if (!existing.image) existing.image = p.image;
     if (!existing.size) existing.size = variant?.size || p.size;
+    if (variant?.isContinuousMonthsPlan) {
+      existing.isContinuousMonthsPlan = true;
+      existing.isSubscriptionPlan = true;
+      existing.subscriptionPlan = variant.subscriptionPlan;
+    }
+    if (variant?.isCustomDaysPlan) {
+      existing.isCustomDaysPlan = true;
+      existing.isSubscriptionPlan = true;
+      existing.subscriptionPlan = variant.subscriptionPlan;
+    }
   } else {
     state.cart.push({
       id: numId,
@@ -1916,7 +1998,9 @@ function addToCart(id, quantity = 1, variant = null) {
       size: variant?.size || p.size,
       image: p.image,
       quantity,
-      ...(variant ? { variant } : {})
+      ...(variant ? { variant } : {}),
+      ...(variant?.isContinuousMonthsPlan ? { isContinuousMonthsPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {}),
+      ...(variant?.isCustomDaysPlan ? { isCustomDaysPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {})
     });
   }
   saveCart();
@@ -1947,7 +2031,7 @@ function updateCart(id, amount, variantSize = '') {
 
 // Render Cart Drawer
 function renderCart() {
-  const valid = state.cart.filter((entry) => products.some((p) => Number(p.id) === Number(entry.id)));
+  const valid = state.cart.filter((entry) => Boolean(findProductById(entry.id)));
   state.cart = valid;
   const content = $('#cartContent');
   if (!content) return;
@@ -1966,18 +2050,28 @@ function renderCart() {
 
   // Subtotal & Total Count
   const subtotal = valid.reduce((sum, entry) => {
-    const p = products.find((item) => Number(item.id) === Number(entry.id));
-    const price = entry.variant?.price || p?.price || 0;
+    const p = findProductById(entry.id);
+    const price = entry.variant?.price || entry.price || p?.price || 0;
     return sum + price * entry.quantity;
   }, 0);
   const totalItems = valid.reduce((sum, entry) => sum + entry.quantity, 0);
 
   // Item Rows
   const itemsHtml = valid.map((entry) => {
-    const p = products.find((item) => Number(item.id) === Number(entry.id)) || { name: 'Item', price: 0, image: 'assets/milvanta-cow-milk.jpg', size: '' };
-    const size = entry.variant?.size || p.size;
-    const price = entry.variant?.price || p.price;
-    const key = encodeURIComponent(entry.variant?.size || '');
+    const p = findProductById(entry.id) || { name: 'Item', price: 0, image: 'assets/milvanta-cow-milk.jpg', size: '' };
+    const size = entry.variant?.size || entry.size || p.size;
+    const price = entry.variant?.price || entry.price || p.price;
+    const key = encodeURIComponent(size || '');
+
+    const isContinuous = entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan;
+    const isCustom = entry.isCustomDaysPlan || entry.variant?.isCustomDaysPlan;
+
+    let subBadgeHtml = '';
+    if (isContinuous) {
+      subBadgeHtml = `<div style="margin-top: 4px;"><span style="display:inline-flex; align-items:center; gap:4px; font-size:0.7rem; font-weight:700; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd; border-radius:4px; padding:2px 6px;">🥛 Continuous Subscription</span></div>`;
+    } else if (isCustom) {
+      subBadgeHtml = `<div style="margin-top: 4px;"><span style="display:inline-flex; align-items:center; gap:4px; font-size:0.7rem; font-weight:700; color:#15803d; background:#dcfce7; border:1px solid #bbf7d0; border-radius:4px; padding:2px 6px;">🥛 Custom Days Plan</span></div>`;
+    }
 
     return `
       <div class="cart-item">
@@ -1985,6 +2079,7 @@ function renderCart() {
         <div class="cart-details">
           <h4>${escapeHtml(p.name)}</h4>
           <p>${escapeHtml(size)}</p>
+          ${subBadgeHtml}
           <button class="remove-item" type="button" data-remove="${p.id}" data-variant="${key}">Remove</button>
         </div>
         <div class="cart-amount">
@@ -1998,6 +2093,12 @@ function renderCart() {
       </div>`;
   }).join('');
 
+  const hasContinuousSub = valid.some((entry) => entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan);
+  const checkoutBtnText = hasContinuousSub ? 'Proceed to Subscription Checkout' : 'Place order';
+  const checkoutSubNote = hasContinuousSub
+    ? `<div style="font-size:0.75rem; color:#0369a1; text-align:center; margin-bottom:8px; font-weight:600;">Includes Continuous Months Subscription payment</div>`
+    : '';
+
   content.innerHTML = `
     <div class="cart-items-list">${itemsHtml}</div>
     <div class="cart-drawer-footer" style="margin-top: auto; padding: 18px 0 6px; border-top: 1px solid var(--border); background: var(--card-bg); position: sticky; bottom: 0;">
@@ -2005,8 +2106,9 @@ function renderCart() {
         <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Subtotal (${totalItems} ${totalItems === 1 ? 'item' : 'items'})</span>
         <span style="font-size: 1.3rem; font-weight: 700; color: var(--text);">₹${subtotal.toFixed(0)}</span>
       </div>
+      ${checkoutSubNote}
       <button class="primary-cart place-order-btn" id="cartPlaceOrderBtn" type="button" data-place-order style="width: 100%; font-size: 1rem; padding: 14px 20px; font-weight: 700; border-radius: var(--radius-sm); border: none; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px;">
-        Place order
+        ${checkoutBtnText}
       </button>
     </div>
   `;
@@ -2022,6 +2124,8 @@ function setCartOpen(open) {
 }
 window.addToCart = addToCart;
 window.setCartOpen = setCartOpen;
+window.openProductModal = openProductModal;
+window.state = state;
 
 // Account Authentication Modal
 function setAccountMode(mode) {
@@ -2810,7 +2914,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (state.subPlanType === 'custom') {
           handleCustomDaysAddToCart(p);
         } else {
-          handleStartSubscription(p);
+          handleContinuousMonthsAddToCart(p);
         }
         return;
       }

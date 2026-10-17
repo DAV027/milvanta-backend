@@ -835,8 +835,9 @@
       costPerDay: row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : (Number(row.costPerDay) || Number(row.dailyRate) || defaultCost),
       dailyRate: row.dailyRate || (row.cost_per_day_paise ? Math.round(row.cost_per_day_paise / 100) : defaultCost),
       durationLabel: row.durationLabel || row.duration_label || '',
+      planType: row.planType || row.plan_type || ((row.durationLabel || row.duration_label || '').toLowerCase().includes('custom') ? 'custom' : 'month'),
       totalAmount: row.totalAmount || row.total_amount || 0,
-      days: row.days || 30,
+      days: row.days || (row.customDays || 30),
       status: row.status || 'active',
       nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
     };
@@ -864,13 +865,18 @@
       const fallbackTotal = (sub.days || 30) * rate;
       const totalDisplay = sub.totalAmount ? Number(sub.totalAmount).toLocaleString('en-IN') : fallbackTotal.toLocaleString('en-IN');
 
+      const isCustom = sub.planType === 'custom' || (sub.durationLabel || '').toLowerCase().includes('custom');
+      const subTag = isCustom ? 'Custom Days Plan' : 'Continuous Subscription';
+      const tagStyle = isCustom ? 'background:#dcfce7; color:#15803d; border:1px solid #bbf7d0;' : 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
+      const planDuration = sub.durationLabel || (sub.days ? `${sub.days} Days Plan` : 'Continuous Monthly');
+
       return `
       <div class="subscription-card" data-sub-id="${sub.id}">
         <div>
           <div class="subscription-item-header">
             <img src="${sub.image}" alt="${escapeHtml(sub.product)}" class="subscription-item-img" onerror="this.src='assets/milvanta-cow-milk.jpg'" />
             <div class="subscription-item-info">
-              <span class="subscription-item-tag">Early Morning Delivery</span>
+              <span class="subscription-item-tag" style="${tagStyle}">${subTag}</span>
               <h4 class="subscription-item-title">${escapeHtml(sub.product)}</h4>
               <p class="subscription-item-meta">${escapeHtml(sub.frequency)}${sub.timeSlot ? ` • ${escapeHtml(sub.timeSlot)}` : ''}</p>
             </div>
@@ -884,12 +890,10 @@
               <span class="sub-detail-label">Daily Rate</span>
               <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${rate}/day</span>
             </div>
-            ${sub.durationLabel ? `
-              <div class="sub-detail-row">
-                <span class="sub-detail-label">Plan Duration</span>
-                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 600;">${escapeHtml(sub.durationLabel)}</span>
-              </div>
-            ` : ''}
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Plan Duration</span>
+              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 600;">${escapeHtml(planDuration)}</span>
+            </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Total Plan Value</span>
               <span class="sub-detail-val" style="color: #0a3d66; font-weight: 800;">₹${totalDisplay}</span>
@@ -1592,11 +1596,7 @@
       // Update Action Button
       const submitBtn = $('#profileSubmitSubBtn');
       if (submitBtn) {
-        if (subState.planType === 'custom') {
-          submitBtn.innerHTML = `<span>Add to Cart · ₹${totalAmount.toLocaleString('en-IN')}</span>`;
-        } else {
-          submitBtn.innerHTML = `<span>Subscribe &amp; Pay · ₹${totalAmount.toLocaleString('en-IN')}</span>`;
-        }
+        submitBtn.innerHTML = `<span>Add to Cart · ₹${totalAmount.toLocaleString('en-IN')}</span>`;
       }
 
       return { dailyRate, oneTimeRate, days, totalAmount, savings, planLabel, startFormatted, endFormatted };
@@ -1758,26 +1758,32 @@
       const imageUrl = isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg';
       const submitBtn = $('#profileSubmitSubBtn');
 
-      // 1. CUSTOM DAYS PLAN -> Regular Cart Checkout
+      // 1. CUSTOM DAYS PLAN -> Add to Cart
       if (subState.planType === 'custom') {
-        const customPlanVariant = {
-          size: `${sizeLabel} (${calc.days} Days · ₹${calc.dailyRate}/day)`,
-          price: calc.totalAmount,
-          customDays: calc.days,
-          dailyRate: calc.dailyRate,
-          isCustomDaysPlan: true
-        };
-
         const cartItem = {
           id: isBuffalo ? 102 : 101,
           name: productName,
           price: calc.totalAmount,
-          size: customPlanVariant.size,
+          size: `${sizeLabel} (${calc.days} Days · ₹${calc.dailyRate}/day)`,
           image: imageUrl,
           quantity: 1,
           customDays: calc.days,
+          days: calc.days,
           dailyRate: calc.dailyRate,
-          isCustomDaysPlan: true
+          isCustomDaysPlan: true,
+          isSubscriptionPlan: true,
+          subscriptionPlan: {
+            planType: 'custom',
+            productName: productName,
+            productId: isBuffalo ? 102 : 101,
+            size: sizeLabel,
+            days: calc.days,
+            customDays: calc.days,
+            dailyRate: calc.dailyRate,
+            planLabel: `${calc.days} Days Custom Plan`,
+            frequency: 'Daily (Every Morning)',
+            timeSlot: '6:00 AM - 7:00 AM'
+          }
         };
 
         let cart = [];
@@ -1788,7 +1794,7 @@
           cart = [];
         }
 
-        const existingIdx = cart.findIndex((item) => item.id === cartItem.id && item.size === cartItem.size);
+        const existingIdx = cart.findIndex((item) => Number(item.id) === Number(cartItem.id) && (item.size || '') === (cartItem.size || ''));
         if (existingIdx > -1) {
           cart[existingIdx].quantity = (cart[existingIdx].quantity || 1) + 1;
         } else {
@@ -1801,159 +1807,63 @@
 
         updateCartBadge();
         closeModal();
-        showToast(`Added ${calc.days}-Day Fresh Milk plan (₹${calc.totalAmount.toLocaleString('en-IN')}) to Cart!`);
+        showToast(`Added ${calc.days}-Day Fresh Milk plan (₹${calc.totalAmount.toLocaleString('en-IN')}) to Cart! <a href="checkout.html" style="color:#ffffff; text-decoration:underline; font-weight:700; margin-left:8px;">Checkout →</a>`);
         return;
       }
 
-      // 2. CONTINUOUS MONTHS PLAN -> Razorpay Subscription Checkout
-      const originalBtnHtml = submitBtn ? submitBtn.innerHTML : '';
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<span>Setting Up Subscription...</span>';
-      }
-
-      const subItem = {
-        id: 'sub-' + Date.now().toString(36),
-        product: `${productName} (${sizeLabel})`,
-        productName: productName,
-        productId: isBuffalo ? 102 : 101,
+      // 2. CONTINUOUS MONTHS PLAN -> Add to Cart
+      const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
+      const cartItem = {
+        id: isBuffalo ? 102 : 101,
+        name: productName,
+        price: calc.totalAmount,
+        size: `${sizeLabel} (${calc.planLabel} · ₹${calc.dailyRate}/day)`,
         image: imageUrl,
-        size: sizeLabel,
-        planType: 'month',
-        durationLabel: calc.planLabel,
+        quantity: 1,
+        monthsCount: subState.monthsCount,
         days: calc.days,
         dailyRate: calc.dailyRate,
-        totalAmount: calc.totalAmount,
-        savings: calc.savings,
-        frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM - 7:00 AM',
-        quantity: sizeLabel,
-        qtyNum: 1,
-        costPerDay: calc.dailyRate,
-        status: 'active',
-        nextDelivery: 'Tomorrow'
+        startOffset: startOffset,
+        rangeLabel: calc.planLabel,
+        isContinuousMonthsPlan: true,
+        isSubscriptionPlan: true,
+        subscriptionPlan: {
+          planType: 'month',
+          productName: productName,
+          productId: isBuffalo ? 102 : 101,
+          size: sizeLabel,
+          monthsCount: subState.monthsCount,
+          days: calc.days,
+          dailyRate: calc.dailyRate,
+          rangeLabel: calc.planLabel,
+          startOffset: startOffset,
+          frequency: 'Daily (Every Morning)',
+          timeSlot: '6:00 AM - 7:00 AM'
+        }
       };
 
-      let subs = [];
+      let cart = [];
       try {
-        subs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
-        if (!Array.isArray(subs)) subs = [];
+        cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
+        if (!Array.isArray(cart)) cart = [];
       } catch {
-        subs = [];
+        cart = [];
       }
-      subs.unshift(subItem);
-      state.subscriptions = subs;
+
+      const existingIdx = cart.findIndex((item) => Number(item.id) === Number(cartItem.id) && (item.size || '') === (cartItem.size || ''));
+      if (existingIdx > -1) {
+        cart[existingIdx].quantity = (cart[existingIdx].quantity || 1) + 1;
+      } else {
+        cart.push(cartItem);
+      }
+
       try {
-        localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs));
+        localStorage.setItem('milvanta-cart', JSON.stringify(cart));
       } catch {}
 
-      try {
-        await ensureRazorpayScript();
-
-        const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
-        const res = await apiRequest('/api/v1/subscriptions/razorpay-checkout', {
-          method: 'POST',
-          body: JSON.stringify({
-            productId: isBuffalo ? 2 : 1,
-            productName: productName,
-            size: sizeLabel,
-            monthsCount: subState.monthsCount,
-            daysCount: calc.days,
-            totalAmountPaise: calc.totalAmount * 100,
-            dailyRatePaise: calc.dailyRate * 100,
-            startOffset
-          })
-        });
-
-        if (res?.subscriptionId) {
-          subItem.id = res.subscriptionId;
-          subItem.razorpaySubscriptionId = res.subscriptionId;
-          try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
-        }
-
-        const returnEndpoint = `${API_URL}/api/v1/subscriptions/callback?return_url=${encodeURIComponent(window.location.origin + '/profile.html?tab=subscription')}`;
-
-        if (window.Razorpay && res?.subscriptionId) {
-          const rzpOptions = {
-            key: res.keyId || window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX',
-            subscription_id: res.subscriptionId,
-            name: 'Milvanta',
-            description: `${productName} (${sizeLabel}) · ${calc.planLabel}`,
-            image: imageUrl,
-            callback_url: returnEndpoint,
-            prefill: {
-              name: state.customer?.name || '',
-              email: state.customer?.email || '',
-              contact: state.customer?.phone || ''
-            },
-            theme: {
-              color: '#0a3d66'
-            },
-            handler: async function (response) {
-              closeModal();
-              subItem.status = 'active';
-              subItem.paymentId = response.razorpay_payment_id;
-              try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
-              renderSubscriptions();
-              showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
-              window.history.replaceState({}, document.title, 'profile.html?tab=subscription');
-
-              // Persist directly into PostgreSQL database
-              try {
-                const res = await apiRequest('/api/v1/subscriptions', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    productName: subItem.product,
-                    imageUrl: subItem.image,
-                    frequency: subItem.frequency,
-                    timeSlot: subItem.timeSlot,
-                    quantity: subItem.quantity,
-                    quantityNum: 1,
-                    costPerDayPaise: calc.dailyRate * 100
-                  })
-                });
-                if (res?.subscription?.id) {
-                  subItem.id = res.subscription.id;
-                  try { localStorage.setItem('milvanta-subscriptions', JSON.stringify(subs)); } catch {}
-                }
-              } catch (dbErr) {
-                console.warn('Backend subscription DB sync notice:', dbErr);
-              }
-            },
-            modal: {
-              ondismiss: function () {
-                if (submitBtn) {
-                  submitBtn.disabled = false;
-                  if (originalBtnHtml) submitBtn.innerHTML = originalBtnHtml;
-                }
-              }
-            }
-          };
-
-          const checkout = new window.Razorpay(rzpOptions);
-          checkout.open();
-          closeModal();
-          return;
-        }
-
-        if (res?.shortUrl) {
-          showToast('Opening Razorpay Subscription Checkout...');
-          window.location.href = res.shortUrl;
-          return;
-        }
-      } catch (err) {
-        console.warn('Razorpay subscription checkout notice:', err.message);
-      } finally {
-        if (submitBtn) {
-          submitBtn.disabled = false;
-          calculateProfileRates();
-        }
-      }
-
-      renderSubscriptions();
+      updateCartBadge();
       closeModal();
-      showToast(`🥛 ${subItem.product} morning subscription active!`);
-      switchTab('subscription');
+      showToast(`Added ${subState.monthsCount}-Month Continuous Subscription (${calc.planLabel}) to Cart! <a href="checkout.html" style="color:#ffffff; text-decoration:underline; font-weight:700; margin-left:8px;">Checkout →</a>`);
     });
   }
 
