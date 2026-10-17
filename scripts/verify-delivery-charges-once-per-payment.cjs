@@ -44,10 +44,10 @@ async function main() {
   await page.evaluate(() => document.querySelector('#btnModeSub')?.click());
   await sleep(500);
 
-  const subNotice = await page.$eval('#subPriceSummaryCard', el => el.innerText);
-  console.log('Subscription Price Summary Text:\n', subNotice);
-  if (!subNotice.includes('Delivery charge (₹50) applies for all order & subscription types, and is applied only once per payment.')) {
-    throw new Error('Delivery notice missing in subscription summary card');
+  const subSummaryText = await page.$eval('#subPriceSummaryCard', el => el.innerText);
+  console.log('Subscription Price Summary Text:\n', subSummaryText);
+  if (subSummaryText.includes('(Applied once per payment)')) {
+    throw new Error('Subscription summary card unexpectedly contains (Applied once per payment)');
   }
 
   // Add 1 Month subscription to cart
@@ -61,8 +61,11 @@ async function main() {
     return footer ? footer.innerText : null;
   });
   console.log('Cart Drawer Footer (1 Subscription Item):\n', cartDrawer1);
-  if (!cartDrawer1.includes('Delivery charges') || !cartDrawer1.includes('Applied once per payment · All types')) {
-    throw new Error('Cart drawer missing delivery charges once-per-payment breakdown');
+  if (!cartDrawer1.includes('Delivery charges') || !cartDrawer1.includes('₹50')) {
+    throw new Error('Cart drawer missing clean delivery charges');
+  }
+  if (cartDrawer1.includes('(Applied once per payment)')) {
+    throw new Error('Cart drawer unexpectedly contains (Applied once per payment)');
   }
 
   await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'cart_drawer_single_sub_with_delivery.png') });
@@ -103,8 +106,11 @@ async function main() {
     return sidebar ? sidebar.innerText : null;
   });
   console.log('Checkout Sidebar Summary:\n', checkoutSummary);
-  if (!checkoutSummary.includes('Delivery charges') || !checkoutSummary.includes('Applied once per payment · All types')) {
-    throw new Error('Checkout sidebar missing delivery charges once-per-payment breakdown');
+  if (!checkoutSummary.includes('Delivery charges') || !checkoutSummary.includes('₹50')) {
+    throw new Error('Checkout sidebar missing delivery charges');
+  }
+  if (checkoutSummary.includes('(Applied once per payment)')) {
+    throw new Error('Checkout sidebar unexpectedly contains (Applied once per payment)');
   }
   await page.screenshot({ path: path.join(ARTIFACTS_DIR, 'checkout_sidebar_delivery_charges_verified.png') });
 
@@ -246,3 +252,4 @@ main().catch(err => {
   console.error('Test execution failed:', err);
   process.exit(1);
 });
+

@@ -728,7 +728,6 @@
               <div class="bill-metric">
                 <span class="bill-metric-label">Delivery Fee</span>
                 <span class="bill-metric-val">₹${order.deliveryFee || 50}</span>
-                <span style="font-size:0.68rem; color:#64748b; display:block; font-weight:500;">(Once per payment)</span>
               </div>
               <div class="bill-metric total">
                 <span class="bill-metric-label">Total Amount</span>
@@ -1069,7 +1068,7 @@
             </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Delivery Charges</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">₹${sub.deliveryFee || 50} <span style="font-size:0.72rem; color:#64748b; font-weight:500;">(Applied once per payment)</span></span>
+              <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">₹${sub.deliveryFee || 50}</span>
             </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Total Plan Value</span>
@@ -2415,7 +2414,7 @@
         <h4>1. Fresh Dairy Delivery</h4>
         <p>Fresh milk and cottage cheese are dispatched in temperature-controlled bags maintained under 4°C and delivered directly to your doorstep between <strong>6:00 AM and 7:00 AM</strong>.</p>
         <h4>2. Delivery Charges</h4>
-        <p>Delivery charges apply to all order and subscription types, and are applied strictly only once per payment: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
+        <p>Delivery charges apply to all order and subscription types: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
     },
     refund: {
       title: 'Refund & Cancellation Policy',

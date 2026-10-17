@@ -1066,7 +1066,7 @@ const POLICIES = {
       <h4>2. Bakery & Pantry Pickles</h4>
       <p>Bakery treats and jarred pickles are dispatched within 24 hours of ordering. Standard courier delivery takes 2–4 business days depending on location.</p>
       <h4>3. Delivery Charges</h4>
-      <p>Delivery charges apply to all order and subscription types, and are applied strictly only once per payment: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
+      <p>Delivery charges apply to all order and subscription types: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
   },
   refund: {
     title: 'Refund & Cancellation Policy',
@@ -2116,10 +2116,7 @@ function renderCart() {
           <span style="font-weight: 600; color: var(--text);">₹${subtotal.toFixed(0)}</span>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <div>
-            <span style="color: var(--text-muted);">Delivery charges</span>
-            <div style="font-size: 0.7rem; color: #0284c7; font-weight: 600;">Applied once per payment · All types</div>
-          </div>
+          <span style="color: var(--text-muted);">Delivery charges</span>
           <span style="font-weight: 700; color: #0f172a;">₹${deliveryFee}</span>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 4px;">

@@ -697,7 +697,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Delivery Charges</td>
-                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${deliveryFeeStr} <span style="font-size:11px; color:#64748b; font-weight:400;">(Applied once per payment)</span></td>
+                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${deliveryFeeStr}</td>
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Total Amount Paid</td>
@@ -839,7 +839,7 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Delivery Fee</td>
-                  <td style="color: #0284c7; font-weight: 700;">₹${deliveryFee} <span style="font-size:11px; color:#64748b; font-weight:400;">(Once per payment)</span></td>
+                  <td style="color: #0284c7; font-weight: 700;">₹${deliveryFee}</td>
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Total Paid</td>

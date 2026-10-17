@@ -113,7 +113,7 @@
         <h4>1. Morning Delivery Window</h4>
         <p>Orders are dispatched in temperature-controlled bags and delivered straight to your doorstep between <strong>6:00 AM and 7:00 AM</strong>.</p>
         <h4>2. Delivery Charges</h4>
-        <p>Delivery charges apply to all order and subscription types, and are applied strictly only once per payment: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
+        <p>Delivery charges apply to all order and subscription types: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
     },
     refund: {
       title: 'Refund & Cancellation Policy',
