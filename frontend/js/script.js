@@ -1066,7 +1066,7 @@ const POLICIES = {
       <h4>2. Bakery & Pantry Pickles</h4>
       <p>Bakery treats and jarred pickles are dispatched within 24 hours of ordering. Standard courier delivery takes 2–4 business days depending on location.</p>
       <h4>3. Delivery Charges</h4>
-      <p>Orders of ₹499 and above enjoy <strong>FREE Delivery</strong>. For orders below ₹499, a nominal delivery charge of ₹40 applies.</p>`
+      <p>Delivery charges apply to all order and subscription types, and are applied strictly only once per payment: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
   },
   refund: {
     title: 'Refund & Cancellation Policy',
@@ -2093,18 +2093,39 @@ function renderCart() {
       </div>`;
   }).join('');
 
+  const deliveryHelper = window.MilvantaDelivery;
+  const pin = localStorage.getItem('milvanta-pincode') || '500049';
+  const info = deliveryHelper ? deliveryHelper.getDeliveryInfo(pin) : { fee: 50 };
+  const deliveryFee = (info && info.fee) ? Number(info.fee) : 50;
+  const grandTotal = subtotal + deliveryFee;
+
   const hasContinuousSub = valid.some((entry) => entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan);
-  const checkoutBtnText = hasContinuousSub ? 'Proceed to Subscription Checkout' : 'Place order';
+  const checkoutBtnText = hasContinuousSub 
+    ? `Proceed to Subscription Checkout · ₹${grandTotal.toFixed(0)}` 
+    : `Place order · ₹${grandTotal.toFixed(0)}`;
   const checkoutSubNote = hasContinuousSub
     ? `<div style="font-size:0.75rem; color:#0369a1; text-align:center; margin-bottom:8px; font-weight:600;">Includes Continuous Months Subscription payment</div>`
     : '';
 
   content.innerHTML = `
     <div class="cart-items-list">${itemsHtml}</div>
-    <div class="cart-drawer-footer" style="margin-top: auto; padding: 18px 0 6px; border-top: 1px solid var(--border); background: var(--card-bg); position: sticky; bottom: 0;">
-      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px;">
-        <span style="font-size: 0.9rem; color: var(--text-muted); font-weight: 500;">Subtotal (${totalItems} ${totalItems === 1 ? 'item' : 'items'})</span>
-        <span style="font-size: 1.3rem; font-weight: 700; color: var(--text);">₹${subtotal.toFixed(0)}</span>
+    <div class="cart-drawer-footer" style="margin-top: auto; padding: 14px 0 6px; border-top: 1px solid var(--border); background: var(--card-bg); position: sticky; bottom: 0;">
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 0.85rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="color: var(--text-muted);">Items Subtotal (${totalItems} ${totalItems === 1 ? 'item' : 'items'})</span>
+          <span style="font-weight: 600; color: var(--text);">₹${subtotal.toFixed(0)}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div>
+            <span style="color: var(--text-muted);">Delivery charges</span>
+            <div style="font-size: 0.7rem; color: #0284c7; font-weight: 600;">Applied once per payment · All types</div>
+          </div>
+          <span style="font-weight: 700; color: #0f172a;">₹${deliveryFee}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid #e2e8f0; padding-top: 8px; margin-top: 4px;">
+          <span style="font-size: 0.95rem; font-weight: 700; color: var(--text);">Total Amount</span>
+          <span style="font-size: 1.25rem; font-weight: 800; color: #0a3d66;">₹${grandTotal.toFixed(0)}</span>
+        </div>
       </div>
       ${checkoutSubNote}
       <button class="primary-cart place-order-btn" id="cartPlaceOrderBtn" type="button" data-place-order style="width: 100%; font-size: 1rem; padding: 14px 20px; font-weight: 700; border-radius: var(--radius-sm); border: none; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px;">

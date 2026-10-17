@@ -113,7 +113,7 @@
         <h4>1. Morning Delivery Window</h4>
         <p>Orders are dispatched in temperature-controlled bags and delivered straight to your doorstep between <strong>6:00 AM and 7:00 AM</strong>.</p>
         <h4>2. Delivery Charges</h4>
-        <p>Delivery fee is distance-based from our Hafeezpet hub: <strong>₹50</strong> for deliveries within 5 km, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
+        <p>Delivery charges apply to all order and subscription types, and are applied strictly only once per payment: <strong>₹50</strong> for deliveries within 5 km of Hafeezpet hub, and <strong>₹80</strong> for deliveries 6–10 km and Hyderabad Core City (500001–500096).</p>`
     },
     refund: {
       title: 'Refund & Cancellation Policy',
@@ -766,6 +766,9 @@
 
       const subId = paymentInfo.subscriptionId || ('sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
 
+      const deliveryFee = Number(paymentInfo.deliveryFee !== undefined ? paymentInfo.deliveryFee : 50);
+      const totalAmountPaid = Number(paymentInfo.totalPaid || (totalPlanAmount + deliveryFee));
+
       const subItem = {
         id: subId,
         product: `${productName} (${cleanSize})`,
@@ -779,7 +782,10 @@
         customDays: days,
         dailyRate: dailyRate,
         costPerDay: dailyRate,
+        subtotalAmount: totalPlanAmount,
+        deliveryFee: deliveryFee,
         totalAmount: totalPlanAmount,
+        totalPaid: totalAmountPaid,
         frequency: 'Daily (Every Morning)',
         timeSlot: '6:00 AM - 7:00 AM',
         quantity: cleanSize,
@@ -813,6 +819,10 @@
               planType: subItem.planType,
               durationLabel: subItem.durationLabel,
               days: days,
+              dailyRate: dailyRate,
+              subtotalPaise: totalPlanAmount * 100,
+              deliveryFeePaise: deliveryFee * 100,
+              totalPaidPaise: totalAmountPaid * 100,
               paymentId: paymentInfo.paymentId || ''
             },
             status: 'active'
@@ -1024,9 +1034,13 @@
             theme: { color: '#0a3d66' },
             handler: async (response) => {
               const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
+              const { deliveryFee, total, subtotal } = getOrderFinancials();
               await activateSubscriptionsFromCart(state.cart, {
                 subscriptionId: res.subscriptionId,
-                paymentId: paymentRef
+                paymentId: paymentRef,
+                deliveryFee: deliveryFee,
+                totalPaid: total,
+                subtotal: subtotal
               });
 
               // Trigger subscription confirmation email
@@ -1036,6 +1050,8 @@
                   body: JSON.stringify({
                     subscriptionId: res.subscriptionId,
                     paymentId: paymentRef,
+                    deliveryFee: deliveryFee,
+                    totalPaid: total,
                     cart: state.cart,
                     address: state.addressDraft,
                     customer: {
@@ -1156,8 +1172,12 @@
           }
 
           // Activate any Custom Days plan (or subscription items) in profile subscriptions & PostgreSQL!
+          const { deliveryFee, total, subtotal } = getOrderFinancials();
           await activateSubscriptionsFromCart(state.cart, {
-            paymentId: response?.razorpay_payment_id || ''
+            paymentId: response?.razorpay_payment_id || '',
+            deliveryFee: deliveryFee,
+            totalPaid: total,
+            subtotal: subtotal
           });
 
           showOrderSuccess(order.orderNumber, false);

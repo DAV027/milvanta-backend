@@ -616,9 +616,13 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
   const planTag = isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription';
   const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
   const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
-  const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
+  const subtotalPlan = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
+  const deliveryFee = Number(subscription?.deliveryFee || 50);
+  const totalPaid = subscription?.totalPaid || (subtotalPlan + deliveryFee);
   const dailyRateStr = formatInr(dailyRate);
-  const totalAmountStr = formatInr(totalAmount);
+  const subtotalPlanStr = formatInr(subtotalPlan);
+  const deliveryFeeStr = formatInr(deliveryFee);
+  const totalPaidStr = formatInr(totalPaid);
   const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM');
   const imgUrl = subscription?.image || subscription?.image_url || (productName.toLowerCase().includes('buffalo') ? 'https://milvanta.in/assets/milvanta-buffalo-milk.jpg' : 'https://milvanta.in/assets/milvanta-cow-milk.jpg');
   const paymentMethod = isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)';
@@ -688,8 +692,16 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
                   <td style="text-align: right; font-weight: 700; color: #059669;">${dailyRateStr}/day</td>
                 </tr>
                 <tr>
+                  <td style="color: #64748b;">Deliveries Subtotal</td>
+                  <td style="text-align: right; font-weight: 700; color: #0f172a;">${subtotalPlanStr}</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Delivery Charges</td>
+                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${deliveryFeeStr} <span style="font-size:11px; color:#64748b; font-weight:400;">(Applied once per payment)</span></td>
+                </tr>
+                <tr>
                   <td style="color: #64748b;">Total Amount Paid</td>
-                  <td style="text-align: right; font-weight: 800; font-size: 15px; color: #0a3d66;">${totalAmountStr}</td>
+                  <td style="text-align: right; font-weight: 800; font-size: 15px; color: #0a3d66;">${totalPaidStr}</td>
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Payment Method</td>
@@ -755,6 +767,8 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
   const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
   const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
   const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
+  const deliveryFee = Number(subscription?.deliveryFee || 50);
+  const totalPaid = subscription?.totalPaid || (totalAmount + deliveryFee);
 
   const addressLines = [
     address?.house,
@@ -820,8 +834,16 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
                   <td style="color: #059669; font-weight: 700;">₹${dailyRate}/day</td>
                 </tr>
                 <tr>
+                  <td style="color: #64748b;">Deliveries Subtotal</td>
+                  <td><strong>₹${totalAmount.toLocaleString('en-IN')}</strong></td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Delivery Fee</td>
+                  <td style="color: #0284c7; font-weight: 700;">₹${deliveryFee} <span style="font-size:11px; color:#64748b; font-weight:400;">(Once per payment)</span></td>
+                </tr>
+                <tr>
                   <td style="color: #64748b;">Total Paid</td>
-                  <td style="color: #0a3d66; font-weight: 800; font-size: 15px;">₹${totalAmount.toLocaleString('en-IN')}</td>
+                  <td style="color: #0a3d66; font-weight: 800; font-size: 15px;">₹${totalPaid.toLocaleString('en-IN')}</td>
                 </tr>
                 <tr>
                   <td style="color: #64748b;">Payment / Sub ID</td>
