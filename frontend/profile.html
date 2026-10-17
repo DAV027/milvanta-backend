@@ -632,28 +632,18 @@
           </div>
 
           <!-- Pack Size Selection -->
-          <div>
-            <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Select Pack Size</label>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;" id="profileSubSizeGroup">
-              <label class="sub-size-card active" data-size="500ml" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 1.5px solid #0a3d66; border-radius: 10px; background: #eff6ff; cursor: pointer;">
-                <input type="radio" name="profileSubSize" value="500ml" checked style="display: none;" />
-                <span style="font-size: 0.88rem; font-weight: 700; color: #0a3d66;">1/2 Litre (500 ml)</span>
-                <span id="profileSizeRate500" style="font-size: 0.8rem; font-weight: 800; color: #059669; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">₹55/day</span>
-              </label>
-              <label class="sub-size-card" data-size="1L" style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 1.5px solid #e2e8f0; border-radius: 10px; background: #ffffff; cursor: pointer;">
-                <input type="radio" name="profileSubSize" value="1L" style="display: none;" />
-                <span style="font-size: 0.88rem; font-weight: 700; color: #334155;">1 Litre (1000 ml)</span>
-                <span id="profileSizeRate1L" style="font-size: 0.8rem; font-weight: 800; color: #059669; background: #ecfdf5; padding: 2px 6px; border-radius: 4px;">₹105/day</span>
-              </label>
-            </div>
+          <div style="margin-bottom: 16px;">
+            <label for="profileSubPackSizeSelect" style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Choose Pack Size</label>
+            <select id="profileSubPackSizeSelect" class="sub-pack-size-select" style="width: 100%; padding: 10px 14px; font-size: 0.92rem; font-weight: 700; border: 1.5px solid #cbd5e1; border-radius: 10px; background: #ffffff; color: #0a3d66; cursor: pointer;">
+              <!-- Populated dynamically via JS: 500 ml, 1 Litre, 1.5 Litre up to 5 Litre -->
+            </select>
           </div>
 
-          <!-- Duration Type -->
+          <!-- Subscription Duration -->
           <div>
-            <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; display: block; margin-bottom: 6px;">Subscription Duration</label>
-            <div style="display: flex; gap: 8px; margin-bottom: 10px;">
-              <button type="button" class="sub-duration-tab active" id="profileSubTabMonth" style="flex: 1; padding: 9px; font-size: 0.85rem; font-weight: 700; border-radius: 8px; border: 1px solid #0a3d66; background: #0a3d66; color: #fff; cursor: pointer;">Continuous Months</button>
-              <button type="button" class="sub-duration-tab" id="profileSubTabCustom" style="flex: 1; padding: 9px; font-size: 0.85rem; font-weight: 600; border-radius: 8px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; cursor: pointer;">Custom Days (Min 2)</button>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="font-size: 0.82rem; font-weight: 700; color: #1e293b; margin: 0;">Subscription Duration</label>
+              <span style="font-size: 0.68rem; color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; padding: 1px 6px; border-radius: 9999px; font-weight: 700;">Continuous Sequence</span>
             </div>
 
             <!-- Continuous Months Controls -->
@@ -663,8 +653,7 @@
               </select>
 
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <label style="font-size: 0.78rem; font-weight: 600; color: #475569;">Continuous Months</label>
-                <span style="font-size: 0.68rem; color: #1d4ed8; background: #eff6ff; border: 1px solid #bfdbfe; padding: 1px 6px; border-radius: 9999px; font-weight: 700;">Continuous Sequence</span>
+                <label style="font-size: 0.78rem; font-weight: 600; color: #475569;">Number of Months</label>
               </div>
               <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                 <button type="button" id="profileSubMonthsDec" style="width: 44px; height: 44px; font-size: 1.4rem; font-weight: 700; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">−</button>
@@ -680,21 +669,6 @@
                 <button type="button" class="sub-quick-pill" data-profile-months="6" style="background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">6 Months</button>
               </div>
               <p id="profileSubMonthHint" style="font-size: 0.75rem; color: #64748b; margin: 4px 0 0;">Price adapts automatically to total days across continuous months.</p>
-            </div>
-
-            <!-- Custom Days Counter -->
-            <div id="profileSubCustomWrap" class="hidden">
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <button type="button" class="sub-day-stepper-btn" id="profileSubDaysDec" style="width: 44px; height: 44px; font-size: 1.4rem; font-weight: 700; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">−</button>
-                <input type="number" id="profileSubDaysInput" min="2" max="90" value="7" style="flex: 1; height: 44px; text-align: center; font-size: 1.15rem; font-weight: 800; border: 1px solid #cbd5e1; border-radius: 8px;" />
-                <button type="button" class="sub-day-stepper-btn" id="profileSubDaysInc" style="width: 44px; height: 44px; font-size: 1.4rem; font-weight: 700; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; cursor: pointer;">+</button>
-              </div>
-              <div style="display: flex; gap: 6px; margin-top: 8px;">
-                <button type="button" class="sub-quick-pill" data-profile-days="2" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">2 Days</button>
-                <button type="button" class="sub-quick-pill" data-profile-days="7" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">7 Days</button>
-                <button type="button" class="sub-quick-pill" data-profile-days="15" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">15 Days</button>
-                <button type="button" class="sub-quick-pill" data-profile-days="30" style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:14px; padding:4px 10px; font-size:0.75rem; cursor:pointer;">30 Days</button>
-              </div>
             </div>
           </div>
 

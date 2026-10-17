@@ -729,13 +729,9 @@
           <div class="order-card-header">
             <div class="order-id-group">
               <div class="order-type-badge-row">
-                ${order.orderType === 'subscription_continuous' ? `
+                ${(order.orderType === 'subscription_continuous' || order.orderType === 'subscription' || order.orderType === 'subscription_custom') ? `
                   <span class="order-type-badge badge-sub-continuous">
-                    🔄 Continuous Subscription Payment · Auto-renewing
-                  </span>
-                ` : order.orderType === 'subscription_custom' ? `
-                  <span class="order-type-badge badge-sub-custom">
-                    🗓️ Custom Days Plan Payment · Upfront Paid
+                    🔄 Subscription Payment · Monthly Sequence
                   </span>
                 ` : `
                   <span class="order-type-badge badge-store-order">
@@ -1087,13 +1083,11 @@
       const fallbackTotal = (sub.days || 30) * rate;
       const totalDisplay = sub.totalAmount ? Number(sub.totalAmount).toLocaleString('en-IN') : fallbackTotal.toLocaleString('en-IN');
 
-      const isCustom = sub.planType === 'custom' || (sub.durationLabel || '').toLowerCase().includes('custom');
-      const customDaysCount = Number(sub.days || sub.customDays || 14);
-      const subTag = isCustom ? '🗓️ Custom Days Plan' : '🔄 Continuous Subscription';
-      const tagStyle = isCustom ? 'background:#dcfce7; color:#15803d; border:1px solid #bbf7d0;' : 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
-      const planDuration = sub.durationLabel || (isCustom ? `${customDaysCount} Days Custom Plan` : 'Continuous Monthly');
-      const paymentMode = isCustom ? 'Paid Online via Razorpay (One-Time Upfront)' : 'Subscription Autopay (Razorpay Recurring)';
-      const planTypeDesc = isCustom ? 'Custom Days (Upfront Paid)' : 'Continuous Months (Recurring Autopay)';
+      const subTag = '🔄 Continuous Subscription';
+      const tagStyle = 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
+      const planDuration = sub.durationLabel || 'Continuous Monthly';
+      const paymentMode = 'Subscription Autopay (Razorpay Recurring)';
+      const planTypeDesc = 'Continuous Months (Recurring Autopay)';
 
       return `
       <div class="subscription-card" data-sub-id="${sub.id}">
@@ -1112,21 +1106,10 @@
               <span class="sub-detail-label">Plan Type</span>
               <span class="sub-detail-val" style="color: #0f172a; font-weight: 700;">${planTypeDesc}</span>
             </div>
-            ${isCustom ? `
-              <div class="sub-detail-row">
-                <span class="sub-detail-label">Custom Days Booked</span>
-                <span class="sub-detail-val" style="color: #15803d; font-weight: 800; font-size: 0.95rem;">🗓️ ${customDaysCount} Days Selected</span>
-              </div>
-              <div class="sub-detail-row">
-                <span class="sub-detail-label">Booking Schedule</span>
-                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">18 Oct 2026 – 31 Oct 2026 (${customDaysCount} Mornings)</span>
-              </div>
-            ` : `
-              <div class="sub-detail-row">
-                <span class="sub-detail-label">Plan Duration</span>
-                <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
-              </div>
-            `}
+            <div class="sub-detail-row">
+              <span class="sub-detail-label">Plan Duration</span>
+              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
+            </div>
             <div class="sub-detail-row">
               <span class="sub-detail-label">Daily Quantity</span>
               <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
@@ -1159,12 +1142,6 @@
               <span class="sub-detail-label">Next Scheduled Delivery</span>
               <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
             </div>
-            ${isCustom ? `
-              <div class="sub-detail-row">
-                <span class="sub-detail-label">Deliveries Remaining</span>
-                <span class="sub-detail-val" style="color: #15803d; font-weight: 700;">${customDaysCount} Mornings Remaining (0 Delivered)</span>
-              </div>
-            ` : ''}
             <div class="sub-detail-row">
               <span class="sub-detail-label">Morning Delivery Address</span>
               <span class="sub-detail-val" style="color: #0f172a; font-weight: 600; text-align: right;">
@@ -1187,38 +1164,9 @@
             </div>
           </div>
 
-          ${isCustom ? `
-            <div class="custom-days-progress-box">
-              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; font-weight: 700; color: #166534; margin-bottom: 6px;">
-                <span>🗓️ Custom Plan Progress</span>
-                <span>0 / ${customDaysCount} Mornings Delivered (${customDaysCount} Left)</span>
-              </div>
-              <div style="width: 100%; height: 8px; background: #dcfce7; border-radius: 9999px; overflow: hidden;">
-                <div style="width: 7%; height: 100%; background: #16a34a; border-radius: 9999px;"></div>
-              </div>
-              <div style="font-size: 0.74rem; color: #15803d; margin-top: 6px; font-weight: 500;">
-                🌱 Milk deliveries arrive every morning between 6:00 AM – 7:00 AM through 31 Oct 2026.
-              </div>
-            </div>
-            ${customDaysCount <= 3 ? `
-              <div class="sub-low-balance-alert">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-size: 1.3rem;">⚠️</span>
-                  <div>
-                    <strong style="color: #9a3412; font-size: 0.84rem; display: block;">Plan Ending Soon (${customDaysCount} Mornings Left)</strong>
-                    <span style="color: #c2410c; font-size: 0.76rem;">Renew your custom plan now to avoid morning milk delivery interruption.</span>
-                  </div>
-                </div>
-                <button type="button" class="btn-renew-sub" data-quick-extend="${sub.id}" style="padding: 7px 14px; font-size: 0.8rem; background: #ea580c; border-color: #ea580c; cursor: pointer;">
-                  <span>Extend Plan Now →</span>
-                </button>
-              </div>
-            ` : ''}
-          ` : `
-            <div style="margin-top: 10px; padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 0.78rem; color: #0369a1; font-weight: 600;">
-              🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
-            </div>
-          `}
+          <div style="margin-top: 10px; padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 0.78rem; color: #0369a1; font-weight: 600;">
+            🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
+          </div>
         </div>
 
         <div class="subscription-actions-row" style="flex-wrap: wrap; margin-top: 14px;">
@@ -1279,10 +1227,6 @@
 
     const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
     const hasActiveSubs = activeSubs.length > 0;
-    const customSub = activeSubs.find((s) => s.planType === 'custom' || (s.durationLabel || '').toLowerCase().includes('custom'));
-    const contSub = activeSubs.find((s) => s.planType !== 'custom' && !(s.durationLabel || '').toLowerCase().includes('custom'));
-    const customDaysTotal = customSub ? Number(customSub.days || customSub.customDays || 14) : 0;
-
     let scheduledCount = 0;
     let deliveredCount = 0;
     let pausedCount = 0;
@@ -1317,9 +1261,6 @@
       let badgeHtml = '';
       let statusType = 'none';
 
-      const dayOffset = isCurrentCalendarMonth ? (day - todayDate) : 0;
-      const isWithinCustom = customSub && dayOffset >= 1 && dayOffset <= customDaysTotal;
-
       if (!hasActiveSubs) {
         badgeHtml = `<span class="month-cal-day-badge badge-none">No Drop</span>`;
       } else if (isDatePaused) {
@@ -1337,17 +1278,11 @@
       } else if (isTomorrow) {
         scheduledCount++;
         statusType = 'tomorrow';
-        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow${customSub ? ' (D1)' : ''}</span>`;
-      } else if (isWithinCustom) {
-        scheduledCount++;
-        statusType = 'custom_scheduled';
-        badgeHtml = `<span class="month-cal-day-badge badge-custom-day">🗓️ Day ${dayOffset} of ${customDaysTotal}</span>`;
-      } else if (contSub) {
+        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow</span>`;
+      } else {
         scheduledCount++;
         statusType = 'scheduled';
         badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
-      } else {
-        badgeHtml = `<span class="month-cal-day-badge badge-plan-ended">Plan Ended</span>`;
       }
 
       gridHtml += `
@@ -1380,7 +1315,6 @@
         <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
         <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
         ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused</span>` : ''}
-        ${customSub ? `<span style="background:#ecfdf5; color:#047857; padding:3px 8px; border-radius:6px; font-weight:700;">🗓️ ${customDaysTotal} Custom Days Active</span>` : ''}
         <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
       `;
     }
@@ -1407,16 +1341,6 @@
     const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
     const subNames = activeSubs.map((s) => `${s.quantity || '500 ml'} ${s.product}`).join(' + ') || 'Pure Farm Fresh Milk (500 ml)';
 
-    const customSub = activeSubs.find((s) => s.planType === 'custom' || (s.durationLabel || '').toLowerCase().includes('custom'));
-    const contSub = activeSubs.find((s) => s.planType !== 'custom' && !(s.durationLabel || '').toLowerCase().includes('custom'));
-    const customDaysTotal = customSub ? Number(customSub.days || customSub.customDays || 14) : 0;
-    const now = new Date();
-    const isCurrentCalendarMonth = (now.getFullYear() === year && now.getMonth() === month);
-    const todayDate = now.getDate();
-    const dayOffset = isCurrentCalendarMonth ? (day - todayDate) : 0;
-    const isWithinCustom = customSub && dayOffset >= 1 && dayOffset <= customDaysTotal;
-    const isAfterCustomEnded = !contSub && customSub && dayOffset > customDaysTotal;
-
     let statusBadge = '';
     let actionBtn = '';
 
@@ -1426,21 +1350,12 @@
     } else if (status === 'delivered') {
       statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered at 6:15 AM</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Delivered by Hafeezpet Route Van</span>`;
-    } else if (isAfterCustomEnded) {
-      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🗓️ Custom Plan Ended</span>`;
-      actionBtn = `<a href="index.html#products" style="display:inline-block; background:#0a3d66; color:#fff; border-radius:8px; padding:8px 16px; font-size:0.82rem; font-weight:700; text-decoration:none;">+ Extend Plan</a>`;
     } else {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip / Pause This Day</button>`;
     }
 
-    let planTagHtml = '';
-    if (isWithinCustom) {
-      planTagHtml = `<span class="order-type-badge badge-sub-custom" style="font-size:0.72rem; padding:2px 8px;">🗓️ Custom Days Plan: Day ${dayOffset} of ${customDaysTotal}</span>`;
-    }
-    if (contSub) {
-      planTagHtml += `<span class="order-type-badge badge-sub-continuous" style="font-size:0.72rem; padding:2px 8px; margin-left:4px;">🔄 Continuous Monthly Plan</span>`;
-    }
+    const planTagHtml = `<span class="order-type-badge badge-sub-continuous" style="font-size:0.72rem; padding:2px 8px;">🔄 Continuous Monthly Plan</span>`;
 
     inspector.innerHTML = `
       <div style="flex: 1; min-width: 260px;">
@@ -1450,7 +1365,7 @@
           ${planTagHtml}
         </div>
         <div style="font-size: 0.88rem; color: #334155; margin-bottom: 4px;">
-          ${isAfterCustomEnded ? 'No delivery scheduled for this date (Custom days plan completed).' : `Scheduled: <strong>${escapeHtml(subNames)}</strong>`}
+          Scheduled: <strong>${escapeHtml(subNames)}</strong>
         </div>
         <div style="font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
           <span>⏰ Delivery Slot: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
@@ -2030,11 +1945,56 @@
 
     let subState = {
       milk: 'cow',
-      size: '500ml',
+      size: '1 Litre',
       planType: 'month',
       days: 30,
       monthsCount: 1
     };
+
+    const PROFILE_MILK_PACK_SIZES = [
+      { size: '500 ml', litres: 0.5, label: '500 ml' },
+      { size: '1 Litre', litres: 1.0, label: '1 Litre' },
+      { size: '1.5 Litre', litres: 1.5, label: '1.5 Litre' },
+      { size: '2 Litre', litres: 2.0, label: '2 Litre' },
+      { size: '2.5 Litre', litres: 2.5, label: '2.5 Litre' },
+      { size: '3 Litre', litres: 3.0, label: '3 Litre' },
+      { size: '3.5 Litre', litres: 3.5, label: '3.5 Litre' },
+      { size: '4 Litre', litres: 4.0, label: '4 Litre' },
+      { size: '4.5 Litre', litres: 4.5, label: '4.5 Litre' },
+      { size: '5 Litre', litres: 5.0, label: '5 Litre' }
+    ];
+
+    function getProfileMilkRates(isBuffalo, litres) {
+      const subRate500 = isBuffalo ? 65 : 55;
+      const otRate500 = isBuffalo ? 70 : 60;
+      const subRate1L = isBuffalo ? 125 : 105;
+      const otRate1L = isBuffalo ? 130 : 110;
+
+      let dailyRate, oneTimeRate;
+      if (litres === 0.5) {
+        dailyRate = subRate500;
+        oneTimeRate = otRate500;
+      } else {
+        const fullL = Math.floor(litres);
+        const hasHalf = (litres % 1) >= 0.45;
+        dailyRate = (fullL * subRate1L) + (hasHalf ? subRate500 : 0);
+        oneTimeRate = (fullL * otRate1L) + (hasHalf ? otRate500 : 0);
+      }
+      return { dailyRate, oneTimeRate };
+    }
+
+    function populateProfilePackSizes() {
+      const select = $('#profileSubPackSizeSelect');
+      if (!select) return;
+      const isBuffalo = subState.milk === 'buffalo';
+      const curSize = subState.size || '1 Litre';
+      select.innerHTML = PROFILE_MILK_PACK_SIZES.map((item) => {
+        const { dailyRate, oneTimeRate } = getProfileMilkRates(isBuffalo, item.litres);
+        const isSel = item.size === curSize;
+        const saveAmt = oneTimeRate - dailyRate;
+        return `<option value="${item.size}" ${isSel ? 'selected' : ''}>${item.label} (₹${dailyRate}/day · save ₹${saveAmt}/day)</option>`;
+      }).join('');
+    }
 
     function populateProfileMonths() {
       if (!monthSelect) return;
@@ -2056,87 +2016,51 @@
 
     function calculateProfileRates() {
       const isBuffalo = subState.milk === 'buffalo';
-      const is1L = subState.size === '1L';
+      const packSelect = $('#profileSubPackSizeSelect');
+      const curSize = packSelect?.value || subState.size || '1 Litre';
+      subState.size = curSize;
 
-      let dailyRate, oneTimeRate;
-      if (isBuffalo) {
-        if (is1L) {
-          dailyRate = 125; oneTimeRate = 130;
+      let litres = 1.0;
+      if (curSize.includes('500') || curSize.includes('1/2')) litres = 0.5;
+      else {
+        const match = curSize.match(/([0-9]+(?:\.[0-9]+)?)/);
+        if (match) litres = parseFloat(match[1]);
+      }
+
+      const { dailyRate, oneTimeRate } = getProfileMilkRates(isBuffalo, litres);
+
+      const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
+      const count = Math.max(1, Math.min(12, subState.monthsCount || 1));
+      subState.monthsCount = count;
+
+      const details = getContinuousMonthsDetails(startOffset, count);
+      const days = details.totalDays;
+      const planLabel = details.rangeLabel;
+      const startFormatted = details.startFormatted;
+      const endFormatted = details.endFormatted;
+
+      const valElem = $('#profileSubMonthsVal');
+      const unitElem = $('#profileSubMonthsUnit');
+      if (valElem) valElem.textContent = count;
+      if (unitElem) unitElem.textContent = count === 1 ? 'Month' : 'Months';
+
+      const hintElem = $('#profileSubMonthHint');
+      if (hintElem) {
+        if (count === 1) {
+          hintElem.textContent = `Period: ${details.mList[0].lName} ${details.mList[0].year} (${days} Days). Price adapts automatically to exact days.`;
         } else {
-          dailyRate = 65; oneTimeRate = 70;
-        }
-      } else {
-        if (is1L) {
-          dailyRate = 105; oneTimeRate = 110;
-        } else {
-          dailyRate = 55; oneTimeRate = 60;
+          const bTxt = details.mList.map((m) => `${m.sName}: ${m.days}d`).join(' + ');
+          hintElem.textContent = `Period: ${bTxt} = ${days} Continuous Days across ${count} months.`;
         }
       }
 
-      // Update rate chips inside pack size cards
-      const rate500 = $('#profileSizeRate500');
-      const rate1L = $('#profileSizeRate1L');
-      if (rate500) rate500.textContent = isBuffalo ? '₹65/day' : '₹55/day';
-      if (rate1L) rate1L.textContent = isBuffalo ? '₹125/day' : '₹105/day';
-
-      let days = 30;
-      let planLabel = '';
-      let startFormatted = '';
-      let endFormatted = '';
-
-      if (subState.planType === 'month') {
-        const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
-        const count = Math.max(1, Math.min(12, subState.monthsCount || 1));
-        subState.monthsCount = count;
-
-        const details = getContinuousMonthsDetails(startOffset, count);
-        days = details.totalDays;
-        planLabel = details.rangeLabel;
-        startFormatted = details.startFormatted;
-        endFormatted = details.endFormatted;
-
-        const valElem = $('#profileSubMonthsVal');
-        const unitElem = $('#profileSubMonthsUnit');
-        if (valElem) valElem.textContent = count;
-        if (unitElem) unitElem.textContent = count === 1 ? 'Month' : 'Months';
-
-        const hintElem = $('#profileSubMonthHint');
-        if (hintElem) {
-          if (count === 1) {
-            hintElem.textContent = `Period: ${details.mList[0].lName} ${details.mList[0].year} (${days} Days). Price adapts automatically to exact days.`;
-          } else {
-            const bTxt = details.mList.map((m) => `${m.sName}: ${m.days}d`).join(' + ');
-            hintElem.textContent = `Period: ${bTxt} = ${days} Continuous Days across ${count} months.`;
-          }
-        }
-
-        document.querySelectorAll('#profileSubMonthQuickPills .sub-quick-pill').forEach((pill) => {
-          const pMonths = parseInt(pill.dataset.profileMonths, 10);
-          const isAct = pMonths === count;
-          pill.style.background = isAct ? '#0a3d66' : '#f1f5f9';
-          pill.style.color = isAct ? '#ffffff' : '#334155';
-          pill.style.borderColor = isAct ? '#0a3d66' : '#cbd5e1';
-        });
-      } else {
-        const input = $('#profileSubDaysInput');
-        days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
-        if (input) input.value = days;
-        planLabel = `${days} Days Custom Plan`;
-
-        const now = new Date();
-        const startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-        const endDate = new Date(startDate.getTime() + (days - 1) * 24 * 60 * 60 * 1000);
-        startFormatted = `Tomorrow, ${startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
-        endFormatted = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-
-        document.querySelectorAll('[data-profile-days]').forEach((pill) => {
-          const pDays = parseInt(pill.dataset.profileDays, 10);
-          const isAct = pDays === days;
-          pill.style.background = isAct ? '#0a3d66' : '#f1f5f9';
-          pill.style.color = isAct ? '#ffffff' : '#334155';
-          pill.style.borderColor = isAct ? '#0a3d66' : '#cbd5e1';
-        });
-      }
+      document.querySelectorAll('#profileSubMonthQuickPills .sub-quick-pill').forEach((pill) => {
+        const pMonths = parseInt(pill.dataset.profileMonths, 10);
+        const isAct = pMonths === count;
+        pill.style.background = isAct ? '#0a3d66' : '#f1f5f9';
+        pill.style.color = isAct ? '#ffffff' : '#334155';
+        pill.style.borderColor = isAct ? '#0a3d66' : '#cbd5e1';
+      });
 
       subState.days = days;
       const totalAmount = days * dailyRate;
@@ -2165,6 +2089,7 @@
 
     function openSubModal() {
       populateProfileMonths();
+      populateProfilePackSizes();
       calculateProfileRates();
       modal.classList.remove('hidden');
     }
@@ -2198,61 +2123,14 @@
         const radio = card.querySelector('input[type="radio"]');
         if (radio) radio.checked = true;
         subState.milk = card.dataset.milk || 'cow';
+        populateProfilePackSizes();
         calculateProfileRates();
       });
     });
 
-    // Size selection
-    $$('#profileSubSizeGroup .sub-size-card').forEach((card) => {
-      card.addEventListener('click', () => {
-        $$('#profileSubSizeGroup .sub-size-card').forEach((c) => {
-          c.classList.remove('active');
-          c.style.borderColor = '#e2e8f0';
-          c.style.background = '#ffffff';
-        });
-        card.classList.add('active');
-        card.style.borderColor = '#0a3d66';
-        card.style.background = '#eff6ff';
-        const radio = card.querySelector('input[type="radio"]');
-        if (radio) radio.checked = true;
-        subState.size = card.dataset.size || '500ml';
-        calculateProfileRates();
-      });
-    });
-
-    // Duration tabs
-    const tabMonth = $('#profileSubTabMonth');
-    const tabCustom = $('#profileSubTabCustom');
-    const wrapMonth = $('#profileSubMonthWrap');
-    const wrapCustom = $('#profileSubCustomWrap');
-
-    tabMonth?.addEventListener('click', () => {
-      subState.planType = 'month';
-      tabMonth.style.background = '#0a3d66';
-      tabMonth.style.color = '#fff';
-      tabMonth.style.borderColor = '#0a3d66';
-      if (tabCustom) {
-        tabCustom.style.background = '#f8fafc';
-        tabCustom.style.color = '#475569';
-        tabCustom.style.borderColor = '#cbd5e1';
-      }
-      wrapMonth?.classList.remove('hidden');
-      wrapCustom?.classList.add('hidden');
-      calculateProfileRates();
-    });
-
-    tabCustom?.addEventListener('click', () => {
-      subState.planType = 'custom';
-      tabCustom.style.background = '#0a3d66';
-      tabCustom.style.color = '#fff';
-      tabCustom.style.borderColor = '#0a3d66';
-      if (tabMonth) {
-        tabMonth.style.background = '#f8fafc';
-        tabMonth.style.color = '#475569';
-        tabMonth.style.borderColor = '#cbd5e1';
-      }
-      wrapCustom?.classList.remove('hidden');
-      wrapMonth?.classList.add('hidden');
+    // Pack size dropdown selection
+    $('#profileSubPackSizeSelect')?.addEventListener('change', (e) => {
+      subState.size = e.target.value;
       calculateProfileRates();
     });
 
@@ -2275,112 +2153,16 @@
       });
     });
 
-    $('#profileSubDaysDec')?.addEventListener('click', () => {
-      const input = $('#profileSubDaysInput');
-      if (input) {
-        const cur = parseInt(input.value || '7', 10);
-        input.value = Math.max(2, cur - 1);
-        calculateProfileRates();
-      }
-    });
-
-    $('#profileSubDaysInc')?.addEventListener('click', () => {
-      const input = $('#profileSubDaysInput');
-      if (input) {
-        const cur = parseInt(input.value || '7', 10);
-        input.value = Math.min(90, cur + 1);
-        calculateProfileRates();
-      }
-    });
-
-    $('#profileSubDaysInput')?.addEventListener('input', () => {
-      const input = $('#profileSubDaysInput');
-      if (input) {
-        let cur = parseInt(input.value || '2', 10);
-        if (isNaN(cur) || cur < 2) cur = 2;
-        if (cur > 90) cur = 90;
-        input.value = cur;
-        calculateProfileRates();
-      }
-    });
-
-    $$('[data-profile-days]').forEach((pill) => {
-      pill.addEventListener('click', () => {
-        const days = parseInt(pill.dataset.profileDays, 10);
-        const input = $('#profileSubDaysInput');
-        if (input && days >= 2) {
-          input.value = days;
-          calculateProfileRates();
-        }
-      });
-    });
-
     // Form submit
     form?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const calc = calculateProfileRates();
       const isBuffalo = subState.milk === 'buffalo';
-      const is1L = subState.size === '1L';
-
       const productName = isBuffalo ? 'Pure Buffalo Milk' : 'Pure Fresh Cow Milk';
-      const sizeLabel = is1L ? '1 Litre' : '500 ml';
+      const sizeLabel = subState.size;
       const imageUrl = isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg';
-      const submitBtn = $('#profileSubmitSubBtn');
 
-      // 1. CUSTOM DAYS PLAN -> Add to Cart
-      if (subState.planType === 'custom') {
-        const cartItem = {
-          id: isBuffalo ? 102 : 101,
-          name: productName,
-          price: calc.totalAmount,
-          size: `${sizeLabel} (${calc.days} Days · ₹${calc.dailyRate}/day)`,
-          image: imageUrl,
-          quantity: 1,
-          customDays: calc.days,
-          days: calc.days,
-          dailyRate: calc.dailyRate,
-          isCustomDaysPlan: true,
-          isSubscriptionPlan: true,
-          subscriptionPlan: {
-            planType: 'custom',
-            productName: productName,
-            productId: isBuffalo ? 102 : 101,
-            size: sizeLabel,
-            days: calc.days,
-            customDays: calc.days,
-            dailyRate: calc.dailyRate,
-            planLabel: `${calc.days} Days Custom Plan`,
-            frequency: 'Daily (Every Morning)',
-            timeSlot: '6:00 AM - 7:00 AM'
-          }
-        };
-
-        let cart = [];
-        try {
-          cart = JSON.parse(localStorage.getItem('milvanta-cart') || '[]');
-          if (!Array.isArray(cart)) cart = [];
-        } catch {
-          cart = [];
-        }
-
-        const existingIdx = cart.findIndex((item) => Number(item.id) === Number(cartItem.id) && (item.size || '') === (cartItem.size || ''));
-        if (existingIdx > -1) {
-          cart[existingIdx].quantity = (cart[existingIdx].quantity || 1) + 1;
-        } else {
-          cart.push(cartItem);
-        }
-
-        try {
-          localStorage.setItem('milvanta-cart', JSON.stringify(cart));
-        } catch {}
-
-        updateCartBadge();
-        closeModal();
-        showToast(`Added ${calc.days}-Day Fresh Milk plan (₹${calc.totalAmount.toLocaleString('en-IN')}) to Cart! <a href="checkout.html" style="color:#ffffff; text-decoration:underline; font-weight:700; margin-left:8px;">Checkout →</a>`);
-        return;
-      }
-
-      // 2. CONTINUOUS MONTHS PLAN -> Add to Cart
+      // CONTINUOUS MONTHS PLAN -> Add to Cart
       const startOffset = parseInt(monthSelect?.value || '0', 10) || 0;
       const cartItem = {
         id: isBuffalo ? 102 : 101,
@@ -2392,8 +2174,11 @@
         monthsCount: subState.monthsCount,
         days: calc.days,
         dailyRate: calc.dailyRate,
+        oneTimeRate: calc.oneTimeRate,
+        savings: calc.savings,
         startOffset: startOffset,
         rangeLabel: calc.planLabel,
+        planLabel: calc.planLabel,
         isContinuousMonthsPlan: true,
         isSubscriptionPlan: true,
         subscriptionPlan: {
@@ -2434,6 +2219,11 @@
       closeModal();
       showToast(`Added ${subState.monthsCount}-Month Continuous Subscription (${calc.planLabel}) to Cart! <a href="checkout.html" style="color:#ffffff; text-decoration:underline; font-weight:700; margin-left:8px;">Checkout →</a>`);
     });
+
+    // Populate initial dropdown options and pricing
+    populateProfileMonths();
+    populateProfilePackSizes();
+    calculateProfileRates();
   }
 
   // Vacation Mode / Date-Range Multi-Day Pause Modal Setup

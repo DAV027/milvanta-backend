@@ -496,22 +496,75 @@ function isFreshMilkProduct(p) {
   return p.category === 'Fresh Milk' || p.id === 101 || p.id === 102 || /cow milk|buffalo milk/i.test(p.name);
 }
 
+const MILK_PACK_SIZES = [
+  { size: '500 ml', litres: 0.5, label: '500 ml' },
+  { size: '1 Litre', litres: 1.0, label: '1 Litre' },
+  { size: '1.5 Litre', litres: 1.5, label: '1.5 Litre' },
+  { size: '2 Litre', litres: 2.0, label: '2 Litre' },
+  { size: '2.5 Litre', litres: 2.5, label: '2.5 Litre' },
+  { size: '3 Litre', litres: 3.0, label: '3 Litre' },
+  { size: '3.5 Litre', litres: 3.5, label: '3.5 Litre' },
+  { size: '4 Litre', litres: 4.0, label: '4 Litre' },
+  { size: '4.5 Litre', litres: 4.5, label: '4.5 Litre' },
+  { size: '5 Litre', litres: 5.0, label: '5 Litre' }
+];
+
+function parseLitresFromSize(sizeStr) {
+  const s = String(sizeStr || '').toLowerCase().trim();
+  if (s.includes('500') || s.includes('1/2') || s.includes('half')) return 0.5;
+  const match = s.match(/([0-9]+(?:\.[0-9]+)?)/);
+  if (match) return parseFloat(match[1]);
+  return 1.0;
+}
+
 function getMilkSubscriptionRates(product, variantSize) {
   const isBuffalo = product.id === 102 || /buffalo/i.test(product.name);
-  const sizeStr = String(variantSize || product.size || '').toLowerCase();
-  const is1L = sizeStr.includes('1') || sizeStr.includes('litre') || sizeStr.includes('liter') || sizeStr.includes('1000');
+  const litres = parseLitresFromSize(variantSize || product.size || '1 Litre');
 
-  if (isBuffalo) {
-    if (is1L) {
-      return { dailyRate: 125, oneTimeRate: 130, base30Rate: 3750, label: 'Buffalo Milk 1L' };
-    }
-    return { dailyRate: 65, oneTimeRate: 70, base30Rate: 1950, label: 'Buffalo Milk 1/2L' };
+  // Base rates:
+  // Buffalo: 500ml sub = 65, ot = 70; 1L sub = 125, ot = 130
+  // Cow: 500ml sub = 55, ot = 60; 1L sub = 105, ot = 110
+  const subRate500 = isBuffalo ? 65 : 55;
+  const otRate500 = isBuffalo ? 70 : 60;
+  const subRate1L = isBuffalo ? 125 : 105;
+  const otRate1L = isBuffalo ? 130 : 110;
+
+  let dailyRate;
+  let oneTimeRate;
+
+  if (litres === 0.5) {
+    dailyRate = subRate500;
+    oneTimeRate = otRate500;
   } else {
-    if (is1L) {
-      return { dailyRate: 105, oneTimeRate: 110, base30Rate: 3150, label: 'Cow Milk 1L' };
-    }
-    return { dailyRate: 55, oneTimeRate: 60, base30Rate: 1650, label: 'Cow Milk 1/2L' };
+    const fullL = Math.floor(litres);
+    const hasHalf = (litres % 1) >= 0.45;
+    dailyRate = (fullL * subRate1L) + (hasHalf ? subRate500 : 0);
+    oneTimeRate = (fullL * otRate1L) + (hasHalf ? otRate500 : 0);
   }
+
+  const label = `${isBuffalo ? 'Buffalo Milk' : 'Cow Milk'} ${litres === 0.5 ? '500 ml' : litres + ' Litre'}`;
+
+  return {
+    dailyRate,
+    oneTimeRate,
+    base30Rate: dailyRate * 30,
+    label,
+    litres
+  };
+}
+
+function populateMilkPackSizeDropdown(product, selectedSize = '1 Litre') {
+  const select = $('#subPackSizeSelect');
+  if (!select || !product) return;
+
+  const currentLitres = parseLitresFromSize(selectedSize);
+
+  select.innerHTML = MILK_PACK_SIZES.map((item) => {
+    const rates = getMilkSubscriptionRates(product, item.size);
+    const isSelected = Math.abs(item.litres - currentLitres) < 0.05;
+    const saveAmt = rates.oneTimeRate - rates.dailyRate;
+    return `<option value="${item.size}" ${isSelected ? 'selected' : ''}>${item.label} (₹${rates.dailyRate}/day · save ₹${saveAmt}/day)</option>`;
+  }).join('');
 }
 
 function getContinuousMonthsDetails(startOffset = 0, count = 1) {
@@ -632,36 +685,27 @@ function updateSubscriptionSummary() {
   let startOffset = 0;
   let breakdownText = '';
 
-  if (state.subPlanType === 'month') {
-    const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
-    startOffset = parseInt(startSelect?.value || '0', 10) || 0;
-    const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
-    state.subMonthsCount = monthsCount;
-    state.subStartMonthOffset = startOffset;
+  const startSelect = $('#subStartMonthSelect') || $('#subMonthSelect');
+  startOffset = parseInt(startSelect?.value || '0', 10) || 0;
+  const monthsCount = Math.max(1, Math.min(12, state.subMonthsCount || 1));
+  state.subMonthsCount = monthsCount;
+  state.subStartMonthOffset = startOffset;
 
-    const details = getContinuousMonthsDetails(startOffset, monthsCount);
-    days = details.totalDays;
-    planLabel = details.rangeLabel;
-    breakdownText = details.breakdownText;
+  const details = getContinuousMonthsDetails(startOffset, monthsCount);
+  days = details.totalDays;
+  planLabel = details.rangeLabel;
+  breakdownText = details.breakdownText;
 
-    const valElem = $('#subMonthsVal');
-    const unitElem = $('#subMonthsUnit');
-    if (valElem) valElem.textContent = monthsCount;
-    if (unitElem) unitElem.textContent = monthsCount === 1 ? 'Month' : 'Months';
+  const valElem = $('#subMonthsVal');
+  const unitElem = $('#subMonthsUnit');
+  if (valElem) valElem.textContent = monthsCount;
+  if (unitElem) unitElem.textContent = monthsCount === 1 ? 'Month' : 'Months';
 
-    // Update active quick pills
-    document.querySelectorAll('#subMonthQuickPills .sub-quick-pill').forEach((pill) => {
-      const pMonths = parseInt(pill.dataset.months, 10);
-      pill.classList.toggle('active', pMonths === monthsCount);
-    });
-  } else {
-    const input = $('#subDaysInput');
-    days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
-    if (input) input.value = days;
-    planLabel = `${days} Days Plan`;
-    breakdownText = `${days} Days Plan`;
-    startOffset = 0;
-  }
+  // Update active quick pills
+  document.querySelectorAll('#subMonthQuickPills .sub-quick-pill').forEach((pill) => {
+    const pMonths = parseInt(pill.dataset.months, 10);
+    pill.classList.toggle('active', pMonths === monthsCount);
+  });
 
   // Update prominent Subscription Delivery Period Card
   const dateInfo = formatSubscriptionDates(startOffset, days);
@@ -724,10 +768,14 @@ function updateModalAddToCartBtn() {
 
 function setPurchaseMode(mode) {
   state.purchaseMode = mode;
+  const p = findProductById(state.activeProductId);
+  const isMilk = isFreshMilkProduct(p);
   const modeSwitch = $('#modalPurchaseModeWrap');
   const subPlanner = $('#modalSubscriptionPlanWrap');
   const qtyRow = $('.modal-action-bar .quantity-row');
   const actionBar = $('.modal-action-bar');
+  const variantChips = $('#variantChips');
+  const subPackDropdownWrap = $('#subPackSizeDropdownWrap');
 
   if (modeSwitch) {
     modeSwitch.querySelectorAll('.purchase-mode-tab').forEach((tab) => {
@@ -736,63 +784,62 @@ function setPurchaseMode(mode) {
     });
   }
 
-  if (mode === 'subscription') {
+  if (mode === 'subscription' && isMilk) {
     if (subPlanner) subPlanner.classList.remove('hidden');
     if (qtyRow) qtyRow.style.display = 'none';
     if (actionBar) actionBar.style.justifyContent = 'flex-end';
     $('.ingredients-block')?.classList.add('hidden');
     $('#modalExtra')?.classList.add('hidden');
     $('#modalViewRecipe')?.classList.add('hidden');
+
+    if (variantChips) variantChips.classList.add('hidden');
+    if (subPackDropdownWrap) subPackDropdownWrap.classList.remove('hidden');
+
+    const defaultSize = state.selectedVariant?.size || '1 Litre';
+    populateMilkPackSizeDropdown(p, defaultSize);
+
+    const select = $('#subPackSizeSelect');
+    const chosenSize = select?.value || defaultSize;
+    const rates = getMilkSubscriptionRates(p, chosenSize);
+    state.selectedVariant = {
+      size: chosenSize,
+      price: rates.dailyRate,
+      dailyRate: rates.dailyRate,
+      oneTimeRate: rates.oneTimeRate,
+      litres: rates.litres
+    };
+    $('#modalPrice').textContent = `₹${rates.dailyRate} / day`;
     updateSubscriptionSummary();
   } else {
     if (subPlanner) subPlanner.classList.add('hidden');
     if (qtyRow) qtyRow.style.display = '';
     if (actionBar) actionBar.style.justifyContent = 'space-between';
-    const p = findProductById(state.activeProductId);
+    if (variantChips) variantChips.classList.remove('hidden');
+    if (subPackDropdownWrap) subPackDropdownWrap.classList.add('hidden');
+
     if (p?.ingredients?.length) $('.ingredients-block')?.classList.remove('hidden');
     if (p?.details) $('#modalExtra')?.classList.remove('hidden');
     if (hasRecipe(p)) $('#modalViewRecipe')?.classList.remove('hidden');
+
+    if (p && p.variants && p.variants.length) {
+      const curSize = state.selectedVariant?.size || p.variants[0].size;
+      const matched = p.variants.find((v) => v.size === curSize) || p.variants[0];
+      state.selectedVariant = matched;
+      $('#modalPrice').textContent = `₹${matched.price}`;
+      if (variantChips) {
+        variantChips.querySelectorAll('.variant-chip').forEach((c, idx) => {
+          const isAct = p.variants[idx] === matched;
+          c.classList.toggle('is-active', isAct);
+          c.setAttribute('aria-checked', String(isAct));
+        });
+      }
+    } else if (p) {
+      state.selectedVariant = null;
+      $('#modalPrice').textContent = `₹${p.price}`;
+    }
+
     updateModalAddToCartBtn();
   }
-}
-
-function handleCustomDaysAddToCart(p) {
-  const variantSize = state.selectedVariant ? state.selectedVariant.size : (p.size || '500 ml');
-  const rates = getMilkSubscriptionRates(p, variantSize);
-  const input = $('#subDaysInput');
-  const days = Math.max(2, Math.min(90, parseInt(input?.value || '7', 10) || 7));
-  const totalAmount = days * rates.dailyRate;
-  const savings = days * (rates.oneTimeRate - rates.dailyRate);
-
-  const customPlanVariant = {
-    size: `${variantSize} (${days} Days · ₹${rates.dailyRate}/day)`,
-    price: totalAmount,
-    customDays: days,
-    days: days,
-    dailyRate: rates.dailyRate,
-    oneTimeRate: rates.oneTimeRate,
-    savings: savings,
-    planLabel: `${days} Days Plan`,
-    isCustomDaysPlan: true,
-    isSubscriptionPlan: true,
-    subscriptionPlan: {
-      planType: 'custom',
-      productName: p.name,
-      productId: p.id,
-      size: variantSize,
-      days: days,
-      customDays: days,
-      dailyRate: rates.dailyRate,
-      planLabel: `${days} Days Plan`,
-      frequency: 'Daily (Every Morning)',
-      timeSlot: '6:00 AM - 7:00 AM'
-    }
-  };
-
-  addToCart(p.id, 1, customPlanVariant);
-  closeProductModal();
-  setCartOpen(true);
-  showStoreToast(`Added ${days}-Day Fresh Milk plan (₹${totalAmount.toLocaleString('en-IN')}) to Cart!`);
 }
 
 function handleContinuousMonthsAddToCart(p) {
@@ -1995,11 +2042,6 @@ function addToCart(id, quantity = 1, variant = null) {
       existing.isSubscriptionPlan = true;
       existing.subscriptionPlan = variant.subscriptionPlan;
     }
-    if (variant?.isCustomDaysPlan) {
-      existing.isCustomDaysPlan = true;
-      existing.isSubscriptionPlan = true;
-      existing.subscriptionPlan = variant.subscriptionPlan;
-    }
   } else {
     state.cart.push({
       id: numId,
@@ -2009,8 +2051,7 @@ function addToCart(id, quantity = 1, variant = null) {
       image: p.image,
       quantity,
       ...(variant ? { variant } : {}),
-      ...(variant?.isContinuousMonthsPlan ? { isContinuousMonthsPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {}),
-      ...(variant?.isCustomDaysPlan ? { isCustomDaysPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {})
+      ...(variant?.isContinuousMonthsPlan ? { isContinuousMonthsPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {})
     });
   }
   saveCart();
@@ -2073,14 +2114,11 @@ function renderCart() {
     const price = entry.variant?.price || entry.price || p.price;
     const key = encodeURIComponent(size || '');
 
-    const isContinuous = entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan;
-    const isCustom = entry.isCustomDaysPlan || entry.variant?.isCustomDaysPlan;
+    const isContinuous = entry.isContinuousMonthsPlan || entry.variant?.isContinuousMonthsPlan || entry.isSubscriptionPlan || entry.variant?.isSubscriptionPlan;
 
     let subBadgeHtml = '';
     if (isContinuous) {
-      subBadgeHtml = `<div style="margin-top: 4px;"><span style="display:inline-flex; align-items:center; gap:4px; font-size:0.7rem; font-weight:700; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd; border-radius:4px; padding:2px 6px;">🥛 Continuous Subscription</span></div>`;
-    } else if (isCustom) {
-      subBadgeHtml = `<div style="margin-top: 4px;"><span style="display:inline-flex; align-items:center; gap:4px; font-size:0.7rem; font-weight:700; color:#15803d; background:#dcfce7; border:1px solid #bbf7d0; border-radius:4px; padding:2px 6px;">🥛 Custom Days Plan</span></div>`;
+      subBadgeHtml = `<div style="margin-top: 4px;"><span style="display:inline-flex; align-items:center; gap:4px; font-size:0.7rem; font-weight:700; color:#0369a1; background:#e0f2fe; border:1px solid #bae6fd; border-radius:4px; padding:2px 6px;">🥛 Daily Milk Subscription</span></div>`;
     }
 
     return `
@@ -2693,7 +2731,7 @@ async function beginCheckout(form) {
         quantity: Number(entry.quantity) || 1,
         size: entry.variant?.size || entry.size || '',
         customPricePaise: entry.variant?.price ? Math.round(Number(entry.variant.price) * 100) : (entry.price ? Math.round(Number(entry.price) * 100) : undefined),
-        notes: entry.variant?.customDays ? `${entry.variant.customDays} Days Plan @ ₹${entry.variant.dailyRate}/day` : undefined
+        notes: entry.variant?.subscriptionPlan ? `${entry.variant.subscriptionPlan.durationLabel} @ ₹${entry.variant.subscriptionPlan.dailyRate}/day` : undefined
       }))
     };
     const fingerprint = JSON.stringify(orderBody);
@@ -3000,17 +3038,30 @@ document.addEventListener('DOMContentLoaded', () => {
     if (state.activeProductId) {
       const p = products.find((item) => item.id === state.activeProductId);
       if (p && state.purchaseMode === 'subscription' && isFreshMilkProduct(p)) {
-        if (state.subPlanType === 'custom') {
-          handleCustomDaysAddToCart(p);
-        } else {
-          handleContinuousMonthsAddToCart(p);
-        }
+        handleContinuousMonthsAddToCart(p);
         return;
       }
       addToCart(state.activeProductId, state.modalQty, state.selectedVariant);
       closeProductModal();
       setCartOpen(true);
     }
+  });
+
+  // Pack Size Dropdown (Daily Subscription)
+  $('#subPackSizeSelect')?.addEventListener('change', (e) => {
+    const p = findProductById(state.activeProductId);
+    if (!p) return;
+    const chosenSize = e.target.value;
+    const rates = getMilkSubscriptionRates(p, chosenSize);
+    state.selectedVariant = {
+      size: chosenSize,
+      price: rates.dailyRate,
+      dailyRate: rates.dailyRate,
+      oneTimeRate: rates.oneTimeRate,
+      litres: rates.litres
+    };
+    $('#modalPrice').textContent = `₹${rates.dailyRate} / day`;
+    updateSubscriptionSummary();
   });
 
   // Milk Subscription Mode Switching & Planner Event Listeners
@@ -3020,24 +3071,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#btnModeSub')?.addEventListener('click', () => {
     setPurchaseMode('subscription');
-  });
-
-  $('#subTabMonth')?.addEventListener('click', () => {
-    state.subPlanType = 'month';
-    $('#subTabMonth')?.classList.add('active');
-    $('#subTabCustom')?.classList.remove('active');
-    $('#subMonthControls')?.classList.remove('hidden');
-    $('#subCustomControls')?.classList.add('hidden');
-    updateSubscriptionSummary();
-  });
-
-  $('#subTabCustom')?.addEventListener('click', () => {
-    state.subPlanType = 'custom';
-    $('#subTabCustom')?.classList.add('active');
-    $('#subTabMonth')?.classList.remove('active');
-    $('#subMonthControls')?.classList.add('hidden');
-    $('#subCustomControls')?.classList.remove('hidden');
-    updateSubscriptionSummary();
   });
 
   $('#subMonthSelect')?.addEventListener('change', () => {
@@ -3062,46 +3095,6 @@ document.addEventListener('DOMContentLoaded', () => {
     pill.addEventListener('click', () => {
       state.subMonthsCount = parseInt(pill.dataset.months, 10) || 1;
       updateSubscriptionSummary();
-    });
-  });
-
-  $('#subDaysDec')?.addEventListener('click', () => {
-    const input = $('#subDaysInput');
-    if (input) {
-      const cur = parseInt(input.value || '7', 10);
-      input.value = Math.max(2, cur - 1);
-      updateSubscriptionSummary();
-    }
-  });
-
-  $('#subDaysInc')?.addEventListener('click', () => {
-    const input = $('#subDaysInput');
-    if (input) {
-      const cur = parseInt(input.value || '7', 10);
-      input.value = Math.min(90, cur + 1);
-      updateSubscriptionSummary();
-    }
-  });
-
-  $('#subDaysInput')?.addEventListener('input', () => {
-    const input = $('#subDaysInput');
-    if (input) {
-      let cur = parseInt(input.value || '2', 10);
-      if (isNaN(cur) || cur < 2) cur = 2;
-      if (cur > 90) cur = 90;
-      input.value = cur;
-      updateSubscriptionSummary();
-    }
-  });
-
-  document.querySelectorAll('.sub-quick-pill').forEach((pill) => {
-    pill.addEventListener('click', () => {
-      const days = parseInt(pill.dataset.days, 10);
-      const input = $('#subDaysInput');
-      if (input && days >= 2) {
-        input.value = days;
-        updateSubscriptionSummary();
-      }
     });
   });
 

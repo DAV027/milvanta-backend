@@ -449,23 +449,18 @@
                 <span class="variant-active-price" id="modalPrice"></span>
               </div>
               <div class="variant-chips-grid" id="variantChips" role="radiogroup" aria-label="Pack sizes"></div>
+              <div class="variant-dropdown-wrap hidden" id="subPackSizeDropdownWrap" style="margin-top: 6px;">
+                <select id="subPackSizeSelect" class="sub-pack-size-select" aria-label="Choose pack size">
+                  <!-- Populated dynamically: 500ml, 1 Litre, 1.5 Litre up to 5 Litre -->
+                </select>
+              </div>
             </div>
 
             <!-- Subscription Planner Box (visible when Subscription mode is chosen) -->
             <div class="subscription-planner-wrap hidden" id="modalSubscriptionPlanWrap">
               <div class="sub-plan-header">
-                <span class="sub-plan-title">Choose Subscription Plan</span>
-                <span class="sub-plan-badge">Min. 2 Days</span>
-              </div>
-
-              <!-- Plan Duration Type Tabs -->
-              <div class="sub-duration-tabs" role="tablist">
-                <button type="button" class="sub-duration-tab active" id="subTabMonth" data-plan="month">
-                  <span>Continuous Months</span>
-                </button>
-                <button type="button" class="sub-duration-tab" id="subTabCustom" data-plan="custom">
-                  <span>Custom Days (Min 2)</span>
-                </button>
+                <span class="sub-plan-title">Subscription Duration</span>
+                <span class="sub-plan-badge">Continuous Monthly</span>
               </div>
 
               <!-- Continuous Months Controls -->
@@ -480,7 +475,7 @@
 
                 <div class="sub-months-counter-block">
                   <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                    <label class="sub-input-label" style="margin-bottom: 0;">Subscription Duration</label>
+                    <label class="sub-input-label" style="margin-bottom: 0;">Number of Months</label>
                     <span class="sub-plan-badge" style="font-size: 0.68rem; padding: 2px 8px;">Continuous Sequence</span>
                   </div>
                   <div class="sub-days-counter-row">
@@ -496,22 +491,6 @@
                     <button type="button" class="sub-quick-pill" data-months="3">3 Months</button>
                     <button type="button" class="sub-quick-pill" data-months="6">6 Months</button>
                   </div>
-                </div>
-              </div>
-
-              <!-- Custom Days Selection Controls -->
-              <div class="sub-custom-controls hidden" id="subCustomControls">
-                <label class="sub-input-label">Select Number of Days (Min. 2 Days)</label>
-                <div class="sub-days-counter-row">
-                  <button type="button" class="sub-day-stepper-btn" id="subDaysDec" aria-label="Decrease days">−</button>
-                  <input type="number" id="subDaysInput" min="2" max="90" value="7" class="sub-days-number-input" />
-                  <button type="button" class="sub-day-stepper-btn" id="subDaysInc" aria-label="Increase days">+</button>
-                </div>
-                <div class="sub-quick-day-pills">
-                  <button type="button" class="sub-quick-pill" data-days="2">2 Days</button>
-                  <button type="button" class="sub-quick-pill" data-days="7">7 Days</button>
-                  <button type="button" class="sub-quick-pill" data-days="15">15 Days</button>
-                  <button type="button" class="sub-quick-pill" data-days="30">30 Days</button>
                 </div>
               </div>
 
