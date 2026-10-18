@@ -57,9 +57,9 @@ let products = [
     name: 'Paneer',
     shortName: 'Paneer',
     category: 'Dairy Products',
-    price: 140,
-    size: '200 g pack',
-    quantity: '200 g · 500 g available',
+    price: 400,
+    size: '1/2 kg pack',
+    quantity: '1/2 kg · 1 kg available',
     description: 'Soft, melt-in-mouth cottage cheese pressed fresh every morning using pure whole milk and lemon curdling. Absolutely zero preservatives or starch.',
     ingredients: ['Pure Whole Cow Milk', 'Natural Curdling'],
     image: 'assets/milvanta-paneer.jpg',
@@ -68,52 +68,76 @@ let products = [
     reviewsCount: 96,
     badge: 'Made Daily',
     variants: [
-      { size: '200 g', price: 140 },
-      { size: '500 g', price: 320 }
+      { size: '1/2 kg', price: 400 },
+      { size: '1 kg', price: 750 }
     ],
     details: 'Vacuum packed fresh daily. Consume within 4 days of delivery.'
   },
   {
     id: 105,
-    name: 'Curd',
-    shortName: 'Curd',
+    name: 'Pot Curd',
+    shortName: 'Pot Curd',
     category: 'Dairy Products',
-    price: 65,
-    size: '400 g tub',
-    quantity: '400 g · 1 kg available',
-    description: 'Thick, creamy set dahi prepared naturally from pure whole milk with traditional live cultures. Naturally sweet and velvety.',
+    price: 49,
+    size: '200 g pot',
+    quantity: '200 g to 6 kg available',
+    description: 'Thick, creamy set dahi prepared naturally in traditional earthen pots from pure whole milk with live cultures. Naturally sweet, probiotic-rich and velvety.',
     ingredients: ['Pure Pasteurized Whole Milk', 'Active Lactic Cultures'],
     image: 'assets/milvanta-curd.jpg',
     isVeg: true,
     rating: 4.9,
     reviewsCount: 168,
-    badge: 'Farm Fresh',
+    badge: 'Clay Pot Set',
     variants: [
-      { size: '400 g', price: 65 },
-      { size: '1 kg', price: 150 }
+      { size: '200 g', price: 49 },
+      { size: '500 g', price: 99 },
+      { size: '1 kg', price: 169 },
+      { size: '3 kg', price: 499 },
+      { size: '6 kg', price: 799 }
     ],
-    details: 'Naturally fermented and set in food-grade tubs. Keep chilled at <4°C.'
+    details: 'Naturally fermented and set in traditional food-grade earthen pots. Keep chilled at <4°C.'
   },
   {
     id: 103,
-    name: 'Ghee',
-    shortName: 'Ghee',
+    name: 'Pure Cow Ghee',
+    shortName: 'Cow Ghee',
     category: 'Dairy Products',
-    price: 1100,
-    size: '500 ml jar',
-    quantity: '250 ml · 500 ml available',
-    description: 'Traditional Vedic bilona churned curd ghee made from pure cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
-    ingredients: ['Pure Cow Milk Curd Cream'],
-    image: 'assets/milvanta-ghee.jpg',
+    price: 1500,
+    size: '1/2 kg jar',
+    quantity: '1/2 kg · 1 kg available',
+    description: 'Traditional Vedic bilona churned curd ghee made from pure A2 cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
+    ingredients: ['Pure A2 Cow Milk Curd Cream'],
+    image: 'assets/milvanta-cow-ghee.jpg',
     isVeg: true,
     rating: 5.0,
     reviewsCount: 184,
-    badge: 'Heritage Recipe',
+    badge: 'A2 Vedic Bilona',
     variants: [
-      { size: '250 ml', price: 580 },
-      { size: '500 ml', price: 1100 }
+      { size: '1/2 kg', price: 1500 },
+      { size: '1 kg', price: 2800 }
     ],
     details: 'Slow-simmered over low flame. Naturally rich in butyric acid and gut-friendly fats.'
+  },
+  {
+    id: 106,
+    name: 'Pure Buffalo Ghee',
+    shortName: 'Buffalo Ghee',
+    category: 'Dairy Products',
+    price: 1100,
+    size: '1/2 kg jar',
+    quantity: '1/2 kg · 1 kg available',
+    description: 'Authentic slow-simmered pure buffalo ghee with luscious, thick ivory-white grains and authentic aroma. High natural milk fats, perfect for traditional Indian cooking and sweets.',
+    ingredients: ['Pure Whole Buffalo Milk Cream'],
+    image: 'assets/milvanta-buffalo-ghee.jpg',
+    isVeg: true,
+    rating: 4.9,
+    reviewsCount: 142,
+    badge: 'Granular Bilona',
+    variants: [
+      { size: '1/2 kg', price: 1100 },
+      { size: '1 kg', price: 2000 }
+    ],
+    details: 'Crafted with slow-fire wood-stove simmering. Rich in healthy fats and dense nourishment.'
   },
 
   // Bakery Essentials
@@ -1343,7 +1367,7 @@ const CATEGORY_META = {
   },
   'Dairy Products': {
     title: 'Artisanal Dairy',
-    subtitle: 'Vedic bilona churned ghee, fresh morning malai paneer, and thick probiotic curd.'
+    subtitle: 'Vedic bilona cow & buffalo ghee, fresh morning malai paneer, and thick probiotic pot curd.'
   },
   'Baking Essentials': {
     title: 'Baking Essentials',
@@ -1365,7 +1389,7 @@ function getProductFeatures(p) {
   const name = String(p.name || '').toLowerCase();
 
   // Fresh Milk
-  if (name.includes('buffalo')) {
+  if (name.includes('buffalo milk')) {
     return [
       { icon: '🥛', text: '7.5%+ Natural Fat' },
       { icon: '🛡️', text: 'No Preservatives' },
@@ -1381,10 +1405,17 @@ function getProductFeatures(p) {
   }
 
   // Dairy Products
-  if (name.includes('ghee')) {
+  if (name.includes('buffalo ghee')) {
+    return [
+      { icon: '🏺', text: 'Traditional Bilona' },
+      { icon: '🥛', text: 'Pure Buffalo Cream' },
+      { icon: '✨', text: 'Dense Ivory Grain' }
+    ];
+  }
+  if (name.includes('cow ghee') || name.includes('ghee')) {
     return [
       { icon: '🏺', text: 'Vedic Bilona' },
-      { icon: '🌾', text: 'Pure Desi Cow' },
+      { icon: '🌾', text: 'Pure A2 Cow' },
       { icon: '✨', text: 'Golden Granular' }
     ];
   }
@@ -1397,9 +1428,9 @@ function getProductFeatures(p) {
   }
   if (name.includes('curd')) {
     return [
+      { icon: '🏺', text: 'Clay Pot Set' },
       { icon: '✨', text: 'Live Cultures' },
-      { icon: '🥛', text: 'Naturally Thick' },
-      { icon: '🌱', text: 'Farm Fresh' }
+      { icon: '🥛', text: 'Naturally Thick' }
     ];
   }
 

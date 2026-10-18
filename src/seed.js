@@ -29,27 +29,36 @@ export const products = [
     name: 'Paneer',
     description: 'Soft, melt-in-mouth cottage cheese pressed fresh every morning using pure whole milk and lemon curdling. Absolutely zero preservatives or starch.',
     category: 'Dairy Products',
-    price_paise: 14000,
-    selling_unit: '200 g',
+    price_paise: 40000,
+    selling_unit: '1/2 kg pack',
     image_url: 'assets/milvanta-paneer.jpg',
     stock_quantity: 80
   },
   {
-    name: 'Curd',
-    description: 'Thick, creamy set dahi prepared naturally from pure whole milk with traditional live cultures. Naturally sweet and velvety.',
+    name: 'Pot Curd',
+    description: 'Thick, creamy set dahi prepared naturally in traditional earthen pots from pure whole milk with live cultures. Naturally sweet, probiotic-rich and velvety.',
     category: 'Dairy Products',
-    price_paise: 6500,
-    selling_unit: '400 g',
+    price_paise: 4900,
+    selling_unit: '200 g pot',
     image_url: 'assets/milvanta-curd.jpg',
     stock_quantity: 90
   },
   {
-    name: 'Ghee',
-    description: 'Traditional Vedic bilona churned curd ghee made from pure cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
+    name: 'Pure Cow Ghee',
+    description: 'Traditional Vedic bilona churned curd ghee made from pure A2 cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
+    category: 'Dairy Products',
+    price_paise: 150000,
+    selling_unit: '1/2 kg jar',
+    image_url: 'assets/milvanta-cow-ghee.jpg',
+    stock_quantity: 60
+  },
+  {
+    name: 'Pure Buffalo Ghee',
+    description: 'Authentic slow-simmered pure buffalo ghee with luscious, thick ivory-white grains and authentic aroma. High natural milk fats, perfect for traditional Indian cooking and sweets.',
     category: 'Dairy Products',
     price_paise: 110000,
-    selling_unit: '500 ml',
-    image_url: 'assets/milvanta-ghee.jpg',
+    selling_unit: '1/2 kg jar',
+    image_url: 'assets/milvanta-buffalo-ghee.jpg',
     stock_quantity: 60
   },
 
