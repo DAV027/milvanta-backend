@@ -1530,7 +1530,7 @@
     box-sizing: border-box;
   }
 
-  .account-panel,
+  .account-panel:not(.subscription-modal-panel),
   .order-details-panel {
     width: 100% !important;
     max-width: 480px !important;
@@ -1851,5 +1851,354 @@
 .sub-instruction-change-btn:hover {
   color: #0369a1 !important;
 }
+
+/* ===================================================
+   RESPONSIVE MODAL SYSTEM & SUBSCRIPTION MODAL PANEL
+   Fixes modal adjustment and clipping across all screen sizes
+   =================================================== */
+
+/* Ensure overlay allows vertical scrolling and centers without clipping */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 24, 38, 0.65);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: clamp(12px, 3vh, 24px) clamp(10px, 2vw, 16px);
+  box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.modal-overlay.hidden {
+  display: none !important;
+}
+
+/* Universal safe max-height for all account panels */
+.account-panel {
+  margin: auto;
+  box-sizing: border-box;
+  max-height: calc(100dvh - 32px);
+}
+
+/* Dedicated Subscription Modal Panel */
+.subscription-modal-panel {
+  width: 100% !important;
+  max-width: 520px !important;
+  max-height: min(92vh, 760px) !important;
+  max-height: min(92dvh, 760px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: #ffffff !important;
+  border-radius: 20px !important;
+  box-shadow: 0 25px 50px -12px rgba(10, 38, 64, 0.28), 0 0 0 1px rgba(10, 38, 64, 0.08) !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  position: relative;
+  margin: auto;
+}
+
+/* Fixed Header */
+.sub-modal-header {
+  flex-shrink: 0;
+  padding: 20px 22px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  position: relative;
+  background: #ffffff;
+}
+
+.sub-modal-header .modal-kicker {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #0284c7;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+}
+
+.sub-modal-header h2 {
+  font-size: 1.35rem !important;
+  color: #0a3d66 !important;
+  margin: 0 0 4px !important;
+  line-height: 1.25;
+}
+
+.sub-modal-header .sub-modal-desc {
+  font-size: 0.82rem;
+  color: #64748b;
+  margin: 0;
+  line-height: 1.4;
+  padding-right: 32px;
+}
+
+.sub-modal-header .modal-close {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  line-height: 1;
+}
+
+.sub-modal-header .modal-close:hover {
+  background: #fee2e2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+/* Form Container */
+.sub-modal-form {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  margin: 0;
+}
+
+/* Scrollable Body */
+.sub-modal-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+
+.sub-modal-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sub-modal-body::-webkit-scrollbar-track {
+  background: #f8fafc;
+}
+
+.sub-modal-body::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.sub-modal-body::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Compact Milk Type Cards */
+.profile-milk-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.profile-milk-type-grid .sub-type-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 8px;
+  border: 2px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+
+.profile-milk-type-grid .sub-type-card.active {
+  border-color: #0a3d66 !important;
+  background: #eff6ff !important;
+  box-shadow: 0 4px 12px rgba(10, 61, 102, 0.08);
+}
+
+/* Dropdown pack size */
+.sub-pack-size-select {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #0a3d66;
+  cursor: pointer;
+}
+
+/* Fixed Footer with Price & Buttons */
+.sub-modal-footer {
+  flex-shrink: 0;
+  padding: 12px 22px 16px;
+  background: #ffffff;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -4px 16px rgba(10, 38, 64, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sub-modal-price-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.sub-modal-plan-label {
+  font-size: 0.8rem;
+  color: #475569;
+  font-weight: 600;
+  display: block;
+}
+
+.sub-modal-savings-tag {
+  font-size: 0.72rem;
+  color: #059669;
+  font-weight: 700;
+  display: inline-block;
+  margin-top: 2px;
+}
+
+.sub-modal-total-amt {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: #0a3d66;
+  line-height: 1;
+}
+
+.sub-modal-daily-rate {
+  font-size: 0.76rem;
+  color: #64748b;
+  font-weight: 600;
+  text-align: right;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.sub-modal-actions-row {
+  display: flex;
+  gap: 10px;
+}
+
+.sub-modal-actions-row .primary-cart {
+  flex: 1;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  padding: 11px 16px;
+  min-height: 44px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: 10px;
+.sub-modal-actions-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.sub-modal-actions-row .primary-cart {
+  flex: 1 1 auto;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  padding: 11px 16px;
+  min-height: 44px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.sub-modal-actions-row .btn-sub-pause {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-weight: 600;
+  min-width: 80px;
+  text-align: center;
+}
+
+/* Mobile Media Query Overrides */
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: 8px !important;
+  }
+
+  .subscription-modal-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: calc(100dvh - 16px) !important;
+    max-height: calc(100vh - 16px) !important;
+    border-radius: 16px !important;
+    margin: auto;
+  }
+
+  .sub-modal-header {
+    padding: 12px 14px 10px;
+  }
+
+  .sub-modal-header h2 {
+    font-size: 1.15rem !important;
+  }
+
+  .sub-modal-header .sub-modal-desc {
+    font-size: 0.76rem;
+    line-height: 1.35;
+  }
+
+  .sub-modal-body {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+
+  .sub-modal-footer {
+    padding: 10px 14px 12px;
+    gap: 8px;
+  }
+
+  .sub-modal-price-bar {
+    padding: 6px 10px;
+  }
+
+  .sub-modal-total-amt {
+    font-size: 1.2rem;
+  }
+
+  .sub-modal-actions-row {
+    gap: 8px;
+  }
+
+  .sub-modal-actions-row .primary-cart {
+    padding: 10px 12px;
+    min-height: 40px;
+    font-size: 0.88rem;
+  }
+
+  .sub-modal-actions-row .btn-sub-pause {
+    min-height: 40px;
+    padding: 0 12px;
+    font-size: 0.84rem;
+    min-width: 70px;
+  }
+}
+
 
 
