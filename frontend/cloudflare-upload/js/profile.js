@@ -1049,11 +1049,22 @@
 
     if (!state.subscriptions.length) {
       container.innerHTML = `
-        <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
-          <p style="font-size: 1rem; color: #64748b; margin-bottom: 14px;">No active subscriptions found.</p>
-          <button type="button" class="address-card-btn" onclick="document.getElementById('btnOpenCreateSubModal')?.click()" style="text-decoration: none; padding: 10px 20px; display: inline-block;">+ Subscribe to Morning Fresh Milk</button>
+        <div class="sub-empty-state-card" style="grid-column: 1 / -1; text-align: center; padding: 48px 24px; background: #ffffff; border-radius: 20px; border: 1.5px dashed #cbd5e1; box-shadow: 0 4px 20px rgba(10,38,64,0.03);">
+          <div style="font-size: 3rem; margin-bottom: 12px;">🥛</div>
+          <h3 style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 8px; font-weight: 800;">No Active Morning Subscriptions</h3>
+          <p style="font-size: 0.9rem; color: #64748b; margin: 0 auto 20px; max-width: 520px; line-height: 1.5;">Get chilled, unadulterated farm-fresh milk delivered to your doorstep every morning between 6:00 AM – 7:00 AM. Pause, resume, or modify anytime with zero penalty.</p>
+          <div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; font-size: 0.82rem; font-weight: 700; color: #0369a1;">
+            <span style="background: #e0f2fe; padding: 6px 14px; border-radius: 9999px;">🌿 100% Raw & Pure</span>
+            <span style="background: #e0f2fe; padding: 6px 14px; border-radius: 9999px;">⏰ 6:00 AM – 7:00 AM Drop</span>
+            <span style="background: #e0f2fe; padding: 6px 14px; border-radius: 9999px;">✈️ One-Tap Vacation Pause</span>
+          </div>
+          <button type="button" class="primary-cart" onclick="document.getElementById('btnOpenCreateSubModal')?.click()" style="padding: 13px 32px; font-weight: 700; font-size: 0.98rem; border: none; cursor: pointer; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px;">
+            <span>+ Start Daily Milk Subscription</span>
+            <span>→</span>
+          </button>
         </div>
       `;
+      renderTomorrowStrip();
       renderMonthlyDeliveryCalendar();
       return;
     }
@@ -1070,9 +1081,9 @@
       : (localStorage.getItem('milvanta-area') ? `${localStorage.getItem('milvanta-area')}, Hyderabad - ${localStorage.getItem('milvanta-pincode') || '500049'}` : 'Hafeezpet, Hyderabad - 500049');
 
     const DROP_INSTRUCTIONS = {
-      silent: '🤫 Silent Drop (Do Not Ring Doorbell)',
+      silent: '🤫 Silent Drop (No Doorbell)',
       ring_once: '🔔 Ring Doorbell Once',
-      door_bag: '🧺 Leave in Milk Bag / Basket at Door',
+      door_bag: '🧺 Leave in Milk Bag / Basket',
       call_arrival: '📞 Call on Arrival'
     };
     const dropKey = localStorage.getItem('milvanta-drop-instruction') || 'silent';
@@ -1082,114 +1093,172 @@
       const isBuffalo = (sub.product || '').toLowerCase().includes('buffalo');
       const is1L = (sub.quantity || sub.product || '').toLowerCase().includes('1');
       const rate = sub.costPerDay || sub.dailyRate || (isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55));
-      const fallbackTotal = (sub.days || 30) * rate;
+      const fallbackTotal = (sub.days || 31) * rate;
       const totalDisplay = sub.totalAmount ? Number(sub.totalAmount).toLocaleString('en-IN') : fallbackTotal.toLocaleString('en-IN');
-
-      const subTag = '🔄 Continuous Subscription';
-      const tagStyle = 'background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd;';
-      const planDuration = sub.durationLabel || 'Continuous Monthly';
-      const paymentMode = 'Subscription Autopay (Razorpay Recurring)';
-      const planTypeDesc = 'Continuous Months (Recurring Autopay)';
+      const isPaused = sub.status !== 'active';
 
       return `
-      <div class="subscription-card" data-sub-id="${sub.id}">
-        <div>
-          <div class="subscription-item-header">
-            <img src="${sub.image}" alt="${escapeHtml(sub.product)}" class="subscription-item-img" onerror="this.src='assets/milvanta-cow-milk.jpg'" />
-            <div class="subscription-item-info">
-              <span class="subscription-item-tag" style="${tagStyle}">${subTag}</span>
-              <h4 class="subscription-item-title">${escapeHtml(sub.product)}</h4>
-              <p class="subscription-item-meta">${escapeHtml(sub.frequency)}${sub.timeSlot ? ` • ${escapeHtml(sub.timeSlot)}` : ''}</p>
-            </div>
+      <div class="subscription-hero-card ${isPaused ? 'is-paused' : ''}" data-sub-id="${sub.id}">
+        <!-- 1. Top Identity Row -->
+        <div class="sub-hero-top">
+          <div class="sub-hero-media">
+            <img src="${sub.image}" alt="${escapeHtml(sub.product)}" class="sub-hero-img" onerror="this.src='assets/milvanta-cow-milk.jpg'" />
           </div>
-
-          <div class="subscription-details-list">
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Plan Type</span>
-              <span class="sub-detail-val" style="color: #0f172a; font-weight: 700;">${planTypeDesc}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Plan Duration</span>
-              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">${escapeHtml(planDuration)}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Daily Quantity</span>
-              <span class="sub-detail-val" id="qtyVal-${sub.id}"><strong>${escapeHtml(sub.quantity)}</strong></span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Daily Rate</span>
-              <span class="sub-detail-val" style="color: #059669; font-weight: 700;">₹${rate}/day</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Deliveries Subtotal</span>
-              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 700;">₹${totalDisplay}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Delivery Charges</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">₹${sub.deliveryFee || 50}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Total Plan Value</span>
-              <span class="sub-detail-val" style="color: #0a3d66; font-weight: 800; font-size: 1rem;">₹${((sub.totalAmount ? Number(sub.totalAmount) : fallbackTotal) + (Number(sub.deliveryFee) || 50)).toLocaleString('en-IN')}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Payment Method</span>
-              <span class="sub-detail-val" style="color: #334155; font-size: 0.82rem; font-weight: 600;">${paymentMode}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Delivery Slot</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 600;">Daily 6:00 AM – 7:00 AM</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Next Scheduled Delivery</span>
-              <span class="sub-detail-val" style="color: #0284c7; font-weight: 700;">${escapeHtml(sub.nextDelivery || 'Tomorrow, 6:00 AM – 7:00 AM')}</span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Morning Delivery Address</span>
-              <span class="sub-detail-val" style="color: #0f172a; font-weight: 600; text-align: right;">
-                📍 ${escapeHtml(activeDeliveryAddress)}
-                <button type="button" class="sub-addr-change-btn" data-switch-to-addresses="true" style="margin-left: 6px; color: #0284c7; background: none; border: none; font-size: 0.78rem; font-weight: 700; cursor: pointer; text-decoration: underline;">Change</button>
+          <div class="sub-hero-info">
+            <div class="sub-hero-badges">
+              <span class="sub-badge-status ${isPaused ? 'paused' : 'active'}">
+                ${isPaused ? '⏸ Paused' : '● Active Schedule'}
               </span>
+              <span class="sub-badge-qty">${escapeHtml(sub.quantity || '1 Litre')} Daily</span>
+              <span class="sub-badge-plan">🔄 Continuous Autopay</span>
             </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Rider Drop Preference</span>
-              <span class="sub-detail-val" style="display: flex; align-items: center; gap: 6px; justify-content: flex-end;">
-                <span id="currentDropInstructionLabel-${sub.id}" style="color: #0a3d66; font-weight: 700; font-size: 0.82rem;">${dropLabel}</span>
-                <button type="button" class="sub-instruction-change-btn" data-change-drop-instruction="true" style="color: #0284c7; background: none; border: none; font-size: 0.78rem; font-weight: 700; cursor: pointer; text-decoration: underline;">Change</button>
-              </span>
-            </div>
-            <div class="sub-detail-row">
-              <span class="sub-detail-label">Status</span>
-              <span class="status-badge-active" id="statusVal-${sub.id}" style="${sub.status === 'active' ? '' : 'background:#fef3c7; color:#b45309; border-color:#fde68a;'}">
-                ${sub.status === 'active' ? '● Active Schedule' : '⏸ Paused'}
-              </span>
-            </div>
+            <h3 class="sub-hero-title">${escapeHtml(sub.product)}</h3>
+            <p class="sub-hero-slot">⏰ Early Morning Doorstep Drop · <strong>6:00 AM – 7:00 AM</strong></p>
           </div>
-
-          <div style="margin-top: 10px; padding: 10px 14px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 10px; font-size: 0.78rem; color: #0369a1; font-weight: 600;">
-            🥛 Auto-renews monthly via Razorpay. Pause dates anytime on the calendar below with zero penalty.
+          <div class="sub-hero-top-action">
+            <button type="button" class="btn-sub-quick-toggle ${isPaused ? 'resume' : 'pause'}" data-toggle-sub="${sub.id}">
+              ${isPaused ? '▶ Resume' : '⏸ Pause'}
+            </button>
           </div>
         </div>
 
-        <div class="subscription-actions-row" style="flex-wrap: wrap; margin-top: 14px;">
-          <button type="button" class="btn-sub-pause" data-toggle-sub="${sub.id}">
-            ${sub.status === 'active' ? '⏸ Pause' : '▶ Resume'}
+        <!-- 2. Three Metric Quick-Glance Tiles Grid -->
+        <div class="sub-metrics-grid">
+          <!-- Tile 1: Next Morning Drop -->
+          <div class="sub-metric-tile">
+            <div class="sub-metric-header">
+              <span class="sub-metric-icon">⏰</span>
+              <span class="sub-metric-label">NEXT MORNING DROP</span>
+            </div>
+            <div class="sub-metric-val ${isPaused ? 'text-paused' : 'text-active'}">
+              ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Tomorrow, 19 Oct')}
+            </div>
+            <div class="sub-metric-sub">
+              ${isPaused ? 'Tap resume above to restart daily drops' : 'Cold-chain dispatch by 6:00 AM'}
+            </div>
+          </div>
+
+          <!-- Tile 2: Billing & Rate -->
+          <div class="sub-metric-tile">
+            <div class="sub-metric-header">
+              <span class="sub-metric-icon">💰</span>
+              <span class="sub-metric-label">BILLING &amp; RATE</span>
+            </div>
+            <div class="sub-metric-val">
+              ₹${rate} <span class="sub-metric-unit">/ day</span>
+            </div>
+            <div class="sub-metric-sub">
+              ₹${totalDisplay} / mo · <span style="color:#059669; font-weight:700;">Autopay Active</span>
+            </div>
+          </div>
+
+          <!-- Tile 3: Drop Location & Rider -->
+          <div class="sub-metric-tile">
+            <div class="sub-metric-header">
+              <span class="sub-metric-icon">📍</span>
+              <span class="sub-metric-label">DROP &amp; RIDER PREFERENCE</span>
+            </div>
+            <div class="sub-metric-val sub-address-row">
+              <span class="sub-addr-truncate" title="${escapeHtml(activeDeliveryAddress)}">📍 ${escapeHtml(activeDeliveryAddress)}</span>
+              <button type="button" class="sub-action-link" data-switch-to-addresses="true">Change</button>
+            </div>
+            <div class="sub-metric-sub sub-rider-row">
+              <span id="currentDropInstructionLabel-${sub.id}">${dropLabel}</span>
+              <button type="button" class="sub-action-link" data-change-drop-instruction="true">Change</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Streamlined Ergonomic Action Bar -->
+        <div class="sub-hero-footer">
+          <div class="sub-hero-actions-left">
+            <button type="button" class="btn-sub-pill ${isPaused ? 'btn-resume-primary' : 'btn-pause-secondary'}" data-toggle-sub="${sub.id}">
+              ${isPaused ? '▶ Resume Subscription' : '⏸ Pause Subscription'}
+            </button>
+            <button type="button" class="btn-sub-pill btn-modify-pill" data-modify-sub="${sub.id}">
+              ✏️ Modify Quantity
+            </button>
+            <button type="button" class="btn-sub-pill btn-vacation-pill" data-open-vacation="true">
+              ✈️ Vacation Pause
+            </button>
+          </div>
+          <button type="button" class="btn-sub-cancel-link" data-cancel-sub="${sub.id}">
+            Cancel Subscription
           </button>
-          <button type="button" class="btn-sub-modify" data-modify-sub="${sub.id}">
-            ✎ Modify Qty
-          </button>
-          <button type="button" class="btn-sub-view-cal" data-view-cal="${sub.id}" style="background: #f0f9ff; border: 1px solid #bae6fd; color: #0369a1; border-radius: 8px; padding: 9px 12px; font-size: 0.85rem; font-weight: 600; cursor: pointer;">
-            📅 Calendar
-          </button>
-          <button type="button" class="btn-sub-pause" data-cancel-sub="${sub.id}" style="color: #ef4444; border-color: #fee2e2; background: #fff5f5;">
-            Cancel
+        </div>
+      </div>
+      `;
+    }).join('');
+
+    renderTomorrowStrip();
+    renderMonthlyDeliveryCalendar();
+  }
+
+  // Tomorrow's Drop Quick-Skip Banner
+  function renderTomorrowStrip() {
+    const container = $('#subTomorrowStripContainer');
+    if (!container) return;
+
+    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
+    if (activeSubs.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+
+    const now = new Date();
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const tomYear = tomorrow.getFullYear();
+    const tomMonth = tomorrow.getMonth();
+    const tomDate = tomorrow.getDate();
+    const tomKey = `${tomYear}-${String(tomMonth + 1).padStart(2, '0')}-${String(tomDate).padStart(2, '0')}`;
+
+    const monthNames = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const formattedDate = `${dayNames[tomorrow.getDay()]}, ${tomDate} ${monthNames[tomMonth]} ${tomYear}`;
+
+    const isTomPaused = pausedDates.includes(tomKey);
+    const subSummary = activeSubs.map((s) => `${s.quantity || '1 Litre'} ${s.product}`).join(' + ');
+
+    container.innerHTML = `
+      <div class="sub-tomorrow-strip ${isTomPaused ? 'is-paused' : 'is-scheduled'}">
+        <div class="sub-tomorrow-main">
+          <div class="sub-tomorrow-lead">
+            <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+            <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+            <span class="sub-tomorrow-date">${formattedDate}</span>
+          </div>
+          <div class="sub-tomorrow-meta">
+            <span class="sub-tomorrow-status-tag ${isTomPaused ? 'paused' : 'scheduled'}">
+              ${isTomPaused ? '⏸ Paused (Will not deliver tomorrow)' : '✓ Scheduled (6:00 AM – 7:00 AM)'}
+            </span>
+            <span class="sub-tomorrow-items-text">${escapeHtml(subSummary)}</span>
+          </div>
+        </div>
+        <div class="sub-tomorrow-cta">
+          <button type="button" class="btn-tomorrow-toggle-action ${isTomPaused ? 'resume' : 'skip'}" id="btnToggleTomorrowDrop" data-tom-key="${tomKey}">
+            ${isTomPaused ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
           </button>
         </div>
       </div>
     `;
-    }).join('');
 
-    renderMonthlyDeliveryCalendar();
+    $('#btnToggleTomorrowDrop')?.addEventListener('click', () => {
+      if (pausedDates.includes(tomKey)) {
+        pausedDates = pausedDates.filter((k) => k !== tomKey);
+        showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
+      } else {
+        pausedDates.push(tomKey);
+        showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
+      }
+      try {
+        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
+      } catch {}
+      renderTomorrowStrip();
+      renderMonthlyDeliveryCalendar();
+    });
   }
 
   // Comprehensive One-Month Morning Delivery Calendar
@@ -1865,6 +1934,11 @@
         switchTab('addresses');
         $('#tabPanel-addresses')?.scrollIntoView({ behavior: 'smooth' });
         showToast('Choose your default morning delivery address or add a new one.');
+        return;
+      }
+
+      if (e.target.closest('[data-open-vacation]')) {
+        document.getElementById('btnOpenVacationModal')?.click();
         return;
       }
 
