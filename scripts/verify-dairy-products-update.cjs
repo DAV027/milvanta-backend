@@ -130,8 +130,8 @@ function startStaticServer(port = 8115) {
     });
     console.log('Paneer Modal:', JSON.stringify(paneerModal, null, 2));
 
-    if (!paneerModal.chips.some(c => c.label.includes('1/2 kg') && c.price.includes('400'))) {
-      throw new Error('Paneer missing 1/2 kg for ₹400 variant!');
+    if (!paneerModal.chips.some(c => c.label.includes('500 g') && c.price.includes('400'))) {
+      throw new Error('Paneer missing 500 g for ₹400 variant!');
     }
     if (!paneerModal.chips.some(c => c.label.includes('1 kg') && c.price.includes('750'))) {
       throw new Error('Paneer missing 1 kg for ₹750 variant!');
@@ -205,8 +205,8 @@ function startStaticServer(port = 8115) {
     });
     console.log('Cow Ghee Modal:', JSON.stringify(cowGheeModal, null, 2));
 
-    if (!cowGheeModal.chips.some(c => c.label.includes('1/2 kg') && c.price.replace(/,/g, '').includes('1500'))) {
-      throw new Error('Cow Ghee missing 1/2 kg for ₹1,500!');
+    if (!cowGheeModal.chips.some(c => c.label.includes('500 g') && c.price.replace(/,/g, '').includes('1500'))) {
+      throw new Error('Cow Ghee missing 500 g for ₹1,500!');
     }
     if (!cowGheeModal.chips.some(c => c.label.includes('1 kg') && c.price.replace(/,/g, '').includes('2800'))) {
       throw new Error('Cow Ghee missing 1 kg for ₹2,800!');
@@ -238,8 +238,8 @@ function startStaticServer(port = 8115) {
     });
     console.log('Buffalo Ghee Modal:', JSON.stringify(buffaloGheeModal, null, 2));
 
-    if (!buffaloGheeModal.chips.some(c => c.label.includes('1/2 kg') && c.price.replace(/,/g, '').includes('1100'))) {
-      throw new Error('Buffalo Ghee missing 1/2 kg for ₹1,100!');
+    if (!buffaloGheeModal.chips.some(c => c.label.includes('500 g') && c.price.replace(/,/g, '').includes('1100'))) {
+      throw new Error('Buffalo Ghee missing 500 g for ₹1,100!');
     }
     if (!buffaloGheeModal.chips.some(c => c.label.includes('1 kg') && c.price.replace(/,/g, '').includes('2000'))) {
       throw new Error('Buffalo Ghee missing 1 kg for ₹2,000!');

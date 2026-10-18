@@ -30,7 +30,7 @@ export const products = [
     description: 'Soft, melt-in-mouth cottage cheese pressed fresh every morning using pure whole milk and lemon curdling. Absolutely zero preservatives or starch.',
     category: 'Dairy Products',
     price_paise: 40000,
-    selling_unit: '1/2 kg pack',
+    selling_unit: '500 g pack',
     image_url: 'assets/milvanta-paneer.jpg',
     stock_quantity: 80
   },
@@ -48,7 +48,7 @@ export const products = [
     description: 'Traditional Vedic bilona churned curd ghee made from pure A2 cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
     category: 'Dairy Products',
     price_paise: 150000,
-    selling_unit: '1/2 kg jar',
+    selling_unit: '500 g jar',
     image_url: 'assets/milvanta-cow-ghee.jpg',
     stock_quantity: 60
   },
@@ -57,7 +57,7 @@ export const products = [
     description: 'Authentic slow-simmered pure buffalo ghee with luscious, thick ivory-white grains and authentic aroma. High natural milk fats, perfect for traditional Indian cooking and sweets.',
     category: 'Dairy Products',
     price_paise: 110000,
-    selling_unit: '1/2 kg jar',
+    selling_unit: '500 g jar',
     image_url: 'assets/milvanta-buffalo-ghee.jpg',
     stock_quantity: 60
   },

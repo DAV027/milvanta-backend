@@ -58,8 +58,8 @@ let products = [
     shortName: 'Paneer',
     category: 'Dairy Products',
     price: 400,
-    size: '1/2 kg pack',
-    quantity: '1/2 kg · 1 kg available',
+    size: '500 g pack',
+    quantity: '500 g · 1 kg available',
     description: 'Soft, melt-in-mouth cottage cheese pressed fresh every morning using pure whole milk and lemon curdling. Absolutely zero preservatives or starch.',
     ingredients: ['Pure Whole Cow Milk', 'Natural Curdling'],
     image: 'assets/milvanta-paneer.jpg',
@@ -68,7 +68,7 @@ let products = [
     reviewsCount: 96,
     badge: 'Made Daily',
     variants: [
-      { size: '1/2 kg', price: 400 },
+      { size: '500 g', price: 400 },
       { size: '1 kg', price: 750 }
     ],
     details: 'Vacuum packed fresh daily. Consume within 4 days of delivery.'
@@ -103,8 +103,8 @@ let products = [
     shortName: 'Cow Ghee',
     category: 'Dairy Products',
     price: 1500,
-    size: '1/2 kg jar',
-    quantity: '1/2 kg · 1 kg available',
+    size: '500 g jar',
+    quantity: '500 g · 1 kg available',
     description: 'Traditional Vedic bilona churned curd ghee made from pure A2 cow milk cream in earthen pots. Golden, granular texture with an intensely aromatic aroma.',
     ingredients: ['Pure A2 Cow Milk Curd Cream'],
     image: 'assets/milvanta-cow-ghee.jpg',
@@ -113,7 +113,7 @@ let products = [
     reviewsCount: 184,
     badge: 'A2 Vedic Bilona',
     variants: [
-      { size: '1/2 kg', price: 1500 },
+      { size: '500 g', price: 1500 },
       { size: '1 kg', price: 2800 }
     ],
     details: 'Slow-simmered over low flame. Naturally rich in butyric acid and gut-friendly fats.'
@@ -124,8 +124,8 @@ let products = [
     shortName: 'Buffalo Ghee',
     category: 'Dairy Products',
     price: 1100,
-    size: '1/2 kg jar',
-    quantity: '1/2 kg · 1 kg available',
+    size: '500 g jar',
+    quantity: '500 g · 1 kg available',
     description: 'Authentic slow-simmered pure buffalo ghee with luscious, thick ivory-white grains and authentic aroma. High natural milk fats, perfect for traditional Indian cooking and sweets.',
     ingredients: ['Pure Whole Buffalo Milk Cream'],
     image: 'assets/milvanta-buffalo-ghee.jpg',
@@ -134,7 +134,7 @@ let products = [
     reviewsCount: 142,
     badge: 'Granular Bilona',
     variants: [
-      { size: '1/2 kg', price: 1100 },
+      { size: '500 g', price: 1100 },
       { size: '1 kg', price: 2000 }
     ],
     details: 'Crafted with slow-fire wood-stove simmering. Rich in healthy fats and dense nourishment.'
