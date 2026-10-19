@@ -9,7 +9,7 @@ import jwt from '@fastify/jwt';
 import nodemailer from 'nodemailer';
 import pg from 'pg';
 import Razorpay from 'razorpay';
-import { runMigrations } from './migrate.js';
+import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
 import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail } from './email.js';
@@ -51,10 +51,17 @@ import {
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
 
-const JWT_SECRET = process.env.JWT_SECRET || 'milvanta_super_secure_jwt_secret_key_minimum_32_chars';
+let JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === 'test') {
+    JWT_SECRET = 'test_fallback_jwt_secret_key_minimum_32_characters_long';
+  } else {
+    throw new Error('FATAL SECURITY ERROR: JWT_SECRET environment variable is missing. A dedicated secret of at least 32 characters is strictly required in staging and production.');
+  }
+}
 
 if (JWT_SECRET.length < 32) {
-  throw new Error('JWT_SECRET must be set and at least 32 characters long');
+  throw new Error('FATAL SECURITY ERROR: JWT_SECRET must be at least 32 characters long');
 }
 
 const app = Fastify({ logger: process.env.NODE_ENV !== 'test', trustProxy: true, bodyLimit: 1_048_576 });
@@ -2396,6 +2403,37 @@ const host = process.env.HOST || '0.0.0.0';
 let reservationSweep = null;
 let outboxSweep = null;
 if (process.env.NODE_ENV !== 'test') {
+  // 1. Controlled migration execution before HTTP listener is opened
+  if (pool) {
+    if (process.env.APP_ENV === 'staging') {
+      try {
+        assertStagingDatabaseIsolation(normalizedDbUrl);
+        app.log.info('Verified staging database isolation: target does NOT match production.');
+      } catch (isolationErr) {
+        app.log.fatal(isolationErr.message);
+        process.exit(1);
+      }
+    }
+
+    try {
+      const applied = await runMigrations(pool);
+      if (applied && applied.length > 0) {
+        app.log.info({ applied }, 'Database migrations applied successfully');
+      } else {
+        app.log.info('Database schema is up to date');
+      }
+      const { rows } = await pool.query('SELECT COUNT(*) FROM products');
+      if (Number(rows[0].count) === 0) {
+        await seedProducts(pool);
+        app.log.info('Initial product catalog seeded into database');
+      }
+    } catch (err) {
+      app.log.fatal({ err: err?.message || err }, 'FATAL STARTUP ERROR: Database migrations failed! Blocking application readiness.');
+      process.exit(1);
+    }
+  }
+
+  // 2. Open HTTP listener only after database migrations succeed
   await app.listen({ port, host });
   reservationSweep = setInterval(releaseExpiredReservations, 60_000);
   reservationSweep.unref();
@@ -2408,30 +2446,6 @@ if (process.env.NODE_ENV !== 'test') {
     }
   }, 30_000);
   outboxSweep.unref();
-
-  // Asynchronously apply database migrations on startup without delaying HTTP listener
-  if (pool) {
-    runMigrations(pool)
-      .then(async (applied) => {
-        if (applied && applied.length > 0) {
-          app.log.info({ applied }, 'Database migrations applied successfully');
-        } else {
-          app.log.info('Database schema is up to date');
-        }
-        try {
-          const { rows } = await pool.query('SELECT COUNT(*) FROM products');
-          if (Number(rows[0].count) === 0) {
-            await seedProducts(pool);
-            app.log.info('Initial product catalog seeded into database');
-          }
-        } catch (err) {
-          app.log.error({ err }, 'Failed checking/seeding products catalog');
-        }
-      })
-      .catch((err) => {
-        app.log.error({ err }, 'Failed running database migrations on startup');
-      });
-  }
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {

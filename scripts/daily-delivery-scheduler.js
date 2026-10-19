@@ -15,10 +15,16 @@ import pg from 'pg';
 import { generateDailyDeliveries } from '../src/services/deliveryEngine.js';
 import { processNotificationOutbox } from '../src/services/twilioService.js';
 import { getNowInIST, formatDateYMD } from '../src/services/subscriptionService.js';
+import { assertStagingDatabaseIsolation } from '../src/migrate.js';
 
 const { Pool } = pg;
 
 async function main() {
+  if (process.env.DELIVERY_SCHEDULER_ENABLED === 'false') {
+    console.log('ℹ️ Delivery scheduler is disabled (DELIVERY_SCHEDULER_ENABLED=false). Exiting cleanly without generating deliveries.');
+    process.exit(0);
+  }
+
   const istNow = getNowInIST();
   console.log(`[${istNow.toISOString()}] Starting Milvanta Daily Delivery Scheduler...`);
   console.log(`Current IST Time: ${istNow.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
@@ -26,6 +32,15 @@ async function main() {
   if (!process.env.DATABASE_URL) {
     console.error('ERROR: DATABASE_URL environment variable is missing.');
     process.exit(1);
+  }
+
+  if (process.env.APP_ENV === 'staging') {
+    try {
+      assertStagingDatabaseIsolation(process.env.DATABASE_URL);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
   }
 
   const pool = new Pool({

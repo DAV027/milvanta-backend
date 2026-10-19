@@ -363,7 +363,7 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
         notes: 'Family vacation'
       });
       assert.equal(vacRes.success, true);
-      assert.equal(vacRes.daysSkipped, 4);
+      assert.equal(vacRes.daysCount, 4);
     }
   });
 

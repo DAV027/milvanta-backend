@@ -424,16 +424,7 @@
     </div>
 
     <!-- Backend & Payment Config Scripts -->
-    <script>
-      const isLocalHost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-      const forceLocal = window.location.search.includes('api=local') || window.location.search.includes('backend=local');
-      window.MILVANTA_API_URL = window.MILVANTA_API_URL || (
-        forceLocal || (isLocalHost && location.port === '10000')
-          ? 'http://127.0.0.1:10000'
-          : 'https://milvanta-backend.onrender.com'
-      );
-      window.RAZORPAY_KEY_ID = 'rzp_test_TMT4s342RfwceX';
-    </script>
+    <script src="js/config.js?v=20261019-1"></script>
     <script src="js/delivery.js?v=20261016-2"></script>
     <script src="js/checkout.js?v=20261016-2"></script>
   </body>
