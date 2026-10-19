@@ -1,3 +1,4 @@
+import './helpers/testDbGuard.js';
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';

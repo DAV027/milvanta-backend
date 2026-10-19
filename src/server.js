@@ -109,6 +109,21 @@ if (normalizedDbUrl) {
   }
 }
 
+if (normalizedDbUrl && process.env.NODE_ENV === 'test') {
+  try {
+    const parsed = new URL(normalizedDbUrl);
+    const dbName = parsed.pathname.replace(/^\//, '').toLowerCase();
+    const hostname = (parsed.hostname || '').toLowerCase();
+    const isProdHost = hostname.includes('dpg-db5ra25ckfvc73b67q7g') || hostname.includes('milvanta-db');
+    const isProdDb = dbName === 'milvanta';
+    if (isProdDb || isProdHost) {
+      throw new Error(`FATAL ISOLATION SAFETY ERROR: Attempted to connect to production database '${dbName}' at '${hostname}' during tests! Access strictly rejected.`);
+    }
+  } catch (err) {
+    if (err.message.startsWith('FATAL ISOLATION SAFETY ERROR')) throw err;
+  }
+}
+
 const isRenderPg = Boolean(normalizedDbUrl && normalizedDbUrl.includes('render.com'));
 const pool = normalizedDbUrl
   ? new Pool({
@@ -206,7 +221,7 @@ await app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'Idempotency-Key', 'x-admin-key']
 });
-await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+await app.register(rateLimit, { max: process.env.NODE_ENV === 'test' ? 10000 : 100, timeWindow: '1 minute' });
 await app.register(jwt, { secret: JWT_SECRET, sign: { expiresIn: '30d' } });
 
 app.decorate('authenticate', async (request, reply) => {
@@ -416,7 +431,7 @@ app.get('/health', async (request, reply) => {
   }
 });
 
-const authLimit = { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } };
+const authLimit = { config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 10000 : 10, timeWindow: '1 minute' } } };
 
 // Signup creates the account immediately; welcome email delivery is non-blocking.
 app.post('/api/v1/auth/signup', {
@@ -1047,24 +1062,49 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
         });
       }
 
-      if (gatewayPayment.currency && gatewayPayment.currency !== 'INR') {
+      // Do not silently accept missing or non-INR currency
+      if (!gatewayPayment?.currency || gatewayPayment.currency !== 'INR') {
         return reply.code(400).send({
           error: 'payment_currency_mismatch',
-          message: 'Payment currency must be INR.'
+          message: 'Payment currency must be explicitly INR.'
         });
       }
 
-      // Verify payment ownership: ensure payment belongs to this customer if customerId present in notes
+      // Do not silently accept missing amount
+      if (typeof gatewayPayment?.amount !== 'number' || gatewayPayment.amount <= 0) {
+        return reply.code(400).send({
+          error: 'invalid_payment_amount',
+          message: 'Authorized payment amount must be a positive number.'
+        });
+      }
+
+      // Prevent direct subscription creation from activating arbitrary subscriptions using recurring payment IDs
+      if (gatewayPayment.subscription_id) {
+        return reply.code(400).send({
+          error: 'subscription_payment_requires_verify',
+          message: 'Recurring subscription payments must be activated via the subscription verification endpoint.'
+        });
+      }
+
+      // Reject missing, contradictory, or unverified ownership evidence
       const paymentCustId = gatewayPayment.notes?.customerId || gatewayPayment.notes?.customer_id;
-      if (paymentCustId && String(paymentCustId) !== String(request.customer.id)) {
+      if (!paymentCustId || String(paymentCustId) !== String(request.customer.id)) {
         return reply.code(403).send({
           error: 'payment_customer_mismatch',
-          message: 'Payment authorization is registered to a different customer ID.'
+          message: 'Payment authorization lacks verified ownership linking it to this customer.'
+        });
+      }
+
+      // Reject contradictory purpose if present
+      if (gatewayPayment.notes?.purpose && !['subscription', 'milk_subscription'].includes(String(gatewayPayment.notes.purpose).toLowerCase())) {
+        return reply.code(400).send({
+          error: 'payment_purpose_mismatch',
+          message: 'Payment authorization purpose is not designated for subscription creation.'
         });
       }
 
       // Verify payment amount covers the required subscription total
-      if (typeof gatewayPayment.amount === 'number' && gatewayPayment.amount < calculatedTotalPaise) {
+      if (gatewayPayment.amount < calculatedTotalPaise) {
         return reply.code(400).send({
           error: 'payment_amount_insufficient',
           message: `Authorized payment amount (₹${(gatewayPayment.amount / 100).toFixed(0)}) is less than required subscription total (₹${(calculatedTotalPaise / 100).toFixed(0)}).`
@@ -1333,6 +1373,27 @@ async function deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub
   return 'Pending Schedule';
 }
 
+/**
+ * Resolves authoritative plan amount in paise from Razorpay gateway
+ */
+async function resolveGatewayPlanAmount(razorpayClient, gatewaySub) {
+  if (typeof gatewaySub?.plan?.item?.amount === 'number' && gatewaySub.plan.item.amount > 0) {
+    return gatewaySub.plan.item.amount;
+  }
+  const planId = gatewaySub?.plan_id;
+  if (planId && razorpayClient?.plans?.fetch) {
+    try {
+      const plan = await razorpayClient.plans.fetch(planId);
+      if (typeof plan?.item?.amount === 'number' && plan.item.amount > 0) {
+        return plan.item.amount;
+      }
+    } catch {
+      // plan fetch failed
+    }
+  }
+  return null;
+}
+
 // Explicit subscription verification endpoint
 app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async (request, reply) => {
   if (!process.env.RAZORPAY_KEY_SECRET || !pool || !razorpay) {
@@ -1384,20 +1445,30 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     });
   }
 
-  if (gatewayPayment?.currency && gatewayPayment.currency !== 'INR') {
+  // Do not silently accept missing or non-INR currency
+  if (!gatewayPayment?.currency || gatewayPayment.currency !== 'INR') {
     return reply.code(400).send({
       verified: false,
-      error: 'payment_currency_mismatch',
-      message: 'Payment currency must be INR.'
+      error: 'invalid_payment_currency',
+      message: 'Payment currency must be explicitly INR.'
     });
   }
 
-  // 4. Verify Razorpay payment and subscription identity linkage (Requirement 3)
-  if (gatewayPayment?.subscription_id && gatewayPayment.subscription_id !== subId) {
+  // Do not silently accept missing amount
+  if (typeof gatewayPayment?.amount !== 'number' || gatewayPayment.amount <= 0) {
+    return reply.code(400).send({
+      verified: false,
+      error: 'invalid_payment_amount',
+      message: 'Payment amount must be a positive number.'
+    });
+  }
+
+  // 4. Verify Razorpay payment and subscription identity linkage (authoritative linkage check)
+  if (!gatewayPayment?.subscription_id || gatewayPayment.subscription_id !== subId) {
     return reply.code(400).send({
       verified: false,
       error: 'payment_subscription_mismatch',
-      message: 'Payment is not linked to the specified subscription ID.'
+      message: 'Payment is not authoritatively linked to the specified subscription ID.'
     });
   }
   const paymentSubNote = gatewayPayment?.notes?.subscriptionId || gatewayPayment?.notes?.subscription_id || gatewayPayment?.notes?.razorpay_subscription_id;
@@ -1409,8 +1480,25 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     });
   }
 
+  // Verify plan amount using Razorpay's actual plan data
+  const expectedPlanAmount = await resolveGatewayPlanAmount(razorpay, gatewaySub);
+  if (expectedPlanAmount === null) {
+    return reply.code(400).send({
+      verified: false,
+      error: 'unverifiable_plan_amount',
+      message: 'Authoritative subscription plan amount could not be verified with gateway.'
+    });
+  }
+  if (gatewayPayment.amount !== expectedPlanAmount) {
+    return reply.code(400).send({
+      verified: false,
+      error: 'subscription_amount_mismatch',
+      message: `Payment amount (₹${(gatewayPayment.amount / 100).toFixed(0)}) does not match gateway subscription plan amount (₹${(expectedPlanAmount / 100).toFixed(0)}).`
+    });
+  }
+
   // 5. Gateway customer ownership and contradiction checks (Requirement 2 & 3)
-  const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id || gatewayPayment?.notes?.customerId;
+  const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id || gatewayPayment?.notes?.customerId || gatewayPayment?.notes?.customer_id;
   const gatewayPhone = gatewaySub?.notes?.customerPhone || gatewaySub?.notes?.phone;
   const gatewayEmail = gatewaySub?.notes?.customerEmail || gatewaySub?.notes?.email;
 
@@ -1507,53 +1595,69 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       const dailyRatePaise = gatewaySub?.notes?.dailyRate
         ? Math.round(Number(gatewaySub.notes.dailyRate) * 100)
         : getMilkDailySubscriptionRatePaise(productName, sizeStr);
-      const totalAmountPaise = Number(gatewaySub?.notes?.totalAmountPaise) || (gatewaySub?.plan?.item?.amount) || 0;
+      const totalAmountPaise = Number(gatewaySub?.notes?.totalAmountPaise) || expectedPlanAmount;
       const durationLabel = gatewaySub?.notes?.months
         ? `${gatewaySub.notes.months} Month Continuous Plan`
         : 'Continuous Subscription Plan';
 
-      // Validate payment amount is > 0 and consistent with plan if available
-      if (gatewaySub?.plan?.item?.amount && gatewayPayment.amount !== gatewaySub.plan.item.amount) {
-        return reply.code(400).send({
-          verified: false,
-          error: 'subscription_amount_mismatch',
-          message: 'Authorized payment amount does not match plan charge amount.'
-        });
-      }
+      // Concurrency-safe reconciliation using transaction and advisory lock
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [subId]);
 
-      const insertRes = await pool.query(
-        `INSERT INTO customer_subscriptions (
-           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
-           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
-           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
-         ) VALUES (
-           $1, $2, 'Daily (Every Morning)', '6:00 AM – 7:00 AM', $3, $4,
-           $5, 'active', 'Tomorrow, 6:00 AM', 'month', $6,
-           $7, $8, $9, $10
-         ) RETURNING id, customer_id, status, product_name, quantity, quantity_num,
-                     frequency, time_slot, cost_per_day_paise, plan_type, duration_label,
-                     total_amount_paise, notes, next_delivery, razorpay_subscription_id, created_at`,
-        [
-          request.customer.id,
-          productName,
-          sizeStr,
-          parseLitresFromSize(sizeStr),
-          dailyRatePaise,
-          durationLabel,
-          totalAmountPaise,
-          subId,
-          gatewaySub?.plan_id || null,
-          JSON.stringify({
-            ...(gatewaySub?.notes || {}),
-            subscriptionId: subId,
-            razorpay_subscription_id: subId,
-            paymentId,
-            reconciledAt: new Date().toISOString()
-          })
-        ]
-      );
-      subRow = insertRes.rows[0];
-      isNewlyActivated = true;
+        const recheck = await client.query(
+          `SELECT cs.id, cs.customer_id, cs.status, cs.product_name, cs.quantity, cs.notes, cs.next_delivery
+           FROM customer_subscriptions cs
+           WHERE cs.razorpay_subscription_id = $1 OR cs.notes->>'subscriptionId' = $1`,
+          [subId]
+        );
+
+        if (recheck.rows.length > 0) {
+          subRow = recheck.rows[0];
+          isNewlyActivated = false;
+        } else {
+          const insertRes = await client.query(
+            `INSERT INTO customer_subscriptions (
+               customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+               cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+               total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+             ) VALUES (
+               $1, $2, 'Daily (Every Morning)', '6:00 AM – 7:00 AM', $3, $4,
+               $5, 'active', 'Tomorrow, 6:00 AM', 'month', $6,
+               $7, $8, $9, $10
+             ) RETURNING id, customer_id, status, product_name, quantity, quantity_num,
+                         frequency, time_slot, cost_per_day_paise, plan_type, duration_label,
+                         total_amount_paise, notes, next_delivery, razorpay_subscription_id, created_at`,
+            [
+              request.customer.id,
+              productName,
+              sizeStr,
+              parseLitresFromSize(sizeStr),
+              dailyRatePaise,
+              durationLabel,
+              totalAmountPaise,
+              subId,
+              gatewaySub?.plan_id || null,
+              JSON.stringify({
+                ...(gatewaySub?.notes || {}),
+                subscriptionId: subId,
+                razorpay_subscription_id: subId,
+                paymentId,
+                reconciledAt: new Date().toISOString()
+              })
+            ]
+          );
+          subRow = insertRes.rows[0];
+          isNewlyActivated = true;
+        }
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
     }
   }
 
@@ -1591,16 +1695,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       }
     }
 
-    // Validate payment amount against plan
-    if (gatewaySub?.plan?.item?.amount && gatewayPayment.amount !== gatewaySub.plan.item.amount) {
-      return reply.code(400).send({
-        verified: false,
-        error: 'subscription_amount_mismatch',
-        message: 'Payment amount does not match gateway subscription plan amount.'
-      });
-    }
-
-    // Move pending_authorization to active
+    // Move pending_authorization to active idempotently using atomic conditional update
     const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
     const updatedNotes = {
       ...existingNotes,
@@ -1610,17 +1705,25 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       verifiedAt: new Date().toISOString()
     };
 
-    await pool.query(
+    const updateRes = await pool.query(
       `UPDATE customer_subscriptions
        SET status = 'active',
            razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1),
            notes = $2::jsonb,
            updated_at = NOW()
-       WHERE id = $3`,
+       WHERE id = $3 AND status = 'pending_authorization'
+       RETURNING id`,
       [subId, JSON.stringify(updatedNotes), subRow.id]
     );
-    subRow.status = 'active';
-    isNewlyActivated = true;
+
+    if (updateRes.rows.length > 0) {
+      subRow.status = 'active';
+      isNewlyActivated = true;
+    } else {
+      // Concurrently updated by another request/worker
+      subRow.status = 'active';
+      isNewlyActivated = false;
+    }
   }
 
   // 9. Authoritative Start Date derivation
@@ -1719,9 +1822,25 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_not_authorized`, 302);
   }
 
-  // Verify payment and subscription linkage
-  if (gatewayPayment?.subscription_id && gatewayPayment.subscription_id !== subId) {
+  // Do not silently accept missing or non-INR currency
+  if (!gatewayPayment?.currency || gatewayPayment.currency !== 'INR') {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_currency_mismatch`, 302);
+  }
+
+  // Do not silently accept missing amount
+  if (typeof gatewayPayment?.amount !== 'number' || gatewayPayment.amount <= 0) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=invalid_payment_amount`, 302);
+  }
+
+  // Authoritative payment and subscription linkage check
+  if (!gatewayPayment?.subscription_id || gatewayPayment.subscription_id !== subId) {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_subscription_mismatch`, 302);
+  }
+
+  // Verify plan amount using Razorpay's actual plan data
+  const expectedPlanAmount = await resolveGatewayPlanAmount(razorpay, gatewaySub);
+  if (expectedPlanAmount === null || gatewayPayment.amount !== expectedPlanAmount) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_amount_mismatch`, 302);
   }
 
   // 3. Database check and customer ownership validation (Requirement 5)
@@ -1753,16 +1872,17 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_forbidden`, 302);
       }
 
-      // Activate ONLY if pending_authorization; if already active, do not send duplicate emails
+      // Activate ONLY if pending_authorization using atomic conditional update for concurrency
       if (subRow.status === 'pending_authorization') {
         const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
-        await pool.query(
+        const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
            SET status = 'active', 
                razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
                notes = $2::jsonb,
                updated_at = NOW() 
-           WHERE id = $3`,
+           WHERE id = $3 AND status = 'pending_authorization'
+           RETURNING id`,
           [
             subId,
             JSON.stringify({
@@ -1776,9 +1896,11 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
             subRow.id
           ]
         );
-        sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
-          app.log.error({ err }, '[Email] Failed to send subscription confirmation email on callback');
-        });
+        if (updateRes.rows.length > 0) {
+          sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
+            app.log.error({ err }, '[Email] Failed to send subscription confirmation email on callback');
+          });
+        }
       }
     } catch (dbErr) {
       app.log.error({ dbErr }, 'Error processing subscription callback in DB');
@@ -2609,6 +2731,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
     await client.query('BEGIN');
     const seen = await client.query('INSERT INTO payment_webhook_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id', [eventId]);
     if (seen.rowCount) {
+      const eventName = request.body?.event;
       // A. Standard Order Payment Events
       const entity = request.body?.payload?.payment?.entity;
       if (entity?.order_id && entity?.id) {
@@ -2633,10 +2756,26 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       // B. Razorpay Subscription Lifecycle Events
       const subEntity = request.body?.payload?.subscription?.entity;
       if (subEntity?.id) {
-        const eventName = request.body.event;
-        if (['subscription.authenticated', 'subscription.activated', 'subscription.charged', 'subscription.resumed'].includes(eventName)) {
+        if (['subscription.authenticated', 'subscription.activated', 'subscription.charged'].includes(eventName)) {
+          // Do not resurrect cancelled, expired, or paused subscriptions
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'active', razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            `UPDATE customer_subscriptions 
+             SET status = 'active', 
+                 razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
+                 updated_at = NOW() 
+             WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
+               AND status NOT IN ('cancelled', 'expired', 'paused')`,
+            [subEntity.id]
+          );
+        } else if (['subscription.resumed'].includes(eventName)) {
+          // Resume paused subscriptions, but never cancelled/expired
+          await client.query(
+            `UPDATE customer_subscriptions 
+             SET status = 'active', 
+                 razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
+                 updated_at = NOW() 
+             WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
+               AND status NOT IN ('cancelled', 'expired')`,
             [subEntity.id]
           );
         } else if (['subscription.cancelled'].includes(eventName)) {

@@ -1,3 +1,9 @@
+import {
+  testDbConfig,
+  assertTestDatabaseConfigured,
+  setupDisposableTestSchema,
+  cleanupDisposableTestSchema
+} from './helpers/testDbGuard.js';
 import 'dotenv/config';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +21,21 @@ process.env.RAZORPAY_KEY_SECRET = 'milvanta_rzp_secret_for_acceptance_tests';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'milvanta_rzp_webhook_for_acceptance_tests';
 
 const { Pool } = pg;
+
+let testSetup = null;
+if (testDbConfig.isConfigured) {
+  testSetup = await setupDisposableTestSchema();
+  // Seed products for subscription and order flows
+  await testSetup.pool.query(`
+    INSERT INTO products (name, category, price_paise, active, selling_unit, image_url)
+    VALUES 
+      ('Pure Fresh Cow Milk', 'Fresh Dairy', 10500, TRUE, '1 Litre', 'assets/milvanta-cow-milk.jpg'),
+      ('Pure Buffalo Milk', 'Fresh Dairy', 12500, TRUE, '1 Litre', 'assets/buffalo-milk.jpg'),
+      ('Artisanal Malai Paneer', 'Fresh Dairy', 40000, TRUE, '500 g', 'assets/paneer.jpg')
+    ON CONFLICT DO NOTHING
+  `);
+}
+
 const { app } = await import('../src/server.js');
 const {
   getMilkDailySubscriptionRatePaise,
@@ -60,61 +81,24 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   let generatedDeliveries = [];
 
   before(async () => {
-    const rawDbUrl = (
-      process.env.DATABASE_URL ||
-      process.env.INTERNAL_DATABASE_URL ||
-      process.env.EXTERNAL_DATABASE_URL ||
-      process.env.POSTGRES_URL
-    )?.trim().replace(/^["']|["']$/g, '');
-
-    if (rawDbUrl) {
-      try {
-        pool = new Pool({
-          connectionString: rawDbUrl,
-          ssl: { rejectUnauthorized: false }
-        });
-        client = await pool.connect();
-        await client.query(`CREATE SCHEMA IF NOT EXISTS "${schemaName}"`);
-        await client.query(`SET search_path TO "${schemaName}", public`);
-
-        // Apply all migrations in order
-        const migrationsDir = path.resolve(process.cwd(), 'migrations');
-        const migrationFiles = fs.readdirSync(migrationsDir)
-          .filter(f => f.endsWith('.sql'))
-          .sort();
-
-        for (const file of migrationFiles) {
-          const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-          await client.query(sql);
-        }
-
-        // Seed products for subscription and order flows
-        await client.query(`
-          INSERT INTO products (name, category, price_paise, active, selling_unit, image_url)
-          VALUES 
-            ('Pure Fresh Cow Milk', 'Fresh Dairy', 10500, TRUE, '1 Litre', 'assets/milvanta-cow-milk.jpg'),
-            ('Pure Buffalo Milk', 'Fresh Dairy', 12500, TRUE, '1 Litre', 'assets/buffalo-milk.jpg'),
-            ('Artisanal Malai Paneer', 'Fresh Dairy', 40000, TRUE, '500 g', 'assets/paneer.jpg')
-          ON CONFLICT DO NOTHING
-        `);
-
-        hasRealDb = true;
-      } catch (err) {
-        console.warn('Real DB initialization skipped, using fallback verification:', err.message);
-        hasRealDb = false;
-      }
+    if (!testSetup) {
+      console.warn('[Stage C Acceptance] TEST_DATABASE_URL not set; running in mock fallback mode.');
+      hasRealDb = false;
+      return;
     }
+
+    pool = testSetup.pool;
+    schemaName = testSetup.schemaName;
+    client = await pool.connect();
+    hasRealDb = true;
   });
 
   after(async () => {
-    if (client && hasRealDb) {
-      try {
-        await client.query(`DROP SCHEMA IF EXISTS "${schemaName}" CASCADE`);
-        client.release();
-        await pool.end();
-      } catch (e) {
-        // cleanup ignore
-      }
+    if (client) {
+      client.release();
+    }
+    if (testSetup && hasRealDb) {
+      await cleanupDisposableTestSchema(pool, schemaName);
     }
   });
 
