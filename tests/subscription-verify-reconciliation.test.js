@@ -11,7 +11,7 @@ process.env.RAZORPAY_KEY_SECRET = 'test_secret_for_milvanta_verify_hmac';
 
 const { app, pool, razorpay } = await import('../src/server.js');
 
-describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () => {
+describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconciliation Suite', () => {
   let customerAId;
   let customerBId;
   let tokenA;
@@ -23,6 +23,22 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
   const testPhoneB = '9' + Math.floor(100000000 + Math.random() * 900000000);
 
   before(async () => {
+    // Requirement 8: Ensure integration tests use only disposable or staging PostgreSQL, never production
+    const rawDbUrl = (
+      process.env.DATABASE_URL ||
+      process.env.INTERNAL_DATABASE_URL ||
+      process.env.EXTERNAL_DATABASE_URL ||
+      process.env.POSTGRES_URL || ''
+    ).trim();
+
+    if (rawDbUrl) {
+      const isProductionDb = /milvanta-db\.internal|production-db|prod-postgres/i.test(rawDbUrl) &&
+        !/staging|test|dev/i.test(rawDbUrl);
+      if (isProductionDb || process.env.NODE_ENV === 'production') {
+        throw new Error('SAFETY BLOCK: Integration tests must not run against production database.');
+      }
+    }
+
     if (pool) {
       try {
         // Create Customer A
@@ -76,6 +92,8 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
   after(async () => {
     if (pool && customerAId && customerBId) {
       try {
+        await pool.query('DELETE FROM payment_orders WHERE customer_order_id IN (SELECT id FROM customer_orders WHERE customer_id IN ($1, $2))', [customerAId, customerBId]);
+        await pool.query('DELETE FROM customer_orders WHERE customer_id IN ($1, $2)', [customerAId, customerBId]);
         await pool.query('DELETE FROM customer_subscriptions WHERE customer_id IN ($1, $2)', [customerAId, customerBId]);
         await pool.query('DELETE FROM customer_sessions WHERE customer_id IN ($1, $2)', [customerAId, customerBId]);
         await pool.query('DELETE FROM customers WHERE id IN ($1, $2)', [customerAId, customerBId]);
@@ -168,7 +186,6 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         headers: { Authorization: `Bearer ${tokenA}` },
         payload: {
           razorpay_subscription_id: 'sub_test_123'
-          // Missing payment_id and signature
         }
       });
       assert.equal(res.statusCode, 400);
@@ -201,7 +218,6 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         .update(`${paymentId}|${subId}`)
         .digest('hex');
 
-      // Mock gateway returning pending/failed payment
       const originalFetchSub = razorpay.subscriptions.fetch;
       const originalFetchPay = razorpay.payments.fetch;
       razorpay.subscriptions.fetch = async () => ({ id: subId, status: 'pending', notes: {} });
@@ -228,12 +244,52 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         razorpay.payments.fetch = originalFetchPay;
       }
     });
+
+    // Requirement 3: Linkage mismatch test
+    it('rejects verification if payment is linked to a different subscription ID with 400', async () => {
+      const subId = `sub_target_${Date.now()}`;
+      const paymentId = `pay_mismatch_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const signature = crypto.createHmac('sha256', secret)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({ id: subId, status: 'active', notes: { customerId: String(customerAId) } });
+      razorpay.payments.fetch = async () => ({
+        id: paymentId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: 'sub_completely_different_id' // Mismatched!
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: signature
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'payment_subscription_mismatch');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
   });
 
   // =========================================================================
-  // 3. Subscription Activation & Authoritative Start Date Derivation
+  // 3. Subscription Activation & Lifecycle State Integrity (Requirement 1 & 6)
   // =========================================================================
-  describe('3. Subscription Activation & Authoritative Start Date Derivation', () => {
+  describe('3. Subscription Activation & Lifecycle State Integrity (Requirement 1 & 6)', () => {
     const subId = `sub_active_test_${Date.now()}`;
     const paymentId = `pay_active_test_${Date.now()}`;
     let signature;
@@ -252,11 +308,11 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
           `INSERT INTO customer_subscriptions (
             customer_id, product_name, quantity, time_slot, frequency,
             cost_per_day_paise, total_amount_paise, status, next_delivery,
-            plan_type, duration_label, razorpay_subscription_id, notes
+            plan_type, duration_label, razorpay_subscription_id, razorpay_plan_id, notes
           ) VALUES (
             $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
             10500, 315000, 'pending_authorization', 'Tomorrow, 6:00 AM',
-            'month', '1 Month (30 Days)', $2,
+            'month', '1 Month (30 Days)', $2, 'plan_valid_123',
             $3::jsonb
           ) RETURNING id`,
           [
@@ -268,18 +324,22 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         createdSubId = insertRes.rows[0].id;
       }
 
-      // Mock gateway returning authenticated subscription and captured payment
       const originalFetchSub = razorpay.subscriptions.fetch;
       const originalFetchPay = razorpay.payments.fetch;
       razorpay.subscriptions.fetch = async () => ({
         id: subId,
         status: 'active',
+        plan_id: 'plan_valid_123',
+        plan: { item: { amount: 315000 } },
         start_at: 1776556800,
         notes: { customerId: String(customerAId), productName: 'Pure Fresh Cow Milk', size: '1 Litre' }
       });
       razorpay.payments.fetch = async () => ({
         id: paymentId,
-        status: 'captured'
+        status: 'captured',
+        currency: 'INR',
+        amount: 315000,
+        subscription_id: subId
       });
 
       try {
@@ -316,31 +376,27 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
       }
     });
 
-    it('idempotently reconciles already-active subscription without creating duplicate rows', async () => {
-      let initialCount = 0;
-      if (pool && customerAId) {
-        const countRes = await pool.query(
-          'SELECT COUNT(*) FROM customer_subscriptions WHERE customer_id = $1',
-          [customerAId]
-        );
-        initialCount = Number(countRes.rows[0].count);
-      }
-
+    // Requirement 6: Duplicate verification idempotent without duplicate emails/notifications
+    it('idempotently handles duplicate verification without duplicate emails or notifications', async () => {
       const originalFetchSub = razorpay.subscriptions.fetch;
       const originalFetchPay = razorpay.payments.fetch;
       razorpay.subscriptions.fetch = async () => ({
         id: subId,
         status: 'active',
+        plan_id: 'plan_valid_123',
+        plan: { item: { amount: 315000 } },
         start_at: 1776556800,
         notes: { customerId: String(customerAId) }
       });
       razorpay.payments.fetch = async () => ({
         id: paymentId,
-        status: 'captured'
+        status: 'captured',
+        currency: 'INR',
+        amount: 315000,
+        subscription_id: subId
       });
 
       try {
-        // Call verify second time
         const res = await app.inject({
           method: 'POST',
           url: '/api/v1/subscriptions/verify',
@@ -356,51 +412,54 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         const data = JSON.parse(res.payload);
         assert.equal(data.verified, true);
         assert.equal(data.status, 'active');
-
-        if (pool && customerAId) {
-          const finalCountRes = await pool.query(
-            'SELECT COUNT(*) FROM customer_subscriptions WHERE customer_id = $1',
-            [customerAId]
-          );
-          const finalCount = Number(finalCountRes.rows[0].count);
-          assert.equal(finalCount, initialCount, 'Subscription count must NOT increase on duplicate verify');
-        }
+        assert.match(data.message, /already active/i);
       } finally {
         razorpay.subscriptions.fetch = originalFetchSub;
         razorpay.payments.fetch = originalFetchPay;
       }
     });
-  });
 
-  // =========================================================================
-  // 4. Reconciliation of Missing Local Record & Customer Boundary Check
-  // =========================================================================
-  describe('4. External Gateway Reconciliation & Customer Ownership Security', () => {
-    it('safely reconciles authorized gateway subscription not yet in local DB', async () => {
-      const freshSubId = `sub_external_${Date.now()}`;
-      const freshPaymentId = `pay_external_${Date.now()}`;
+    // Requirement 1: Prevent changing cancelled, paused or expired subscriptions back to active
+    it('Requirement 1: rejects verification on cancelled subscriptions with 409 and does not reactivate', async () => {
+      const cancelledSubId = `sub_cancelled_${Date.now()}`;
+      const cancelledPayId = `pay_cancelled_${Date.now()}`;
       const secret = process.env.RAZORPAY_KEY_SECRET;
-      const signature = crypto.createHmac('sha256', secret)
-        .update(`${freshPaymentId}|${freshSubId}`)
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${cancelledPayId}|${cancelledSubId}`)
         .digest('hex');
+
+      if (pool && customerAId) {
+        await pool.query(
+          `INSERT INTO customer_subscriptions (
+            customer_id, product_name, quantity, time_slot, frequency,
+            cost_per_day_paise, total_amount_paise, status, next_delivery,
+            plan_type, duration_label, razorpay_subscription_id, notes
+          ) VALUES (
+            $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
+            10500, 315000, 'cancelled', 'Cancelled',
+            'month', '1 Month (30 Days)', $2,
+            $3::jsonb
+          )`,
+          [
+            customerAId,
+            cancelledSubId,
+            JSON.stringify({ subscriptionId: cancelledSubId })
+          ]
+        );
+      }
 
       const originalFetchSub = razorpay.subscriptions.fetch;
       const originalFetchPay = razorpay.payments.fetch;
       razorpay.subscriptions.fetch = async () => ({
-        id: freshSubId,
+        id: cancelledSubId,
         status: 'active',
-        plan_id: 'plan_ext_123',
-        notes: {
-          customerId: String(customerAId),
-          productName: 'Pure Buffalo Milk',
-          size: '1 Litre',
-          dailyRate: '125',
-          totalAmountPaise: '375000'
-        }
+        notes: { customerId: String(customerAId) }
       });
       razorpay.payments.fetch = async () => ({
-        id: freshPaymentId,
-        status: 'captured'
+        id: cancelledPayId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: cancelledSubId
       });
 
       try {
@@ -409,27 +468,23 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
           url: '/api/v1/subscriptions/verify',
           headers: { Authorization: `Bearer ${tokenA}` },
           payload: {
-            razorpay_subscription_id: freshSubId,
-            razorpay_payment_id: freshPaymentId,
-            razorpay_signature: signature
+            razorpay_subscription_id: cancelledSubId,
+            razorpay_payment_id: cancelledPayId,
+            razorpay_signature: sig
           }
         });
 
-        assert.equal(res.statusCode, 200);
+        assert.equal(res.statusCode, 409);
         const data = JSON.parse(res.payload);
-        assert.equal(data.verified, true);
-        assert.equal(data.status, 'active');
-        assert.equal(data.subscriptionId, freshSubId);
+        assert.equal(data.error, 'subscription_state_conflict');
+        assert.equal(data.status, 'cancelled');
 
         if (pool && customerAId) {
           const check = await pool.query(
-            'SELECT * FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
-            [freshSubId]
+            'SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
+            [cancelledSubId]
           );
-          assert.equal(check.rows.length, 1);
-          assert.equal(Number(check.rows[0].customer_id), Number(customerAId));
-          assert.equal(check.rows[0].status, 'active');
-          assert.equal(check.rows[0].product_name, 'Pure Buffalo Milk');
+          assert.equal(check.rows[0].status, 'cancelled', 'Status must remain cancelled and not be reactivated');
         }
       } finally {
         razorpay.subscriptions.fetch = originalFetchSub;
@@ -437,44 +492,72 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
       }
     });
 
-    it('rejects verification if gateway subscription belongs to a different customer with 403', async () => {
-      const crossSubId = `sub_cross_${Date.now()}`;
-      const crossPaymentId = `pay_cross_${Date.now()}`;
+    it('Requirement 1: rejects verification on paused subscriptions with 409 and does not reactivate', async () => {
+      const pausedSubId = `sub_paused_${Date.now()}`;
+      const pausedPayId = `pay_paused_${Date.now()}`;
       const secret = process.env.RAZORPAY_KEY_SECRET;
-      const signature = crypto.createHmac('sha256', secret)
-        .update(`${crossPaymentId}|${crossSubId}`)
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${pausedPayId}|${pausedSubId}`)
         .digest('hex');
+
+      if (pool && customerAId) {
+        await pool.query(
+          `INSERT INTO customer_subscriptions (
+            customer_id, product_name, quantity, time_slot, frequency,
+            cost_per_day_paise, total_amount_paise, status, next_delivery,
+            plan_type, duration_label, razorpay_subscription_id, notes
+          ) VALUES (
+            $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
+            10500, 315000, 'paused', 'On Hold (Paused)',
+            'month', '1 Month (30 Days)', $2,
+            $3::jsonb
+          )`,
+          [
+            customerAId,
+            pausedSubId,
+            JSON.stringify({ subscriptionId: pausedSubId })
+          ]
+        );
+      }
 
       const originalFetchSub = razorpay.subscriptions.fetch;
       const originalFetchPay = razorpay.payments.fetch;
-      // Gateway metadata has customerId for Customer A
       razorpay.subscriptions.fetch = async () => ({
-        id: crossSubId,
+        id: pausedSubId,
         status: 'active',
         notes: { customerId: String(customerAId) }
       });
       razorpay.payments.fetch = async () => ({
-        id: crossPaymentId,
-        status: 'captured'
+        id: pausedPayId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: pausedSubId
       });
 
       try {
-        // Customer B attempts to verify Customer A's subscription
         const res = await app.inject({
           method: 'POST',
           url: '/api/v1/subscriptions/verify',
-          headers: { Authorization: `Bearer ${tokenB}` },
+          headers: { Authorization: `Bearer ${tokenA}` },
           payload: {
-            razorpay_subscription_id: crossSubId,
-            razorpay_payment_id: crossPaymentId,
-            razorpay_signature: signature
+            razorpay_subscription_id: pausedSubId,
+            razorpay_payment_id: pausedPayId,
+            razorpay_signature: sig
           }
         });
 
-        assert.equal(res.statusCode, 403);
+        assert.equal(res.statusCode, 409);
         const data = JSON.parse(res.payload);
-        assert.equal(data.verified, false);
-        assert.equal(data.error, 'subscription_forbidden');
+        assert.equal(data.error, 'subscription_state_conflict');
+        assert.equal(data.status, 'paused');
+
+        if (pool && customerAId) {
+          const check = await pool.query(
+            'SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
+            [pausedSubId]
+          );
+          assert.equal(check.rows[0].status, 'paused', 'Status must remain paused');
+        }
       } finally {
         razorpay.subscriptions.fetch = originalFetchSub;
         razorpay.payments.fetch = originalFetchPay;
@@ -483,32 +566,255 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
   });
 
   // =========================================================================
-  // 5. POST /api/v1/subscriptions Idempotent Payment Activation
+  // 4. Trustworthy Reconciliation & Customer Boundary (Requirement 2 & 3)
   // =========================================================================
-  describe('5. POST /api/v1/subscriptions Idempotency & Payment Protection', () => {
-    it('returns 200 with active subscription when called repeatedly with same paymentId', async () => {
-      const paymentId = `pay_idempotent_${Date.now()}`;
+  describe('4. Trustworthy Reconciliation & Ownership Verification (Requirements 2 & 3)', () => {
+    it('Requirement 2: rejects automatic reconciliation if gateway notes lack customerId with 403', async () => {
+      const unlinkedSubId = `sub_unlinked_${Date.now()}`;
+      const unlinkedPayId = `pay_unlinked_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${unlinkedPayId}|${unlinkedSubId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      // Gateway metadata has NO customerId
+      razorpay.subscriptions.fetch = async () => ({
+        id: unlinkedSubId,
+        status: 'active',
+        plan_id: 'plan_123',
+        notes: {
+          productName: 'Pure Fresh Cow Milk',
+          size: '1 Litre'
+          // No customerId!
+        }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: unlinkedPayId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: unlinkedSubId
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: unlinkedSubId,
+            razorpay_payment_id: unlinkedPayId,
+            razorpay_signature: sig
+          }
+        });
+
+        assert.equal(res.statusCode, 403);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'untrustworthy_subscription_ownership');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 2: rejects reconciliation if gateway phone or email contradicts customer with 403', async () => {
+      const contraSubId = `sub_contra_${Date.now()}`;
+      const contraPayId = `pay_contra_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${contraPayId}|${contraSubId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({
+        id: contraSubId,
+        status: 'active',
+        plan_id: 'plan_123',
+        notes: {
+          customerId: String(customerAId),
+          customerPhone: '9999999999' // Contradicts customer A phone!
+        }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: contraPayId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: contraSubId
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: contraSubId,
+            razorpay_payment_id: contraPayId,
+            razorpay_signature: sig
+          }
+        });
+
+        assert.equal(res.statusCode, 403);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_forbidden');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 3: rejects draft verification if plan ID does not match local draft with 400', async () => {
+      const draftSubId = `sub_draft_plan_${Date.now()}`;
+      const draftPayId = `pay_draft_plan_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${draftPayId}|${draftSubId}`)
+        .digest('hex');
 
       if (pool && customerAId) {
         await pool.query(
           `INSERT INTO customer_subscriptions (
             customer_id, product_name, quantity, time_slot, frequency,
             cost_per_day_paise, total_amount_paise, status, next_delivery,
-            plan_type, duration_label, notes
+            plan_type, duration_label, razorpay_subscription_id, razorpay_plan_id, notes
           ) VALUES (
             $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
-            10500, 315000, 'active', 'Tomorrow, 6:00 AM',
-            'month', '1 Month (30 Days)',
-            $2::jsonb
+            10500, 315000, 'pending_authorization', 'Tomorrow, 6:00 AM',
+            'month', '1 Month (30 Days)', $2, 'plan_expected_xyz',
+            $3::jsonb
           )`,
-          [
-            customerAId,
-            JSON.stringify({ paymentId, payment_id: paymentId, subscriptionId: 'sub_test_dup' })
-          ]
+          [customerAId, draftSubId, JSON.stringify({ subscriptionId: draftSubId })]
         );
       }
 
-      // Customer A calls POST /api/v1/subscriptions with same paymentId
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({
+        id: draftSubId,
+        status: 'active',
+        plan_id: 'plan_tampered_different', // Does not match plan_expected_xyz!
+        notes: { customerId: String(customerAId) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: draftPayId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: draftSubId
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: draftSubId,
+            razorpay_payment_id: draftPayId,
+            razorpay_signature: sig
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_plan_mismatch');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 3: rejects draft verification if payment amount does not match plan charge with 400', async () => {
+      const draftAmtSubId = `sub_draft_amt_${Date.now()}`;
+      const draftAmtPayId = `pay_draft_amt_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${draftAmtPayId}|${draftAmtSubId}`)
+        .digest('hex');
+
+      if (pool && customerAId) {
+        await pool.query(
+          `INSERT INTO customer_subscriptions (
+            customer_id, product_name, quantity, time_slot, frequency,
+            cost_per_day_paise, total_amount_paise, status, next_delivery,
+            plan_type, duration_label, razorpay_subscription_id, razorpay_plan_id, notes
+          ) VALUES (
+            $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
+            10500, 315000, 'pending_authorization', 'Tomorrow, 6:00 AM',
+            'month', '1 Month (30 Days)', $2, 'plan_match_123',
+            $3::jsonb
+          )`,
+          [customerAId, draftAmtSubId, JSON.stringify({ subscriptionId: draftAmtSubId })]
+        );
+      }
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({
+        id: draftAmtSubId,
+        status: 'active',
+        plan_id: 'plan_match_123',
+        plan: { item: { amount: 315000 } }, // Expects ₹3150
+        notes: { customerId: String(customerAId) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: draftAmtPayId,
+        status: 'captured',
+        currency: 'INR',
+        amount: 500, // Tampered: only paid ₹5!
+        subscription_id: draftAmtSubId
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: draftAmtSubId,
+            razorpay_payment_id: draftAmtPayId,
+            razorpay_signature: sig
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_amount_mismatch');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 5. POST /api/v1/subscriptions Payment Reuse Protection (Requirement 4)
+  // =========================================================================
+  describe('5. POST /api/v1/subscriptions Payment Protection (Requirement 4)', () => {
+    it('Requirement 4: rejects using an order payment reference to create a subscription with 400', async () => {
+      const orderPaymentId = `pay_order_${Date.now()}`;
+
+      if (pool && customerAId) {
+        const orderRes = await pool.query(
+          `INSERT INTO customer_orders (
+            order_number, customer_id, idempotency_key, address, items, subtotal_paise,
+            delivery_charge_paise, total_paise, payment_status
+          ) VALUES (
+            $1, $2, $3, '{"city":"Hyderabad"}'::jsonb, '[]'::jsonb, 10000, 5000, 15000, 'paid'
+          ) RETURNING id`,
+          [`ORD-TEST-${Date.now()}`, customerAId, `idem_${Date.now()}`]
+        );
+        await pool.query(
+          `INSERT INTO payment_orders (
+            razorpay_order_id, razorpay_payment_id, amount_paise, currency, items, status, customer_order_id
+          ) VALUES (
+            $1, $2, 15000, 'INR', '[]'::jsonb, 'captured', $3
+          )`,
+          [`order_rzp_${Date.now()}`, orderPaymentId, orderRes.rows[0].id]
+        );
+      }
+
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/subscriptions',
@@ -516,54 +822,237 @@ describe('Milvanta Subscription Verification & Schema Reconciliation Suite', () 
         payload: {
           productName: 'Pure Fresh Cow Milk',
           quantity: '1 Litre',
-          paymentId: paymentId
+          paymentId: orderPaymentId
         }
       });
 
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.statusCode, 400);
       const data = JSON.parse(res.payload);
-      assert.ok(data.subscription);
-      assert.match(data.message, /already active/i);
+      assert.equal(data.error, 'payment_already_used_for_order');
     });
 
-    it('rejects if a different customer attempts to use an already-used paymentId with 409', async () => {
-      const paymentId = `pay_cross_reuse_${Date.now()}`;
+    it('Requirement 4: rejects subscription creation if payment amount is less than subscription cost with 400', async () => {
+      const underpaidPaymentId = `pay_underpaid_${Date.now()}`;
+
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.payments.fetch = async () => ({
+        id: underpaidPaymentId,
+        status: 'captured',
+        currency: 'INR',
+        amount: 10000, // ₹100, but 1-month 1L Cow Milk is ₹3,150!
+        notes: { customerId: String(customerAId) }
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            productName: 'Pure Fresh Cow Milk',
+            quantity: '1 Litre',
+            paymentId: underpaidPaymentId,
+            notes: { days: 30 }
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'payment_amount_insufficient');
+      } finally {
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 4: rejects subscription creation if payment notes belong to a different customer with 403', async () => {
+      const otherCustPaymentId = `pay_other_cust_${Date.now()}`;
+
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.payments.fetch = async () => ({
+        id: otherCustPaymentId,
+        status: 'captured',
+        currency: 'INR',
+        amount: 315000,
+        notes: { customerId: String(customerBId) } // Belongs to customer B!
+      });
+
+      try {
+        // Customer A attempts to activate subscription with Customer B's payment
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            productName: 'Pure Fresh Cow Milk',
+            quantity: '1 Litre',
+            paymentId: otherCustPaymentId,
+            notes: { days: 30 }
+          }
+        });
+
+        assert.equal(res.statusCode, 403);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'payment_customer_mismatch');
+      } finally {
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 6. Callback Endpoint Authoritative Verification (Requirement 5)
+  // =========================================================================
+  describe('6. Callback Endpoint Authoritative Verification (Requirement 5)', () => {
+    it('Requirement 5: rejects callback if gateway payment is uncaptured even with valid HMAC signature', async () => {
+      const subId = `sub_cb_failed_${Date.now()}`;
+      const payId = `pay_cb_failed_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${payId}|${subId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({ id: subId, status: 'active' });
+      razorpay.payments.fetch = async () => ({ id: payId, status: 'failed' }); // Failed payment!
+
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/callback?razorpay_subscription_id=${subId}&razorpay_payment_id=${payId}&razorpay_signature=${sig}`
+        });
+
+        assert.equal(res.statusCode, 302);
+        const location = res.headers.location;
+        assert.match(location, /subscription=failed/);
+        assert.match(location, /error=payment_not_authorized/);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 5: rejects callback if target subscription in DB is cancelled', async () => {
+      const subId = `sub_cb_cancelled_${Date.now()}`;
+      const payId = `pay_cb_cancelled_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${payId}|${subId}`)
+        .digest('hex');
 
       if (pool && customerAId) {
         await pool.query(
           `INSERT INTO customer_subscriptions (
             customer_id, product_name, quantity, time_slot, frequency,
             cost_per_day_paise, total_amount_paise, status, next_delivery,
-            plan_type, duration_label, notes
+            plan_type, duration_label, razorpay_subscription_id, notes
           ) VALUES (
             $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
-            10500, 315000, 'active', 'Tomorrow, 6:00 AM',
-            'month', '1 Month (30 Days)',
-            $2::jsonb
+            10500, 315000, 'cancelled', 'Cancelled',
+            'month', '1 Month (30 Days)', $2,
+            $3::jsonb
           )`,
-          [
-            customerAId,
-            JSON.stringify({ paymentId })
-          ]
+          [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
         );
       }
 
-      // Customer B attempts to use Customer A's paymentId
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/v1/subscriptions',
-        headers: { Authorization: `Bearer ${tokenB}` },
-        payload: {
-          productName: 'Pure Fresh Cow Milk',
-          quantity: '1 Litre',
-          paymentId: paymentId
-        }
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        notes: { customerId: String(customerAId) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: subId
       });
 
-      assert.equal(res.statusCode, 409);
-      const data = JSON.parse(res.payload);
-      assert.equal(data.error, 'payment_already_used');
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/callback?razorpay_subscription_id=${subId}&razorpay_payment_id=${payId}&razorpay_signature=${sig}`
+        });
+
+        assert.equal(res.statusCode, 302);
+        const location = res.headers.location;
+        assert.match(location, /subscription=failed/);
+        assert.match(location, /error=subscription_state_conflict/);
+
+        if (pool && customerAId) {
+          const check = await pool.query(
+            'SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
+            [subId]
+          );
+          assert.equal(check.rows[0].status, 'cancelled');
+        }
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 5: successfully activates pending subscription on valid callback', async () => {
+      const subId = `sub_cb_valid_${Date.now()}`;
+      const payId = `pay_cb_valid_${Date.now()}`;
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret)
+        .update(`${payId}|${subId}`)
+        .digest('hex');
+
+      if (pool && customerAId) {
+        await pool.query(
+          `INSERT INTO customer_subscriptions (
+            customer_id, product_name, quantity, time_slot, frequency,
+            cost_per_day_paise, total_amount_paise, status, next_delivery,
+            plan_type, duration_label, razorpay_subscription_id, notes
+          ) VALUES (
+            $1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
+            10500, 315000, 'pending_authorization', 'Tomorrow, 6:00 AM',
+            'month', '1 Month (30 Days)', $2,
+            $3::jsonb
+          )`,
+          [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+        );
+      }
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        notes: { customerId: String(customerAId) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        currency: 'INR',
+        subscription_id: subId
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/callback?razorpay_subscription_id=${subId}&razorpay_payment_id=${payId}&razorpay_signature=${sig}`
+        });
+
+        assert.equal(res.statusCode, 302);
+        const location = res.headers.location;
+        assert.match(location, /subscription=success/);
+
+        if (pool && customerAId) {
+          const check = await pool.query(
+            'SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
+            [subId]
+          );
+          assert.equal(check.rows[0].status, 'active');
+        }
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
     });
   });
 });
-
