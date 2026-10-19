@@ -686,14 +686,17 @@ function populateSubscriptionMonths(selectElem) {
 
 function findProductById(id) {
   const numId = Number(id);
-  const found = products.find((item) => {
-    const itemId = Number(item.id);
-    if (itemId === numId) return true;
-    if ((numId === 101 && itemId === 1) || (numId === 1 && itemId === 101)) return true;
-    if ((numId === 102 && itemId === 2) || (numId === 2 && itemId === 102)) return true;
-    return false;
-  });
-  return found || products.find((item) => String(item.id) === String(id));
+  // 1. Direct exact match by product ID
+  const exact = products.find((item) => Number(item.id) === numId);
+  if (exact) return exact;
+
+  // 2. Fresh milk product ID alias fallback (backend DB ID 1/2 vs frontend initial ID 101/102)
+  if (numId === 1) return products.find((item) => Number(item.id) === 101 && isFreshMilkProduct(item)) || null;
+  if (numId === 2) return products.find((item) => Number(item.id) === 102 && isFreshMilkProduct(item)) || null;
+  if (numId === 101) return products.find((item) => Number(item.id) === 1 && isFreshMilkProduct(item)) || null;
+  if (numId === 102) return products.find((item) => Number(item.id) === 2 && isFreshMilkProduct(item)) || null;
+
+  return products.find((item) => String(item.id) === String(id)) || null;
 }
 window.findProductById = findProductById;
 
@@ -1127,9 +1130,53 @@ function updateBadge() {
   }
 }
 
+function getCartItemSize(entry) {
+  if (!entry) return '';
+  if (entry.variant?.size != null && String(entry.variant.size).trim()) {
+    return String(entry.variant.size).trim();
+  }
+  if (entry.size != null && String(entry.size).trim()) {
+    return String(entry.size).trim();
+  }
+  const p = findProductById(entry.id);
+  if (p?.size != null && String(p.size).trim()) {
+    return String(p.size).trim();
+  }
+  return '';
+}
+
+function findCartItem(id, variantSize = '') {
+  const numId = Number(id);
+  const cleanTargetSize = variantSize ? String(variantSize).trim() : '';
+
+  if (cleanTargetSize) {
+    let match = state.cart.find((entry) => Number(entry.id) === numId && getCartItemSize(entry) === cleanTargetSize);
+    if (match) return match;
+
+    match = state.cart.find((entry) => Number(entry.id) === numId && (
+      (entry.variant?.size != null && String(entry.variant.size).trim() === cleanTargetSize) ||
+      (entry.size != null && String(entry.size).trim() === cleanTargetSize)
+    ));
+    if (match) return match;
+  } else {
+    let match = state.cart.find((entry) => Number(entry.id) === numId && !getCartItemSize(entry));
+    if (match) return match;
+
+    match = state.cart.find((entry) => Number(entry.id) === numId);
+    if (match) return match;
+  }
+
+  return null;
+}
+
 function getCartItemQuantity(productId, variantSize = '') {
-  const item = state.cart.find((entry) => entry.id === productId && (entry.variant?.size || '') === variantSize);
-  return item ? item.quantity : 0;
+  const numId = Number(productId);
+  if (!variantSize) {
+    const items = state.cart.filter((entry) => Number(entry.id) === numId);
+    return items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  }
+  const item = findCartItem(numId, variantSize);
+  return item ? (Number(item.quantity) || 0) : 0;
 }
 
 // Filtered Catalog
@@ -1899,7 +1946,24 @@ function addToCart(id, quantity = 1, variant = null) {
     return;
   }
 
-  const existing = state.cart.find((entry) => Number(entry.id) === numId && (entry.variant?.size || entry.size || '') === (variant?.size || ''));
+  // If no variant was passed, but the product has variants (e.g., added via quick-add card button),
+  // default to the first variant so price and size match the default catalog variant
+  const effectiveVariant = variant || (p.variants && p.variants.length > 0 ? p.variants[0] : null);
+  const targetSize = effectiveVariant?.size != null
+    ? String(effectiveVariant.size).trim()
+    : (p.size != null ? String(p.size).trim() : '');
+
+  const existing = state.cart.find((entry) => {
+    if (Number(entry.id) !== numId) return false;
+    const entrySize = getCartItemSize(entry);
+    if (targetSize) {
+      return entrySize === targetSize ||
+        (entry.variant?.size != null && String(entry.variant.size).trim() === targetSize) ||
+        (entry.size != null && String(entry.size).trim() === targetSize);
+    }
+    return !entrySize;
+  });
+
   if ((existing?.quantity || 0) + quantity > 25) {
     state.checkoutNotice = 'You can add up to 25 units per item.';
     renderCart();
@@ -1909,24 +1973,24 @@ function addToCart(id, quantity = 1, variant = null) {
   if (existing) {
     existing.quantity += quantity;
     if (!existing.name) existing.name = p.name;
-    if (!existing.price) existing.price = variant?.price || p.price;
+    if (!existing.price) existing.price = effectiveVariant?.price || p.price;
     if (!existing.image) existing.image = p.image;
-    if (!existing.size) existing.size = variant?.size || p.size;
-    if (variant?.isContinuousMonthsPlan) {
+    if (!existing.size) existing.size = effectiveVariant?.size || p.size;
+    if (effectiveVariant?.isContinuousMonthsPlan) {
       existing.isContinuousMonthsPlan = true;
       existing.isSubscriptionPlan = true;
-      existing.subscriptionPlan = variant.subscriptionPlan;
+      existing.subscriptionPlan = effectiveVariant.subscriptionPlan;
     }
   } else {
     state.cart.push({
       id: numId,
       name: p.name,
-      price: variant?.price || p.price,
-      size: variant?.size || p.size,
+      price: effectiveVariant?.price || p.price,
+      size: effectiveVariant?.size || p.size,
       image: p.image,
       quantity,
-      ...(variant ? { variant } : {}),
-      ...(variant?.isContinuousMonthsPlan ? { isContinuousMonthsPlan: true, isSubscriptionPlan: true, subscriptionPlan: variant.subscriptionPlan } : {})
+      ...(effectiveVariant ? { variant: effectiveVariant } : {}),
+      ...(effectiveVariant?.isContinuousMonthsPlan ? { isContinuousMonthsPlan: true, isSubscriptionPlan: true, subscriptionPlan: effectiveVariant.subscriptionPlan } : {})
     });
   }
   saveCart();
@@ -1936,11 +2000,13 @@ function addToCart(id, quantity = 1, variant = null) {
 }
 
 function updateCart(id, amount, variantSize = '') {
-  const numId = Number(id);
-  const item = state.cart.find((entry) => Number(entry.id) === numId && (entry.variant?.size || '') === variantSize);
+  const item = findCartItem(id, variantSize);
   if (!item) return;
 
-  if (amount > 0 && item.quantity + amount > 25) {
+  if (amount <= -999 || amount === -Infinity || amount === 'remove') {
+    state.cart = state.cart.filter((e) => e !== item);
+    state.checkoutNotice = '';
+  } else if (amount > 0 && item.quantity + amount > 25) {
     state.checkoutNotice = 'Maximum 25 units per item.';
   } else {
     state.checkoutNotice = '';
@@ -1953,6 +2019,10 @@ function updateCart(id, amount, variantSize = '') {
   updateBadge();
   renderCatalog();
   renderCart();
+}
+
+function removeFromCart(id, variantSize = '') {
+  updateCart(id, -Infinity, variantSize);
 }
 
 // Render Cart Drawer
@@ -1985,7 +2055,7 @@ function renderCart() {
   // Item Rows
   const itemsHtml = valid.map((entry) => {
     const p = findProductById(entry.id) || { name: 'Item', price: 0, image: 'assets/milvanta-cow-milk.jpg', size: '' };
-    const size = entry.variant?.size || entry.size || p.size;
+    const size = getCartItemSize(entry);
     const price = entry.variant?.price || entry.price || p.price;
     const key = encodeURIComponent(size || '');
 
@@ -2001,7 +2071,7 @@ function renderCart() {
         <img class="cart-image" src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" loading="lazy">
         <div class="cart-details">
           <h4>${escapeHtml(p.name)}</h4>
-          <p>${escapeHtml(size)}</p>
+          ${size ? `<p>${escapeHtml(size)}</p>` : ''}
           ${subBadgeHtml}
           <button class="remove-item" type="button" data-remove="${p.id}" data-variant="${key}">Remove</button>
         </div>
@@ -2064,6 +2134,11 @@ function setCartOpen(open) {
   $('#cartToggle')?.setAttribute('aria-expanded', String(open));
 }
 window.addToCart = addToCart;
+window.updateCart = updateCart;
+window.removeFromCart = removeFromCart;
+window.getCartItemSize = getCartItemSize;
+window.findCartItem = findCartItem;
+window.getCartItemQuantity = getCartItemQuantity;
 window.setCartOpen = setCartOpen;
 window.openProductModal = openProductModal;
 window.state = state;
@@ -3350,7 +3425,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const remove = event.target.closest('[data-remove]');
     if (remove) {
-      updateCart(Number(remove.dataset.remove), -999, decodeURIComponent(remove.dataset.variant || ''));
+      removeFromCart(Number(remove.dataset.remove), decodeURIComponent(remove.dataset.variant || ''));
       return;
     }
 
