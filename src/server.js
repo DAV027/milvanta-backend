@@ -13,6 +13,40 @@ import { runMigrations } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
 import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail } from './email.js';
+import {
+  resolveItemPricing,
+  isFreshMilkProduct,
+  getMilkDailySubscriptionRatePaise,
+  calculateContinuousMonthsDays,
+  normalizeSizeKey,
+  parseLitresFromSize,
+  APPROVED_MILK_PACK_SIZES
+} from './pricing.js';
+import {
+  sendPhoneOtp,
+  verifyPhoneOtp,
+  queueNotification,
+  processNotificationOutbox,
+  handleTwilioStatusCallback,
+  validateTwilioWebhookSignature
+} from './services/twilioService.js';
+import {
+  pauseSubscription,
+  resumeSubscription,
+  skipDeliveryDate,
+  unskipDeliveryDate,
+  setVacation,
+  modifySubscriptionQuantity,
+  cancelSubscription,
+  getSubscriptionCalendar,
+  calculateNextDeliveryDate,
+  isDeliveryCutoffPassed
+} from './services/subscriptionService.js';
+import {
+  generateDailyDeliveries,
+  getDailyDeliveries,
+  updateDeliveryStatus
+} from './services/deliveryEngine.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -29,6 +63,20 @@ app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, bo
   request.rawBody = body;
   try { done(null, JSON.parse(body.toString('utf8'))); }
   catch (error) { done(error); }
+});
+
+app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'buffer' }, (request, body, done) => {
+  request.rawBody = body;
+  try {
+    const params = new URLSearchParams(body.toString('utf8'));
+    const parsed = {};
+    for (const [key, value] of params.entries()) {
+      parsed[key] = value;
+    }
+    done(null, parsed);
+  } catch (error) {
+    done(error);
+  }
 });
 
 const rawDbUrl = (
@@ -162,13 +210,31 @@ app.decorate('authenticate', async (request, reply) => {
     return reply.code(401).send({ error: 'unauthorized' });
   }
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const { rows } = await pool.query(
-    `SELECT c.id, c.full_name, c.email, c.phone, COALESCE(c.is_admin, FALSE) AS is_admin
-     FROM customers c
-     JOIN customer_sessions s ON s.customer_id = c.id
-     WHERE c.id = $1 AND s.token_hash = $2 AND s.expires_at > NOW()`,
-    [request.user.sub, digest(match[1])]
-  );
+  let rows;
+  try {
+    const res = await pool.query(
+      `SELECT c.id, c.full_name, c.email, c.phone, COALESCE(c.is_admin, FALSE) AS is_admin,
+              c.phone_verified_at, COALESCE(c.sms_notifications_enabled, TRUE) AS sms_notifications_enabled
+       FROM customers c
+       JOIN customer_sessions s ON s.customer_id = c.id
+       WHERE c.id = $1 AND s.token_hash = $2 AND s.expires_at > NOW()`,
+      [request.user.sub, digest(match[1])]
+    );
+    rows = res.rows;
+  } catch (err) {
+    if (err.code === '42703') {
+      const fallback = await pool.query(
+        `SELECT c.id, c.full_name, c.email, c.phone, COALESCE(c.is_admin, FALSE) AS is_admin
+         FROM customers c
+         JOIN customer_sessions s ON s.customer_id = c.id
+         WHERE c.id = $1 AND s.token_hash = $2 AND s.expires_at > NOW()`,
+        [request.user.sub, digest(match[1])]
+      );
+      rows = fallback.rows;
+    } else {
+      throw err;
+    }
+  }
   if (!rows[0]) return reply.code(401).send({ error: 'unauthorized' });
   request.customer = rows[0];
   request.authToken = match[1];
@@ -193,6 +259,9 @@ const publicUser = (u) => ({
   full_name: u.full_name,
   email: u.email,
   phone: u.phone,
+  phone_verified: Boolean(u.phone_verified_at),
+  phone_verified_at: u.phone_verified_at || null,
+  sms_notifications_enabled: u.sms_notifications_enabled !== false,
   is_admin: Boolean(u.is_admin)
 });
 const signToken = (u) => app.jwt.sign({ sub: String(u.id), email: u.email, jti: crypto.randomUUID() });
@@ -626,6 +695,110 @@ app.post('/api/v1/auth/forgot-password/reset', {
   };
 });
 
+// ---------- Twilio Phone OTP Verification ----------
+app.post('/api/v1/auth/phone/send-otp', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['phone'],
+      additionalProperties: false,
+      properties: {
+        phone: { type: 'string', minLength: 10, maxLength: 16 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  const { phone } = request.body;
+  const authHeader = request.headers.authorization;
+  let customerId = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const decoded = app.jwt.verify(authHeader.slice(7));
+      customerId = decoded?.sub ? Number(decoded.sub) : null;
+    } catch {}
+  }
+
+  const result = await sendPhoneOtp({
+    phone,
+    ip: request.ip,
+    customerId,
+    pool
+  });
+
+  if (!result.success) {
+    const code = result.error === 'cooldown_active' ? 429 : 400;
+    return reply.code(code).send(result);
+  }
+
+  return reply.send(result);
+});
+
+app.post('/api/v1/auth/phone/verify-otp', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['phone', 'code'],
+      additionalProperties: false,
+      properties: {
+        phone: { type: 'string', minLength: 10, maxLength: 16 },
+        code: { type: 'string', minLength: 4, maxLength: 8 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  const { phone, code } = request.body;
+  const authHeader = request.headers.authorization;
+  let customerId = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const decoded = app.jwt.verify(authHeader.slice(7));
+      customerId = decoded?.sub ? Number(decoded.sub) : null;
+    } catch {}
+  }
+
+  const result = await verifyPhoneOtp({
+    phone,
+    code,
+    customerId,
+    pool
+  });
+
+  if (!result.verified) {
+    const status = result.error === 'max_attempts_exceeded' ? 429 : 400;
+    return reply.code(status).send(result);
+  }
+
+  return reply.send(result);
+});
+
+// ---------- Customer Notification Preferences ----------
+app.get('/api/v1/customers/notifications/preferences', { preHandler: app.authenticate }, async (request, reply) => {
+  return reply.send({
+    sms_notifications_enabled: request.customer.sms_notifications_enabled !== false,
+    phone: request.customer.phone,
+    phone_verified: Boolean(request.customer.phone_verified_at)
+  });
+});
+
+app.patch('/api/v1/customers/notifications/preferences', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { enabled } = request.body || {};
+  const isEnabled = enabled !== false;
+
+  await pool.query(
+    'UPDATE customers SET sms_notifications_enabled = $1, updated_at = NOW() WHERE id = $2',
+    [isEnabled, request.customer.id]
+  );
+
+  return reply.send({
+    success: true,
+    sms_notifications_enabled: isEnabled,
+    message: isEnabled ? 'SMS delivery alerts enabled.' : 'SMS delivery alerts muted.'
+  });
+});
+
 app.get('/api/v1/products', async (_request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { rows } = await pool.query(
@@ -786,14 +959,76 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
     timeSlot,
     quantity,
     quantityNum,
-    costPerDayPaise,
     planType,
     durationLabel,
-    totalAmountPaise,
     notes,
-    paymentId
+    paymentId: rawPaymentId
   } = request.body || {};
+
   if (!productName) return reply.code(400).send({ error: 'product_name_required' });
+
+  const paymentId = String(rawPaymentId || notes?.paymentId || '').trim();
+
+  // Non-admins MUST provide a verifiable payment ID
+  if (!request.isAdmin) {
+    if (!paymentId) {
+      return reply.code(400).send({
+        error: 'payment_id_required',
+        message: 'A verified payment authorization ID is required to activate a subscription.'
+      });
+    }
+
+    // Check duplicate activation prevention: ensure paymentId hasn't already been used
+    const existing = await pool.query(
+      "SELECT id FROM customer_subscriptions WHERE (notes->>'paymentId' = $1 OR notes->>'payment_id' = $1) AND customer_id = $2",
+      [paymentId, request.customer.id]
+    );
+    if (existing.rows.length) {
+      return reply.code(409).send({
+        error: 'payment_already_used',
+        message: 'This payment authorization has already been used to activate a subscription.'
+      });
+    }
+
+    // Verify payment status with Razorpay gateway or customer order records
+    if (razorpay && process.env.RAZORPAY_KEY_SECRET) {
+      try {
+        const gatewayPayment = await razorpay.payments.fetch(paymentId);
+        if (!['captured', 'authorized'].includes(gatewayPayment?.status)) {
+          return reply.code(402).send({
+            error: 'payment_not_captured',
+            message: 'Payment has not been captured or authorized by gateway.'
+          });
+        }
+      } catch (rzpErr) {
+        // Fallback: check if recorded as paid order in database
+        const dbPaid = await pool.query(
+          "SELECT id FROM customer_orders WHERE customer_id = $1 AND (razorpay_payment_id = $2 OR order_number = $2)",
+          [request.customer.id, paymentId]
+        );
+        if (!dbPaid.rows.length) {
+          return reply.code(400).send({
+            error: 'invalid_payment_proof',
+            message: 'Provided payment reference could not be verified.'
+          });
+        }
+      }
+    }
+  }
+
+  // Calculate authoritative server-side pricing for milk subscriptions
+  const cleanQty = quantity || '1 Litre';
+  const dailyRatePaise = getMilkDailySubscriptionRatePaise(productName, cleanQty);
+  const effectiveDays = Math.max(1, Math.min(365, Number(notes?.days || notes?.customDays) || (planType === 'custom' ? 7 : 30)));
+  const calculatedTotalPaise = dailyRatePaise * effectiveDays;
+
+  const enrichedNotes = {
+    ...(notes || {}),
+    paymentId: paymentId || '',
+    dailyRatePaise,
+    totalPaise: calculatedTotalPaise,
+    verifiedAt: new Date().toISOString()
+  };
 
   const { rows } = await pool.query(
     `INSERT INTO customer_subscriptions (
@@ -809,13 +1044,13 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
       imageUrl || 'assets/milvanta-cow-milk.jpg',
       frequency || 'Daily (Every Morning)',
       timeSlot || '6:00 AM – 7:00 AM',
-      quantity || '1 Litre',
+      cleanQty,
       Number(quantityNum) || 1,
-      Number(costPerDayPaise) || 6000,
+      dailyRatePaise,
       planType || 'month',
       durationLabel || '',
-      Number(totalAmountPaise) || 0,
-      JSON.stringify(notes || {})
+      calculatedTotalPaise,
+      JSON.stringify(enrichedNotes)
     ]
   );
 
@@ -833,9 +1068,12 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
   return reply.code(201).send({ subscription: createdSub });
 });
 
-app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
+app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authenticate }, async (request, reply) => {
   if (!razorpay || !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
     return reply.code(503).send({ error: 'razorpay_not_configured' });
+  }
+  if (!pool) {
+    return reply.code(503).send({ error: 'database_not_configured' });
   }
 
   const {
@@ -843,46 +1081,139 @@ app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
     productName,
     size,
     monthsCount,
-    daysCount,
-    totalAmountPaise,
-    dailyRatePaise,
     startOffset
   } = request.body || {};
 
-  if (!productName || !totalAmountPaise) {
-    return reply.code(400).send({ error: 'invalid_subscription_details' });
+  // 1. Fetch and validate product from database
+  let product;
+  if (productId) {
+    const { rows } = await pool.query(
+      'SELECT * FROM products WHERE active = TRUE AND (id = $1 OR name ILIKE $2) LIMIT 1',
+      [Number(productId) || 0, `%${productName || ''}%`]
+    );
+    product = rows[0];
+  } else if (productName) {
+    const { rows } = await pool.query(
+      'SELECT * FROM products WHERE active = TRUE AND name ILIKE $1 LIMIT 1',
+      [`%${productName}%`]
+    );
+    product = rows[0];
+  }
+
+  if (!product || !isFreshMilkProduct(product)) {
+    return reply.code(400).send({
+      error: 'invalid_subscription_product',
+      message: 'Subscriptions are only available for pure fresh milk products.'
+    });
+  }
+
+  // 2. Validate and normalize size against approved pack sizes
+  const normalizedSize = normalizeSizeKey(size || '1 Litre');
+  if (!APPROVED_MILK_PACK_SIZES.includes(normalizedSize)) {
+    return reply.code(400).send({
+      error: 'invalid_pack_size',
+      message: `Selected pack size is not approved. Must be one of: ${APPROVED_MILK_PACK_SIZES.join(', ')}`
+    });
+  }
+
+  // 3. Compute trusted server-side rates, calendar days, and totals
+  const months = Math.max(1, Math.min(12, Number(monthsCount) || 1));
+  const offset = Math.max(0, Math.min(12, Number(startOffset) || 0));
+  const dailyRatePaise = getMilkDailySubscriptionRatePaise(product, normalizedSize);
+  const totalDays = calculateContinuousMonthsDays(offset, months);
+  const calculatedTotalAmountPaise = totalDays * dailyRatePaise;
+  const amountPerMonthPaise = Math.round(calculatedTotalAmountPaise / months);
+
+  // 4. Idempotency check: Reuse existing pending subscription if one was already created recently
+  const existingPending = await pool.query(
+    `SELECT id, razorpay_subscription_id, razorpay_plan_id, total_amount_paise 
+     FROM customer_subscriptions 
+     WHERE customer_id = $1 AND product_id = $2 AND quantity = $3 
+       AND status = 'pending_authorization' 
+       AND created_at > (NOW() - INTERVAL '15 minutes')
+     ORDER BY created_at DESC LIMIT 1`,
+    [request.customer.id, product.id, normalizedSize]
+  );
+
+  if (existingPending.rows[0]?.razorpay_subscription_id) {
+    const oldSub = existingPending.rows[0];
+    return {
+      success: true,
+      subscriptionId: oldSub.razorpay_subscription_id,
+      keyId: process.env.RAZORPAY_KEY_ID,
+      amount: amountPerMonthPaise,
+      totalAmount: Number(oldSub.total_amount_paise || calculatedTotalAmountPaise),
+      dailyRate: dailyRatePaise / 100,
+      totalDays,
+      planId: oldSub.razorpay_plan_id
+    };
   }
 
   try {
-    const months = Math.max(1, Math.min(12, Number(monthsCount) || 1));
-    const amountPerMonthPaise = Math.round(Number(totalAmountPaise) / months);
-
-    // Create plan in Razorpay
+    // 5. Create plan in Razorpay with server-calculated monthly amount
+    const planName = `Milvanta ${product.name} (${normalizedSize})`;
     const plan = await razorpay.plans.create({
       period: 'monthly',
       interval: 1,
       item: {
-        name: `Milvanta ${productName} (${size || '500 ml'})`,
+        name: planName,
         amount: amountPerMonthPaise,
         currency: 'INR',
-        description: `${size || '500 ml'} fresh milk delivered every morning`
+        description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
       }
     });
 
-    // Create subscription in Razorpay
+    // 6. Create subscription in Razorpay linked to customer
     const rzpSub = await razorpay.subscriptions.create({
       plan_id: plan.id,
       total_count: months,
       quantity: 1,
       customer_notify: 1,
       notes: {
-        productName: String(productName),
-        size: String(size || '500 ml'),
+        customerId: String(request.customer.id),
+        customerPhone: String(request.customer.phone || ''),
+        productId: String(product.id),
+        productName: String(product.name),
+        size: normalizedSize,
         months: String(months),
-        days: String(daysCount || 30),
-        dailyRate: String(Math.round(Number(dailyRatePaise || 0) / 100))
+        days: String(totalDays),
+        dailyRate: String(dailyRatePaise / 100),
+        totalAmountPaise: String(calculatedTotalAmountPaise)
       }
     });
+
+    // 7. Store local subscription in pending_authorization state
+    await pool.query(
+      `INSERT INTO customer_subscriptions (
+        customer_id, product_id, product_name, image_url, frequency, time_slot,
+        quantity, quantity_num, cost_per_day_paise, status, next_delivery,
+        plan_type, duration_label, total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+      ) VALUES (
+        $1, $2, $3, $4, 'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+        $5, $6, $7, 'pending_authorization', 'Tomorrow, 6:00 AM',
+        'month', $8, $9, $10, $11, $12
+      )`,
+      [
+        request.customer.id,
+        product.id,
+        product.name,
+        product.image_url || 'assets/milvanta-cow-milk.jpg',
+        normalizedSize,
+        parseLitresFromSize(normalizedSize),
+        dailyRatePaise,
+        `${months} Month Continuous Plan (${totalDays} Days)`,
+        calculatedTotalAmountPaise,
+        rzpSub.id,
+        plan.id,
+        JSON.stringify({
+          subscriptionId: rzpSub.id,
+          months,
+          days: totalDays,
+          dailyRatePaise,
+          amountPerMonthPaise
+        })
+      ]
+    );
 
     return {
       success: true,
@@ -890,7 +1221,9 @@ app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
       shortUrl: rzpSub.short_url,
       keyId: process.env.RAZORPAY_KEY_ID,
       amount: amountPerMonthPaise,
-      totalAmount: Number(totalAmountPaise),
+      totalAmount: calculatedTotalAmountPaise,
+      dailyRate: dailyRatePaise / 100,
+      totalDays,
       planId: plan.id
     };
   } catch (err) {
@@ -899,16 +1232,135 @@ app.post('/api/v1/subscriptions/razorpay-checkout', async (request, reply) => {
   }
 });
 
-// Razorpay Subscription return callback (redirects customer back to home page)
+// Explicit subscription verification endpoint
+app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!process.env.RAZORPAY_KEY_SECRET || !pool || !razorpay) {
+    return reply.code(503).send({ error: 'payments_not_configured' });
+  }
+
+  const {
+    razorpay_subscription_id: subId,
+    razorpay_payment_id: paymentId,
+    razorpay_signature: signature
+  } = request.body || {};
+
+  if (!subId || !paymentId || !signature) {
+    return reply.code(400).send({ verified: false, error: 'invalid_subscription_proof' });
+  }
+
+  // 1. Verify Razorpay subscription signature: HMAC-SHA256(payment_id + '|' + subscription_id)
+  const expected = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(`${paymentId}|${subId}`)
+    .digest();
+  const supplied = Buffer.from(signature, 'hex');
+
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    return reply.code(400).send({ verified: false, error: 'invalid_subscription_signature' });
+  }
+
+  // 2. Verify subscription ownership with customer
+  const { rows } = await pool.query(
+    "SELECT cs.id, cs.customer_id, cs.status, cs.product_name, cs.quantity, cs.start_date, c.phone, c.sms_notifications_enabled " +
+    "FROM customer_subscriptions cs " +
+    "LEFT JOIN customers c ON c.id = cs.customer_id " +
+    "WHERE (cs.notes->>'subscriptionId' = $1 OR cs.notes->>'razorpay_subscription_id' = $1) AND cs.customer_id = $2",
+    [subId, request.customer.id]
+  );
+  if (!rows.length) {
+    return reply.code(404).send({ verified: false, error: 'subscription_not_found' });
+  }
+
+  // 3. Confirm with Razorpay gateway
+  const [gatewaySub, gatewayPayment] = await Promise.all([
+    razorpay.subscriptions.fetch(subId),
+    razorpay.payments.fetch(paymentId)
+  ]);
+
+  if (['active', 'authenticated'].includes(gatewaySub.status) && ['captured', 'authorized'].includes(gatewayPayment.status)) {
+    await pool.query(
+      "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE id = $1",
+      [rows[0].id]
+    );
+
+    sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
+      app.log.error({ err }, '[Email] Failed to send subscription confirmation email on verify');
+    });
+
+    const targetPhone = rows[0].phone;
+    if (targetPhone && rows[0].sms_notifications_enabled !== false) {
+      queueNotification(pool, {
+        customerId: rows[0].customer_id,
+        phone: targetPhone,
+        templateKey: 'SUBSCRIPTION_ACTIVATED',
+        params: {
+          productName: rows[0].product_name || 'Milk',
+          quantity: rows[0].quantity || '1 Litre',
+          startDate: rows[0].start_date || 'tomorrow'
+        },
+        idempotencyKey: `sms_sub_activated_${rows[0].id}`
+      }).catch(() => {});
+      setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
+    }
+
+    return {
+      verified: true,
+      subscriptionId: subId,
+      paymentId,
+      status: 'active'
+    };
+  }
+
+  return reply.code(409).send({
+    verified: false,
+    error: 'subscription_payment_state_not_captured',
+    gatewaySubStatus: gatewaySub.status,
+    gatewayPaymentStatus: gatewayPayment.status
+  });
+});
+
+// Razorpay Subscription return callback (with signature verification & open-redirect protection)
 app.all('/api/v1/subscriptions/callback', async (request, reply) => {
-  const returnUrl = request.query.return_url || 'https://milvanta.in/';
+  const ALLOWED_REDIRECT_HOSTS = ['milvanta.in', 'www.milvanta.in', 'localhost', '127.0.0.1'];
+  let safeReturnUrl = 'https://milvanta.in/';
+  try {
+    const rawTarget = request.query?.return_url || request.body?.return_url;
+    if (rawTarget) {
+      const parsed = new URL(rawTarget, 'https://milvanta.in/');
+      if (ALLOWED_REDIRECT_HOSTS.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`))) {
+        safeReturnUrl = rawTarget;
+      }
+    }
+  } catch {}
+
   const subId = request.body?.razorpay_subscription_id || request.query?.razorpay_subscription_id;
   const paymentId = request.body?.razorpay_payment_id || request.query?.razorpay_payment_id;
+  const signature = request.body?.razorpay_signature || request.query?.razorpay_signature;
 
-  if (subId && pool) {
+  const separator = safeReturnUrl.includes('?') ? '&' : '?';
+
+  // If missing critical payment identifiers, reject without activation
+  if (!subId || !paymentId || !signature) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=missing_payment_proof`, 302);
+  }
+
+  if (!process.env.RAZORPAY_KEY_SECRET) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=server_configuration_error`, 302);
+  }
+
+  // Verify HMAC signature: HMAC-SHA256(payment_id + '|' + subscription_id)
+  const expected = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+    .update(`${paymentId}|${subId}`)
+    .digest();
+  const supplied = Buffer.from(signature, 'hex');
+
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=invalid_signature`, 302);
+  }
+
+  if (pool) {
     try {
       await pool.query(
-        "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR id::text = $1",
+        "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1 OR id::text = $1",
         [subId]
       );
       sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
@@ -917,70 +1369,315 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
     } catch {}
   }
 
-  const separator = returnUrl.includes('?') ? '&' : '?';
-  return reply.redirect(303, `${returnUrl}${separator}subscription=success${paymentId ? `&payment_id=${paymentId}` : ''}`);
+  return reply.redirect(`${safeReturnUrl}${separator}subscription=success&payment_id=${encodeURIComponent(paymentId)}`, 302);
 });
 
-// Explicit endpoint to trigger or resend subscription confirmation emails
-app.post('/api/v1/subscriptions/send-confirmation', async (request, reply) => {
+// Explicit endpoint to trigger or resend subscription confirmation emails (authenticated)
+app.post('/api/v1/subscriptions/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
+  const { subscriptionId, orderNumber } = request.body || {};
   const paymentId = request.body?.paymentId || '';
-  const result = await sendSubscriptionConfirmationEmails(pool, request.body, { paymentId });
+
+  // Validate customer ownership
+  if (pool) {
+    if (subscriptionId) {
+      const { rows } = await pool.query(
+        "SELECT id, customer_id FROM customer_subscriptions WHERE (id::text = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)",
+        [String(subscriptionId)]
+      );
+      if (rows.length && Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+        return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this subscription.' });
+      }
+    }
+    if (orderNumber) {
+      const { rows } = await pool.query(
+        'SELECT id, customer_id FROM customer_orders WHERE order_number = $1',
+        [String(orderNumber)]
+      );
+      if (rows.length && Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+        return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
+      }
+    }
+  }
+
+  // Enforce customer's verified identity for destination email to prevent spam relay
+  const safeCustomer = {
+    name: request.customer.full_name,
+    email: request.customer.email,
+    phone: request.customer.phone
+  };
+
+  const safePayload = {
+    ...request.body,
+    customer: safeCustomer,
+    customerEmail: request.customer.email,
+    customerName: request.customer.full_name
+  };
+
+  const result = await sendSubscriptionConfirmationEmails(pool, safePayload, {
+    paymentId,
+    customerEmail: request.customer.email,
+    customerName: request.customer.full_name
+  });
   return reply.send(result);
 });
 
-app.patch('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
+// ---------- Server-Authoritative Subscription Management ----------
+app.get('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const subId = Number(request.params.id);
   if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
-  const { status, quantity, quantityNum } = request.body || {};
-
-  const updates = [];
-  const values = [request.customer.id, subId];
-  let paramIdx = 3;
-
-  if (status && ['active', 'paused', 'cancelled'].includes(status)) {
-    updates.push(`status = $${paramIdx++}`);
-    values.push(status);
-  }
-  if (quantity) {
-    updates.push(`quantity = $${paramIdx++}`);
-    values.push(String(quantity).trim());
-  }
-  if (quantityNum !== undefined) {
-    updates.push(`quantity_num = $${paramIdx++}`);
-    values.push(Number(quantityNum));
-  }
-
-  if (updates.length === 0) {
-    return reply.code(400).send({ error: 'no_updates_provided' });
-  }
-
-  updates.push('updated_at = NOW()');
 
   const { rows } = await pool.query(
-    `UPDATE customer_subscriptions
-     SET ${updates.join(', ')}
-     WHERE customer_id = $1 AND id = $2
-     RETURNING *`,
-    values
+    `SELECT cs.*, c.phone, c.full_name, c.email
+     FROM customer_subscriptions cs
+     JOIN customers c ON c.id = cs.customer_id
+     WHERE cs.id = $1 AND cs.customer_id = $2`,
+    [subId, request.customer.id]
+  );
+  if (!rows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
+
+  const sub = rows[0];
+
+  // Fetch recent delivery orders
+  const { rows: deliveries } = await pool.query(
+    `SELECT delivery_order_number, delivery_date, status, delivered_at, failed_reason
+     FROM subscription_delivery_orders
+     WHERE subscription_id = $1
+     ORDER BY delivery_date DESC LIMIT 10`,
+    [subId]
   );
 
-  if (!rows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
-  return { subscription: rows[0] };
+  // Fetch active pauses or vacation
+  const { rows: activePauses } = await pool.query(
+    `SELECT id, pause_start_date, pause_end_date, reason, created_at
+     FROM subscription_delivery_pauses
+     WHERE subscription_id = $1 AND resumed_at IS NULL
+     ORDER BY pause_start_date DESC`,
+    [subId]
+  );
+
+  return reply.send({
+    subscription: sub,
+    deliveries,
+    activePauses,
+    nextDelivery: sub.next_delivery
+  });
+});
+
+app.post('/api/v1/subscriptions/:id/pause', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { startDate, endDate, reason } = request.body || {};
+
+  const result = await pauseSubscription(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    startDate,
+    endDate,
+    reason
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/subscriptions/:id/resume', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+
+  const result = await resumeSubscription(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/subscriptions/:id/skip-date', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { skipDate, reason } = request.body || {};
+
+  const result = await skipDeliveryDate(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    skipDate,
+    reason
+  });
+
+  if (!result.success) {
+    const status = result.error === 'cutoff_passed' ? 422 : (result.statusCode || 400);
+    return reply.code(status).send(result);
+  }
+  return reply.send(result);
+});
+
+app.delete('/api/v1/subscriptions/:id/skip-date', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const skipDate = request.query?.skipDate || request.body?.skipDate;
+
+  const result = await unskipDeliveryDate(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    skipDate
+  });
+
+  if (!result.success) {
+    const status = result.error === 'cutoff_passed' ? 422 : (result.statusCode || 400);
+    return reply.code(status).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/subscriptions/:id/vacation', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { startDate, endDate, reason } = request.body || {};
+
+  const result = await setVacation(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    startDate,
+    endDate,
+    reason
+  });
+
+  if (!result.success) {
+    const status = result.error === 'cutoff_passed' ? 422 : (result.statusCode || 400);
+    return reply.code(status).send(result);
+  }
+  return reply.send(result);
+});
+
+app.patch('/api/v1/subscriptions/:id/quantity', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { quantity } = request.body || {};
+
+  const result = await modifySubscriptionQuantity(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    newQuantity: quantity
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/subscriptions/:id/cancel', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { reason } = request.body || {};
+
+  const result = await cancelSubscription(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    reason
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
 });
 
 app.delete('/api/v1/subscriptions/:id', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const subId = Number(request.params.id);
   if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
-  const { rows } = await pool.query(
-    `UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW()
-     WHERE customer_id = $1 AND id = $2
-     RETURNING id`,
-    [request.customer.id, subId]
+
+  const result = await cancelSubscription(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    reason: 'Subscription deleted by user'
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send({ deleted: true, id: subId });
+});
+
+app.get('/api/v1/subscriptions/:id/calendar', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { year, month } = request.query || {};
+
+  const calendar = await getSubscriptionCalendar(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id,
+    year,
+    month
+  });
+
+  if (!calendar) return reply.code(404).send({ error: 'subscription_not_found' });
+  return reply.send(calendar);
+});
+
+app.get('/api/v1/subscriptions/:id/billing', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+
+  const { rows: subRows } = await pool.query(
+    'SELECT * FROM customer_subscriptions WHERE id = $1 AND customer_id = $2',
+    [subId, request.customer.id]
   );
-  if (!rows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
-  return { deleted: true, id: rows[0].id };
+  if (!subRows[0]) return reply.code(404).send({ error: 'subscription_not_found' });
+
+  const { rows: adjustments } = await pool.query(
+    'SELECT * FROM subscription_billing_adjustments WHERE subscription_id = $1 ORDER BY created_at DESC',
+    [subId]
+  );
+
+  const totalExtendedDays = adjustments
+    .filter(a => a.adjustment_type === 'extension')
+    .reduce((sum, a) => sum + Number(a.days_count || 0), 0);
+
+  const totalCreditPaise = adjustments
+    .filter(a => a.adjustment_type === 'credit')
+    .reduce((sum, a) => sum + Number(a.amount_paise || 0), 0);
+
+  const isPrepaid = subRows[0].plan_type !== 'continuous' || !subRows[0].razorpay_subscription_id;
+  const billingPolicy = isPrepaid
+    ? {
+        type: 'prepaid_extension',
+        description: 'For prepaid subscriptions, skipped delivery dates and vacation days automatically extend your delivery calendar, guaranteeing you receive all paid deliveries.',
+        extendedDays: totalExtendedDays
+      }
+    : {
+        type: 'recurring_mandate_credit',
+        description: 'For recurring mandate subscriptions with fixed billing cycles, skipped deliveries accrue billing credits rather than shifting gateway charge dates.',
+        accruedCreditPaise: totalCreditPaise
+      };
+
+  return reply.send({
+    subscriptionId: subId,
+    planType: subRows[0].plan_type,
+    durationLabel: subRows[0].duration_label,
+    totalAmountPaise: subRows[0].total_amount_paise,
+    costPerDayPaise: subRows[0].cost_per_day_paise,
+    totalExtendedDays,
+    totalCreditPaise,
+    billingPolicy,
+    adjustments
+  });
 });
 
 // ---------- Delivery Check ----------
@@ -1071,17 +1768,21 @@ app.post('/api/v1/orders', {
         await client.query('ROLLBACK');
         return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id), message: `Insufficient stock for ${product.name}.` });
       }
-      const itemMeta = itemMetaMap.get(Number(product.id));
-      const customPricePaise = itemMeta?.customPricePaise || itemMeta?.pricePaise;
-      const unitPricePaise = (customPricePaise && Number.isSafeInteger(Number(customPricePaise)) && Number(customPricePaise) >= 1000)
-        ? Number(customPricePaise)
-        : Number(product.price_paise);
+      const itemMeta = itemMetaMap.get(Number(product.id)) || {};
+      let pricing;
+      try {
+        pricing = resolveItemPricing(product, itemMeta);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'invalid_item_pricing', message: err.message });
+      }
+      const unitPricePaise = pricing.unitPricePaise;
       subtotal += unitPricePaise * quantity;
       orderItems.push({
         productId: Number(product.id),
-        name: itemMeta?.name || product.name,
+        name: pricing.resolvedName || product.name,
         category: product.category,
-        unit: itemMeta?.notes || (itemMeta?.size ? `${product.selling_unit} (${itemMeta.size})` : product.selling_unit),
+        unit: pricing.resolvedUnit || product.selling_unit,
         imageUrl: product.image_url,
         quantity,
         unitPricePaise,
@@ -1374,6 +2075,39 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
   };
 });
 
+async function dispatchOrderPaidSms(pool, customerOrderId) {
+  if (!pool || !customerOrderId) return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT co.id, co.order_number, co.total_amount_paise, co.delivery_address, co.customer_id, c.phone, c.sms_notifications_enabled
+       FROM customer_orders co
+       LEFT JOIN customers c ON c.id = co.customer_id
+       WHERE co.id = $1`,
+      [customerOrderId]
+    );
+    if (!rows[0] || rows[0].sms_notifications_enabled === false) return;
+    const ord = rows[0];
+    const targetPhone = ord.delivery_address?.phone || ord.phone;
+    if (!targetPhone) return;
+
+    await queueNotification(pool, {
+      customerId: ord.customer_id,
+      phone: targetPhone,
+      templateKey: 'ORDER_CONFIRMED',
+      params: {
+        orderNumber: ord.order_number,
+        amount: (Number(ord.total_amount_paise || 0) / 100).toFixed(0),
+        area: ord.delivery_address?.area || 'Hyderabad',
+        deliveryDate: ord.delivery_address?.delivery_date || 'tomorrow'
+      },
+      idempotencyKey: `sms_order_paid_${ord.id}`
+    }).catch(() => {});
+    setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
+  } catch (err) {
+    app.log.warn({ err: err?.message || err }, 'Failed to dispatch order paid SMS');
+  }
+}
+
 app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (request, reply) => {
   if (!process.env.RAZORPAY_KEY_SECRET || !pool || !razorpay) return reply.code(503).send({ error: 'payments_not_configured' });
   const { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature } = request.body || {};
@@ -1413,6 +2147,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
         sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
           app.log.error({ err }, '[Resend] Failed to send order emails on payment verify');
         });
+        dispatchOrderPaidSms(pool, customerOrderId).catch(() => {});
       }
     }
 
@@ -1438,11 +2173,20 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   }
   const eventId = request.headers['x-razorpay-event-id'];
   if (typeof eventId !== 'string' || !eventId) return reply.code(400).send({ error: 'missing_event_id' });
-  const client = await pool.connect();
+
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (dbErr) {
+    request.log.error({ dbErr }, 'Webhook failed to acquire DB client');
+    return reply.code(503).send({ error: 'database_unavailable' });
+  }
+
   try {
     await client.query('BEGIN');
     const seen = await client.query('INSERT INTO payment_webhook_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id', [eventId]);
     if (seen.rowCount) {
+      // A. Standard Order Payment Events
       const entity = request.body?.payload?.payment?.entity;
       if (entity?.order_id && entity?.id) {
         const status = request.body.event === 'payment.captured' ? 'captured'
@@ -1457,8 +2201,37 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               sendOrderPaidEmails(pool, orderId, entity.id).catch((err) => {
                 app.log.error({ err }, '[Resend] Failed to send order emails on webhook capture');
               });
+              dispatchOrderPaidSms(pool, orderId).catch(() => {});
             }
           }
+        }
+      }
+
+      // B. Razorpay Subscription Lifecycle Events
+      const subEntity = request.body?.payload?.subscription?.entity;
+      if (subEntity?.id) {
+        const eventName = request.body.event;
+        if (['subscription.authenticated', 'subscription.activated', 'subscription.charged', 'subscription.resumed'].includes(eventName)) {
+          await client.query(
+            "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            [subEntity.id]
+          );
+        } else if (['subscription.cancelled'].includes(eventName)) {
+          await client.query(
+            "UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            [subEntity.id]
+          );
+        } else if (['subscription.halted', 'subscription.pending', 'subscription.paused'].includes(eventName)) {
+          // Recoverable billing failure or customer pause: transition to paused so deliveries hold without permanent loss
+          await client.query(
+            "UPDATE customer_subscriptions SET status = 'paused', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            [subEntity.id]
+          );
+        } else if (['subscription.completed'].includes(eventName)) {
+          await client.query(
+            "UPDATE customer_subscriptions SET status = 'expired', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            [subEntity.id]
+          );
         }
       }
     }
@@ -1472,11 +2245,106 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   }
 });
 
-// Explicit endpoint to trigger or resend order confirmation emails
-app.post('/api/v1/orders/:orderNumber/send-confirmation', async (request, reply) => {
+// Explicit endpoint to trigger or resend order confirmation emails (authenticated)
+app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
   const { orderNumber } = request.params;
   const paymentId = request.body?.paymentId || '';
+  if (pool) {
+    const { rows } = await pool.query('SELECT customer_id FROM customer_orders WHERE order_number = $1', [orderNumber]);
+    if (!rows.length || (Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin)) {
+      return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
+    }
+  }
   const result = await sendOrderPaidEmails(pool, orderNumber, paymentId);
+  return reply.send(result);
+});
+
+// ---------- Internal Operations & Dispatch APIs (Admin Protected) ----------
+app.get('/api/v1/operations/deliveries', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { date, status, limit, offset } = request.query || {};
+  const data = await getDailyDeliveries(pool, {
+    date,
+    status,
+    limit: Number(limit) || 100,
+    offset: Number(offset) || 0
+  });
+  return reply.send(data);
+});
+
+app.post('/api/v1/operations/deliveries/generate', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { targetDate } = request.body || {};
+  try {
+    const result = await generateDailyDeliveries(pool, targetDate);
+    return reply.send(result);
+  } catch (err) {
+    request.log.error({ err }, 'Operations: failed to generate daily deliveries');
+    return reply.code(500).send({ error: 'delivery_generation_failed', message: err.message });
+  }
+});
+
+app.post('/api/v1/operations/deliveries/:id/status', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const deliveryOrderId = Number(request.params.id);
+  if (!Number.isSafeInteger(deliveryOrderId) || deliveryOrderId <= 0) {
+    return reply.code(400).send({ error: 'invalid_delivery_order_id' });
+  }
+
+  const { status, actor, notes, reason } = request.body || {};
+  const result = await updateDeliveryStatus(pool, {
+    deliveryOrderId,
+    status,
+    actor: actor || 'admin',
+    notes,
+    reason
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/operations/notifications/process', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { limit } = request.body || {};
+  try {
+    const result = await processNotificationOutbox(pool, Number(limit) || 25);
+    return reply.send({ success: true, processed: result.processed });
+  } catch (err) {
+    return reply.code(500).send({ error: 'notification_processing_failed', message: err.message });
+  }
+});
+
+// ---------- Twilio SMS Status Webhook Callback ----------
+app.post('/api/v1/notifications/twilio-callback', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+
+  const signature = request.headers['x-twilio-signature'] || request.headers['X-Twilio-Signature'];
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const protocol = request.headers['x-forwarded-proto'] || 'https';
+  const host = request.headers['x-forwarded-host'] || request.headers.host || 'milvanta-backend.onrender.com';
+  const fullUrl = `${protocol}://${host}${request.raw.url}`;
+
+  // In production, strictly require valid Twilio signature
+  if (process.env.NODE_ENV === 'production') {
+    if (!authToken) {
+      return reply.code(503).send({ error: 'twilio_service_unavailable' });
+    }
+    const isValid = validateTwilioWebhookSignature({
+      authToken,
+      signature,
+      url: fullUrl,
+      params: request.body
+    });
+    if (!isValid) {
+      return reply.code(403).send({ error: 'invalid_twilio_signature' });
+    }
+  }
+
+  const payload = request.body || {};
+  const result = await handleTwilioStatusCallback(pool, payload);
   return reply.send(result);
 });
 
@@ -1526,10 +2394,20 @@ const port = Number(process.env.PORT || 10000);
 const host = process.env.HOST || '0.0.0.0';
 
 let reservationSweep = null;
+let outboxSweep = null;
 if (process.env.NODE_ENV !== 'test') {
   await app.listen({ port, host });
   reservationSweep = setInterval(releaseExpiredReservations, 60_000);
   reservationSweep.unref();
+
+  outboxSweep = setInterval(async () => {
+    try {
+      if (pool) await processNotificationOutbox(pool, 25);
+    } catch (err) {
+      app.log.warn({ err: err?.message || err }, 'Background outbox sweep error');
+    }
+  }, 30_000);
+  outboxSweep.unref();
 
   // Asynchronously apply database migrations on startup without delaying HTTP listener
   if (pool) {
@@ -1558,6 +2436,7 @@ if (process.env.NODE_ENV !== 'test') {
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
       if (reservationSweep) clearInterval(reservationSweep);
+      if (outboxSweep) clearInterval(outboxSweep);
       await app.close();
       await pool?.end();
       process.exit(0);
