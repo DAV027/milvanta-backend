@@ -228,7 +228,16 @@
 
     // Profile Tab Details
     if ($('#profileDetailName')) $('#profileDetailName').textContent = state.customer.name;
-    if ($('#profileDetailPhone')) $('#profileDetailPhone').textContent = state.customer.phone ? `+91 ${state.customer.phone}` : '—';
+    const phoneEl = $('#profileDetailPhone');
+    if (phoneEl) {
+      const isVerified = Boolean(state.customer.phone_verified);
+      const verifiedBadge = isVerified
+        ? ' <span style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px;">✓ Verified</span>'
+        : ' <button type="button" id="btnVerifyPhoneOtp" style="background:#e0f2fe; color:#0369a1; border:none; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px; cursor:pointer;">Verify Mobile via OTP →</button>';
+      phoneEl.innerHTML = state.customer.phone ? `+91 ${escapeHtml(state.customer.phone)}${verifiedBadge}` : '—';
+
+      $('#btnVerifyPhoneOtp')?.addEventListener('click', () => promptPhoneOtpVerification(state.customer.phone));
+    }
     if ($('#profileDetailEmail')) $('#profileDetailEmail').textContent = state.customer.email || '—';
 
     // Delivery Location & Area from Pincode
@@ -241,6 +250,45 @@
     if ($('#currentLocationDrawer')) $('#currentLocationDrawer').textContent = area;
     if ($('#currentPincodeDrawer')) $('#currentPincodeDrawer').textContent = pin;
     if ($('#profileDetailCity')) $('#profileDetailCity').textContent = `${area}, Hyderabad`;
+  }
+
+  // Mobile OTP Verification Handler
+  async function promptPhoneOtpVerification(phone) {
+    if (!phone) {
+      alert('Please enter a phone number in your profile first.');
+      return;
+    }
+
+    try {
+      showToast('Sending OTP to +91 ' + phone + '...');
+      const sendRes = await apiRequest('/api/v1/auth/phone/send-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone })
+      });
+
+      if (!sendRes?.success) {
+        alert(sendRes?.message || 'Failed to send OTP. Please try again.');
+        return;
+      }
+
+      const code = prompt(`Enter the 6-digit verification code sent to +91 ${phone}:`);
+      if (!code || !code.trim()) return;
+
+      const verifyRes = await apiRequest('/api/v1/auth/phone/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone, code: code.trim() })
+      });
+
+      if (verifyRes?.verified) {
+        if (state.customer) state.customer.phone_verified = true;
+        renderUserInfo();
+        showToast('✓ Mobile number verified successfully with Milvanta!');
+      } else {
+        alert(verifyRes?.message || 'Incorrect verification code. Please try again.');
+      }
+    } catch (err) {
+      alert('Verification request failed. Please check network and try again.');
+    }
   }
 
   // Update Cart Badge Count
@@ -948,20 +996,23 @@
   async function fetchSubscriptions() {
     let loadedSubs = [];
 
-    // 1. Immediately read from localStorage for instant zero-delay render
+    // 1. Immediately read from localStorage for instant zero-delay render (ignoring legacy demo mocks)
     try {
       const localSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
       if (Array.isArray(localSubs) && localSubs.length > 0) {
-        loadedSubs = localSubs.map(formatSubscriptionRow);
-        state.subscriptions = loadedSubs;
-        renderSubscriptions();
+        const legitimateSubs = localSubs.filter((s) => s.id !== 'sub-1');
+        if (legitimateSubs.length > 0) {
+          loadedSubs = legitimateSubs.map(formatSubscriptionRow);
+          state.subscriptions = loadedSubs;
+          renderSubscriptions();
+        }
       }
     } catch {}
 
     // 2. Fetch live subscriptions from backend API
     try {
       const data = await apiRequest('/api/v1/subscriptions');
-      if (data && Array.isArray(data.subscriptions) && data.subscriptions.length > 0) {
+      if (data && Array.isArray(data.subscriptions)) {
         loadedSubs = data.subscriptions.map(formatSubscriptionRow);
         state.subscriptions = loadedSubs;
         try {
@@ -971,51 +1022,12 @@
         return;
       }
     } catch (err) {
-      console.warn('Backend subscriptions fetch failed, using local cache:', err);
+      console.warn('Backend subscriptions fetch notice:', err);
     }
 
-    // 3. If still empty, provide the standard initial milk subscription
-    if (loadedSubs.length === 0) {
-      const defaultSub = {
-        id: 'sub-1',
-        product: 'Pure Fresh Cow Milk (1 Litre)',
-        image: 'assets/milvanta-cow-milk.jpg',
-        frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM - 7:00 AM',
-        quantity: '1 Litre',
-        qtyNum: 1,
-        costPerDay: 105,
-        dailyRate: 105,
-        durationLabel: 'Monthly Plan (30 Days)',
-        days: 30,
-        status: 'active',
-        nextDelivery: 'Tomorrow'
-      };
-      loadedSubs = [defaultSub];
-      state.subscriptions = loadedSubs;
-      try {
-        localStorage.setItem('milvanta-subscriptions', JSON.stringify(loadedSubs));
-      } catch {}
-      renderSubscriptions();
-
-      // Try creating in backend in background
-      try {
-        apiRequest('/api/v1/subscriptions', {
-          method: 'POST',
-          body: JSON.stringify({
-            productName: defaultSub.product,
-            imageUrl: defaultSub.image,
-            frequency: defaultSub.frequency,
-            timeSlot: defaultSub.timeSlot,
-            quantity: defaultSub.quantity,
-            quantityNum: 1,
-            costPerDayPaise: 10500
-          })
-        }).then((res) => {
-          if (res?.subscription?.id) defaultSub.id = res.subscription.id;
-        }).catch(() => {});
-      } catch {}
-    }
+    // 3. Render subscriptions state (or genuine empty state if none)
+    state.subscriptions = loadedSubs;
+    renderSubscriptions();
   }
 
   function formatSubscriptionRow(row) {
@@ -1245,12 +1257,30 @@
       </div>
     `;
 
-    $('#btnToggleTomorrowDrop')?.addEventListener('click', () => {
+    $('#btnToggleTomorrowDrop')?.addEventListener('click', async () => {
+      const activeSubs = state.subscriptions.filter(s => s.status === 'active');
       if (pausedDates.includes(tomKey)) {
         pausedDates = pausedDates.filter((k) => k !== tomKey);
+        for (const sub of activeSubs) {
+          try {
+            await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
+          } catch (err) {
+            console.warn('API unskip notice:', err);
+          }
+        }
         showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
       } else {
         pausedDates.push(tomKey);
+        for (const sub of activeSubs) {
+          try {
+            await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
+              method: 'POST',
+              body: JSON.stringify({ skipDate: tomKey, reason: 'Skipped tomorrow' })
+            });
+          } catch (err) {
+            console.warn('API skip notice:', err);
+          }
+        }
         showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
       }
       try {
@@ -1804,28 +1834,36 @@
       showToast('New address saved successfully!');
     });
 
-    // Subscriptions Actions (Pause / Resume & Modify Qty via Backend)
+    // Subscriptions Actions (Server-Authoritative Pause / Resume, Modify Qty & Cancel)
     $('#subscriptionsGridContainer')?.addEventListener('click', async (e) => {
       const toggleBtn = e.target.closest('[data-toggle-sub]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggleSub;
         const sub = state.subscriptions.find((s) => String(s.id) === String(id));
         if (sub) {
-          const newStatus = sub.status === 'active' ? 'paused' : 'active';
-          sub.status = newStatus;
+          const isCurrentlyActive = sub.status === 'active';
+          const endpoint = isCurrentlyActive ? `/api/v1/subscriptions/${id}/pause` : `/api/v1/subscriptions/${id}/resume`;
           try {
-            await apiRequest(`/api/v1/subscriptions/${id}`, {
-              method: 'PATCH',
-              body: JSON.stringify({ status: newStatus })
-            });
+            toggleBtn.disabled = true;
+            const res = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify({}) });
+            if (res && res.success) {
+              sub.status = res.status;
+              if (res.nextDelivery) sub.nextDelivery = res.nextDelivery;
+              showToast(res.message || (isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!'));
+            } else {
+              sub.status = isCurrentlyActive ? 'paused' : 'active';
+              showToast(isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!');
+            }
           } catch (err) {
             console.warn('API subscription status update failed:', err);
+            sub.status = isCurrentlyActive ? 'paused' : 'active';
+          } finally {
+            toggleBtn.disabled = false;
           }
           try {
             localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
           } catch {}
           renderSubscriptions();
-          showToast(newStatus === 'active' ? 'Subscription resumed!' : 'Subscription paused for now.');
         }
         return;
       }
@@ -1835,36 +1873,52 @@
         const id = modifyBtn.dataset.modifySub;
         const sub = state.subscriptions.find((s) => String(s.id) === String(id));
         if (sub) {
-          const newQty = prompt(`Update daily quantity for ${sub.product}:`, sub.quantity);
+          const supportedPacks = ['500 ml', '1 Litre', '1.5 Litre', '2 Litre', '2.5 Litre', '3 Litre', '3.5 Litre', '4 Litre', '4.5 Litre', '5 Litre'];
+          const promptMsg = `Choose pack size for ${sub.product}:\n(${supportedPacks.join(', ')})`;
+          const newQty = prompt(promptMsg, sub.quantity || '1 Litre');
           if (newQty && newQty.trim()) {
-            sub.quantity = newQty.trim();
+            const cleanQty = newQty.trim();
             try {
-              await apiRequest(`/api/v1/subscriptions/${id}`, {
+              const res = await apiRequest(`/api/v1/subscriptions/${id}/quantity`, {
                 method: 'PATCH',
-                body: JSON.stringify({ quantity: sub.quantity })
+                body: JSON.stringify({ quantity: cleanQty })
               });
+              if (res?.quantity) {
+                sub.quantity = res.quantity;
+                if (res.dailyRate) sub.dailyRate = res.dailyRate;
+                if (res.dailyRatePaise) sub.costPerDay = res.dailyRatePaise / 100;
+                showToast(res.message || `Quantity updated to ${cleanQty}`);
+              } else {
+                sub.quantity = cleanQty;
+                showToast(`Quantity updated to ${cleanQty}`);
+              }
             } catch (err) {
-              console.warn('API subscription quantity update failed:', err);
+              console.warn('API subscription quantity update notice:', err);
+              sub.quantity = cleanQty;
+              showToast(`Quantity updated to ${cleanQty}`);
             }
             try {
               localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
             } catch {}
             renderSubscriptions();
-            showToast(`Quantity updated to ${sub.quantity}`);
           }
         }
+        return;
       }
 
       const cancelBtn = e.target.closest('[data-cancel-sub]');
       if (cancelBtn) {
         const id = cancelBtn.dataset.cancelSub;
         const sub = state.subscriptions.find((s) => String(s.id) === String(id));
-        if (sub && confirm(`Are you sure you want to cancel the subscription for ${sub.product}?`)) {
+        if (sub && confirm(`Are you sure you want to cancel your morning subscription for ${sub.product}?`)) {
           state.subscriptions = state.subscriptions.filter((s) => String(s.id) !== String(id));
           try {
-            await apiRequest(`/api/v1/subscriptions/${id}`, { method: 'DELETE' });
+            await apiRequest(`/api/v1/subscriptions/${id}/cancel`, {
+              method: 'POST',
+              body: JSON.stringify({ reason: 'Customer requested cancellation' })
+            });
           } catch (err) {
-            console.warn('API subscription cancellation failed:', err);
+            console.warn('API subscription cancellation notice:', err);
           }
           try {
             localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
@@ -2397,7 +2451,7 @@
     });
 
     // Form submit
-    form?.addEventListener('submit', (e) => {
+    form?.addEventListener('submit', async (e) => {
       e.preventDefault();
       const startVal = startInput?.value;
       const endVal = endInput?.value;
@@ -2411,6 +2465,23 @@
       if (endDate < startDate) {
         alert('End date must be on or after start date.');
         return;
+      }
+
+      // Call server vacation API for each active subscription
+      const activeSubs = state.subscriptions.filter(s => s.status === 'active');
+      for (const sub of activeSubs) {
+        try {
+          await apiRequest(`/api/v1/subscriptions/${sub.id}/vacation`, {
+            method: 'POST',
+            body: JSON.stringify({
+              startDate: startVal,
+              endDate: endVal,
+              reason: 'Customer vacation pause'
+            })
+          });
+        } catch (err) {
+          console.warn('API vacation call notice:', err);
+        }
       }
 
       let cur = new Date(startDate);

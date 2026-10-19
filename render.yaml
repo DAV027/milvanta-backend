@@ -47,3 +47,36 @@ services:
         value: "Milvanta <orders@milvanta.in>"
       - key: ADMIN_EMAIL
         value: "projects@milvanta.in"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_VERIFY_SERVICE_SID
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
+        sync: false
+
+  - type: cron
+    name: milvanta-daily-delivery-scheduler
+    runtime: node
+    plan: starter
+    schedule: "45 14 * * *" # 14:45 UTC = 20:15 IST (Runs daily at 8:15 PM IST after 8:00 PM cutoff)
+    buildCommand: npm ci
+    startCommand: node scripts/daily-delivery-scheduler.js
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
+        sync: false

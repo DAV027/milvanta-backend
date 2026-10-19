@@ -82,6 +82,18 @@
     if (numId === 2 && !rawName.includes('cake')) {
       return { id: 102, name: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' };
     }
+    if (numId === 104 || rawName.includes('paneer')) {
+      return { id: 104, name: 'Paneer', price: 400, size: '500 g pack', image: 'assets/milvanta-paneer.jpg' };
+    }
+    if (numId === 105 || rawName.includes('curd')) {
+      return { id: 105, name: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg' };
+    }
+    if (numId === 103 || (rawName.includes('cow') && rawName.includes('ghee'))) {
+      return { id: 103, name: 'Pure Cow Ghee', price: 1500, size: '500 g jar', image: 'assets/milvanta-cow-ghee.jpg' };
+    }
+    if (numId === 106 || (rawName.includes('buffalo') && rawName.includes('ghee'))) {
+      return { id: 106, name: 'Pure Buffalo Ghee', price: 1100, size: '500 g jar', image: 'assets/milvanta-buffalo-ghee.jpg' };
+    }
     return productsCatalog.find(p => Number(p.id) === numId) || {};
   }
 
@@ -1010,11 +1022,13 @@
             })
           });
         } catch (subErr) {
-          console.warn('Subscription checkout creation fallback:', subErr);
-          res = {
-            subscriptionId: 'sub_' + Math.random().toString(36).slice(2, 12),
-            keyId: RAZORPAY_KEY
-          };
+          console.error('Subscription checkout creation failed:', subErr);
+          if (errEl) errEl.textContent = subErr.message || 'Unable to initialize subscription checkout. Please try again.';
+          if (payBtn) {
+            payBtn.disabled = false;
+            payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+          }
+          return;
         }
 
         const returnEndpoint = `${API_URL}/api/v1/subscriptions/callback?return_url=${encodeURIComponent(window.location.origin + '/profile.html?tab=subscription')}`;
@@ -1033,7 +1047,37 @@
             },
             theme: { color: '#0a3d66' },
             handler: async (response) => {
+              if (payBtn) {
+                payBtn.disabled = true;
+                payBtn.textContent = 'Verifying Subscription Authorization…';
+              }
               const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
+
+              // SEC-03 & PAY-01: Verify subscription signature and gateway status with backend
+              try {
+                const verifyRes = await api('/api/v1/subscriptions/verify', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    razorpay_subscription_id: response?.razorpay_subscription_id || res.subscriptionId,
+                    razorpay_payment_id: response?.razorpay_payment_id,
+                    razorpay_signature: response?.razorpay_signature
+                  })
+                });
+                if (!verifyRes || !verifyRes.verified) {
+                  throw new Error(verifyRes?.error || 'Subscription signature verification failed.');
+                }
+              } catch (verifyErr) {
+                console.error('Subscription verification failed:', verifyErr);
+                if (errEl) {
+                  errEl.textContent = 'Subscription payment was authorized, but could not be verified by our servers. Please contact support with payment reference: ' + (response?.razorpay_payment_id || 'N/A');
+                }
+                if (payBtn) {
+                  payBtn.disabled = false;
+                  payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+                }
+                return; // Do NOT activate, do NOT clear cart, do NOT show success
+              }
+
               const { deliveryFee, total, subtotal } = getOrderFinancials();
               await activateSubscriptionsFromCart(state.cart, {
                 subscriptionId: res.subscriptionId,
@@ -1088,15 +1132,21 @@
           return;
         }
 
-        await activateSubscriptionsFromCart(state.cart, { subscriptionId: res?.subscriptionId });
-        showOrderSuccess(res?.subscriptionId || `SUB-${Date.now()}`, true);
-        return;
+        throw new Error('Razorpay checkout modal failed to load. Please refresh and try again.');
       }
 
       // NORMAL PAYMENT: Custom Days Plan or Regular Products
       const orderBody = {
         address: state.addressDraft,
-        items: state.cart.map(({ id, quantity }) => ({ productId: id, quantity }))
+        items: state.cart.map((item) => ({
+          productId: Number(item.id || item.productId),
+          quantity: Number(item.quantity || 1),
+          size: item.size || item.variant?.size || '',
+          variant: item.variant || null,
+          isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan),
+          isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan),
+          subscriptionPlan: item.subscriptionPlan || item.variant?.subscriptionPlan || null
+        }))
       };
 
       let order;
@@ -1106,14 +1156,14 @@
           headers: { 'Idempotency-Key': state.checkoutKey },
           body: JSON.stringify(orderBody)
         });
-      } catch (e) {
-        order = {
-          orderNumber: `MV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100000 + Math.random() * 900000)}`,
-          orderId: `order_${Math.random().toString(36).slice(2, 10)}`,
-          amount: Math.round(total * 100),
-          currency: 'INR',
-          keyId: RAZORPAY_KEY
-        };
+      } catch (orderErr) {
+        console.error('Order creation failed:', orderErr);
+        if (errEl) errEl.textContent = orderErr.message || 'Unable to place order. Please review your cart and try again.';
+        if (payBtn) {
+          payBtn.disabled = false;
+          payBtn.textContent = `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+        }
+        return;
       }
 
       const totalAmountPaise = Math.round(total * 100);
@@ -1121,11 +1171,11 @@
 
       const options = {
         key: order.keyId || RAZORPAY_KEY,
-        amount: totalAmountPaise,
+        amount: serverAmount > 0 ? serverAmount : totalAmountPaise,
         currency: order.currency || 'INR',
         name: 'Milvanta',
         description: `Order ${order.orderNumber} (Total ₹${total.toFixed(0)} incl. delivery)`,
-        ...(order.orderId && serverAmount >= totalAmountPaise ? { order_id: order.orderId } : {}),
+        ...(order.orderId ? { order_id: order.orderId } : {}),
         prefill: {
           name: state.addressDraft.name,
           contact: state.addressDraft.phone,
@@ -1133,14 +1183,32 @@
         },
         theme: { color: '#0a3d66' },
         handler: async (response) => {
+          if (payBtn) {
+            payBtn.disabled = true;
+            payBtn.textContent = 'Verifying Secure Payment…';
+          }
+
+          // SEC-03 & PAY-01: Verify signature with backend before confirming
           try {
-            await api('/api/v1/payments/verify', {
+            const verifyRes = await api('/api/v1/payments/verify', {
               method: 'POST',
               body: JSON.stringify(response)
             });
-          } catch (e) {
-            console.warn('Payment verify error:', e);
+            if (!verifyRes || !verifyRes.verified) {
+              throw new Error(verifyRes?.error || 'Payment signature verification failed.');
+            }
+          } catch (verifyErr) {
+            console.error('Payment verification failed:', verifyErr);
+            if (errEl) {
+              errEl.textContent = 'Payment received by gateway but could not be verified by our servers. Please contact support with payment reference: ' + (response?.razorpay_payment_id || 'N/A');
+            }
+            if (payBtn) {
+              payBtn.disabled = false;
+              payBtn.textContent = `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+            }
+            return; // Do NOT activate, do NOT clear cart, do NOT show success
           }
+
           try {
             await api(`/api/v1/orders/${encodeURIComponent(order.orderNumber)}/send-confirmation`, {
               method: 'POST',
@@ -1198,8 +1266,15 @@
 
     } catch (err) {
       console.error('Payment execution failed:', err);
-      await activateSubscriptionsFromCart(state.cart);
-      showOrderSuccess(`MV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(100000 + Math.random() * 900000)}`);
+      if (errEl) {
+        errEl.textContent = err.message || 'Payment could not be completed. Please try again.';
+      }
+      if (payBtn) {
+        payBtn.disabled = false;
+        payBtn.textContent = hasContinuous
+          ? `Pay ₹${total.toFixed(0)} via Subscription 🔒`
+          : `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+      }
     }
   }
 

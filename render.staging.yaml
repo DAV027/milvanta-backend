@@ -1,0 +1,95 @@
+# Render Blueprint for Milvanta Staging Environment
+# Fully isolated from production: dedicated PostgreSQL DB, API web service, and delivery scheduler.
+databases:
+  - name: milvanta-db-staging
+    databaseName: milvanta_staging
+    user: milvanta_staging_user
+    plan: starter
+    region: oregon
+
+services:
+  - type: web
+    name: milvanta-api-staging
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: fix/phase1-payment-security
+    buildCommand: npm ci
+    preDeployCommand: node src/migrate.js --staging
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: staging
+      - key: DATABASE_URL
+        fromDatabase:
+          name: milvanta-db-staging
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: ALLOWED_ORIGINS
+        value: https://milvanta-staging.pages.dev,https://*.pages.dev,https://solitary-firefly-ef06.akhilrajuvarma.workers.dev
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: "Milvanta Staging <orders@milvanta.in>"
+      - key: ADMIN_EMAIL
+        value: "projects@milvanta.in"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_VERIFY_SERVICE_SID
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
+        value: https://milvanta-api-staging.onrender.com/api/v1/webhooks/twilio/status
+
+  - type: cron
+    name: milvanta-delivery-staging
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: fix/phase1-payment-security
+    schedule: "45 14 * * *" # Runs daily at 20:15 IST (14:45 UTC)
+    buildCommand: npm ci
+    startCommand: node scripts/daily-delivery-scheduler.js
+    envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
+      - key: NODE_ENV
+        value: production
+      - key: APP_ENV
+        value: staging
+      - key: DELIVERY_SCHEDULER_ENABLED
+        value: "false" # Disabled until acceptance tests pass
+      - key: DATABASE_URL
+        fromDatabase:
+          name: milvanta-db-staging
+          property: connectionString
+      - key: DATABASE_SSL
+        value: "true"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_MESSAGING_SERVICE_SID
+        sync: false
+      - key: TWILIO_STATUS_CALLBACK_URL
+        value: https://milvanta-api-staging.onrender.com/api/v1/webhooks/twilio/status
+
