@@ -896,7 +896,7 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
             : `SELECT cs.*, c.full_name, c.email, c.phone 
                FROM customer_subscriptions cs 
                JOIN customers c ON c.id = cs.customer_id 
-               WHERE cs.id::text = $1 OR cs.notes->>'subscriptionId' = $1`,
+               WHERE cs.id::text = $1 OR cs.razorpay_subscription_id = $1 OR cs.notes->>'subscriptionId' = $1 OR cs.notes->>'razorpay_subscription_id' = $1`,
           [lookupId]
         );
         if (subRes.rows[0]) {

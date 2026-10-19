@@ -947,7 +947,8 @@ app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reques
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { rows } = await pool.query(
     `SELECT id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
-            cost_per_day_paise, plan_type, duration_label, total_amount_paise, notes, status, next_delivery, created_at, updated_at
+            cost_per_day_paise, plan_type, duration_label, total_amount_paise, razorpay_subscription_id,
+            notes, status, next_delivery, created_at, updated_at
      FROM customer_subscriptions
      WHERE customer_id = $1 AND status != 'cancelled'
      ORDER BY created_at DESC`,
@@ -987,13 +988,24 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
 
     // Check duplicate activation prevention: ensure paymentId hasn't already been used
     const existing = await pool.query(
-      "SELECT id FROM customer_subscriptions WHERE (notes->>'paymentId' = $1 OR notes->>'payment_id' = $1) AND customer_id = $2",
+      "SELECT id, status, product_name, quantity, cost_per_day_paise, total_amount_paise, notes, next_delivery, razorpay_subscription_id FROM customer_subscriptions WHERE (notes->>'paymentId' = $1 OR notes->>'payment_id' = $1) AND customer_id = $2",
       [paymentId, request.customer.id]
     );
     if (existing.rows.length) {
+      return reply.code(200).send({
+        subscription: existing.rows[0],
+        message: 'Subscription already active for this payment'
+      });
+    }
+
+    const otherExisting = await pool.query(
+      "SELECT id, customer_id FROM customer_subscriptions WHERE (notes->>'paymentId' = $1 OR notes->>'payment_id' = $1)",
+      [paymentId]
+    );
+    if (otherExisting.rows.length) {
       return reply.code(409).send({
         error: 'payment_already_used',
-        message: 'This payment authorization has already been used to activate a subscription.'
+        message: 'This payment authorization has already been used by another account.'
       });
     }
 
@@ -1239,6 +1251,50 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   }
 });
 
+// Derive authoritative subscription start date from scheduling tables, notes, or gateway
+async function deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub) {
+  // 1. Authoritative delivery engine schedule (if delivery rows generated)
+  if (pool && subRow?.id) {
+    try {
+      const { rows } = await pool.query(
+        "SELECT delivery_date::text FROM subscription_delivery_orders WHERE subscription_id = $1 AND status = 'scheduled' ORDER BY delivery_date ASC LIMIT 1",
+        [subRow.id]
+      );
+      if (rows[0]?.delivery_date) {
+        return rows[0].delivery_date;
+      }
+    } catch {}
+  }
+
+  // 2. Explicit startDate in subscription notes
+  const notes = typeof subRow?.notes === 'object' && subRow?.notes !== null
+    ? subRow.notes
+    : (typeof gatewaySub?.notes === 'object' && gatewaySub?.notes !== null ? gatewaySub.notes : {});
+  if (notes.startDate || notes.start_date) {
+    return String(notes.startDate || notes.start_date).trim();
+  }
+
+  // 3. Authoritative gateway start timestamp
+  if (gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)) {
+    try {
+      return new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10);
+    } catch {}
+  }
+  if (gatewaySub?.current_start && Number.isFinite(gatewaySub.current_start)) {
+    try {
+      return new Date(gatewaySub.current_start * 1000).toISOString().slice(0, 10);
+    } catch {}
+  }
+
+  // 4. Stored next_delivery string if present
+  if (subRow?.next_delivery && typeof subRow.next_delivery === 'string' && subRow.next_delivery.trim()) {
+    return subRow.next_delivery.replace(/,\s*6:00\s*AM/i, '').trim();
+  }
+
+  // 5. Accurate pending representation
+  return 'Pending Schedule';
+}
+
 // Explicit subscription verification endpoint
 app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async (request, reply) => {
   if (!process.env.RAZORPAY_KEY_SECRET || !pool || !razorpay) {
@@ -1265,64 +1321,187 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     return reply.code(400).send({ verified: false, error: 'invalid_subscription_signature' });
   }
 
-  // 2. Verify subscription ownership with customer
+  // 2. Fetch gateway state from Razorpay first to confirm authorization status
+  let gatewaySub, gatewayPayment;
+  try {
+    [gatewaySub, gatewayPayment] = await Promise.all([
+      razorpay.subscriptions.fetch(subId),
+      razorpay.payments.fetch(paymentId)
+    ]);
+  } catch (fetchErr) {
+    request.log.error({ fetchErr }, 'Failed to fetch Razorpay subscription or payment details');
+    return reply.code(502).send({ verified: false, error: 'gateway_fetch_failed', message: fetchErr.message });
+  }
+
+  // 3. Confirm payment and subscription are authorized by Razorpay gateway
+  const isSubAuthorized = ['active', 'authenticated'].includes(gatewaySub?.status);
+  const isPaymentAuthorized = ['captured', 'authorized'].includes(gatewayPayment?.status);
+
+  if (!isSubAuthorized || !isPaymentAuthorized) {
+    return reply.code(409).send({
+      verified: false,
+      error: 'subscription_payment_state_not_captured',
+      gatewaySubStatus: gatewaySub?.status,
+      gatewayPaymentStatus: gatewayPayment?.status
+    });
+  }
+
+  // 4. Verify subscription ownership and find existing row using actual schema columns (no cs.start_date)
   const { rows } = await pool.query(
-    "SELECT cs.id, cs.customer_id, cs.status, cs.product_name, cs.quantity, cs.start_date, c.phone, c.sms_notifications_enabled " +
-    "FROM customer_subscriptions cs " +
-    "LEFT JOIN customers c ON c.id = cs.customer_id " +
-    "WHERE (cs.notes->>'subscriptionId' = $1 OR cs.notes->>'razorpay_subscription_id' = $1) AND cs.customer_id = $2",
+    `SELECT cs.id, cs.customer_id, cs.status, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
+            cs.frequency, cs.time_slot, cs.cost_per_day_paise, cs.plan_type, cs.duration_label,
+            cs.total_amount_paise, cs.notes, cs.next_delivery, cs.razorpay_subscription_id, cs.created_at,
+            c.phone, c.sms_notifications_enabled
+     FROM customer_subscriptions cs
+     LEFT JOIN customers c ON c.id = cs.customer_id
+     WHERE (cs.razorpay_subscription_id = $1 
+            OR cs.notes->>'subscriptionId' = $1 
+            OR cs.notes->>'razorpay_subscription_id' = $1 
+            OR cs.notes->>'subscription_id' = $1 
+            OR cs.id::text = $1)
+       AND cs.customer_id = $2`,
     [subId, request.customer.id]
   );
-  if (!rows.length) {
-    return reply.code(404).send({ verified: false, error: 'subscription_not_found' });
-  }
 
-  // 3. Confirm with Razorpay gateway
-  const [gatewaySub, gatewayPayment] = await Promise.all([
-    razorpay.subscriptions.fetch(subId),
-    razorpay.payments.fetch(paymentId)
-  ]);
+  let subRow = rows[0];
 
-  if (['active', 'authenticated'].includes(gatewaySub.status) && ['captured', 'authorized'].includes(gatewayPayment.status)) {
-    await pool.query(
-      "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE id = $1",
-      [rows[0].id]
+  // If not found for current customer, check if it belongs to someone else
+  if (!subRow) {
+    const otherCust = await pool.query(
+      `SELECT cs.id, cs.customer_id, cs.status, cs.product_name, cs.quantity, cs.notes, cs.next_delivery
+       FROM customer_subscriptions cs
+       WHERE (cs.razorpay_subscription_id = $1 
+              OR cs.notes->>'subscriptionId' = $1 
+              OR cs.notes->>'razorpay_subscription_id' = $1 
+              OR cs.notes->>'subscription_id' = $1)`,
+      [subId]
     );
 
-    sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
-      app.log.error({ err }, '[Email] Failed to send subscription confirmation email on verify');
-    });
+    if (otherCust.rows.length) {
+      if (Number(otherCust.rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+        return reply.code(403).send({
+          verified: false,
+          error: 'subscription_forbidden',
+          message: 'Subscription belongs to another customer'
+        });
+      }
+      subRow = otherCust.rows[0];
+    } else {
+      // Reconcile existing authorized test subscription without creating a duplicate
+      // Verify customer association from gateway notes if present
+      const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id;
+      if (gatewayCustId && String(gatewayCustId) !== String(request.customer.id) && !request.isAdmin) {
+        return reply.code(403).send({
+          verified: false,
+          error: 'subscription_forbidden',
+          message: 'Gateway subscription linked to another customer ID'
+        });
+      }
 
-    const targetPhone = rows[0].phone;
-    if (targetPhone && rows[0].sms_notifications_enabled !== false) {
-      queueNotification(pool, {
-        customerId: rows[0].customer_id,
-        phone: targetPhone,
-        templateKey: 'SUBSCRIPTION_ACTIVATED',
-        params: {
-          productName: rows[0].product_name || 'Milk',
-          quantity: rows[0].quantity || '1 Litre',
-          startDate: rows[0].start_date || 'tomorrow'
-        },
-        idempotencyKey: `sms_sub_activated_${rows[0].id}`
-      }).catch(() => {});
-      setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
+      // Reconcile and safely insert the authorized subscription
+      const productName = gatewaySub?.notes?.productName || 'Cow Milk';
+      const sizeStr = gatewaySub?.notes?.size || '1 Litre';
+      const dailyRatePaise = gatewaySub?.notes?.dailyRate
+        ? Math.round(Number(gatewaySub.notes.dailyRate) * 100)
+        : getMilkDailySubscriptionRatePaise(productName, sizeStr);
+      const totalAmountPaise = Number(gatewaySub?.notes?.totalAmountPaise) || (gatewaySub?.plan?.item?.amount) || 0;
+      const durationLabel = gatewaySub?.notes?.months
+        ? `${gatewaySub.notes.months} Month Continuous Plan`
+        : 'Continuous Subscription Plan';
+
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, $2, 'Daily (Every Morning)', '6:00 AM – 7:00 AM', $3, $4,
+           $5, 'active', 'Tomorrow, 6:00 AM', 'month', $6,
+           $7, $8, $9, $10
+         ) RETURNING id, customer_id, status, product_name, quantity, quantity_num,
+                     frequency, time_slot, cost_per_day_paise, plan_type, duration_label,
+                     total_amount_paise, notes, next_delivery, razorpay_subscription_id, created_at`,
+        [
+          request.customer.id,
+          productName,
+          sizeStr,
+          parseLitresFromSize(sizeStr),
+          dailyRatePaise,
+          durationLabel,
+          totalAmountPaise,
+          subId,
+          gatewaySub?.plan_id || null,
+          JSON.stringify({
+            ...(gatewaySub?.notes || {}),
+            subscriptionId: subId,
+            razorpay_subscription_id: subId,
+            paymentId,
+            reconciledAt: new Date().toISOString()
+          })
+        ]
+      );
+      subRow = insertRes.rows[0];
     }
-
-    return {
-      verified: true,
-      subscriptionId: subId,
-      paymentId,
-      status: 'active'
-    };
   }
 
-  return reply.code(409).send({
-    verified: false,
-    error: 'subscription_payment_state_not_captured',
-    gatewaySubStatus: gatewaySub.status,
-    gatewayPaymentStatus: gatewayPayment.status
+  // 5. If existing record was found, activate it and link payment info (idempotent reconciliation)
+  if (subRow && subRow.status !== 'active') {
+    const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+    const updatedNotes = {
+      ...existingNotes,
+      subscriptionId: subId,
+      razorpay_subscription_id: subId,
+      lastPaymentId: paymentId,
+      verifiedAt: new Date().toISOString()
+    };
+
+    await pool.query(
+      `UPDATE customer_subscriptions
+       SET status = 'active',
+           razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1),
+           notes = $2::jsonb,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [subId, JSON.stringify(updatedNotes), subRow.id]
+    );
+    subRow.status = 'active';
+  }
+
+  // 6. Authoritative Start Date derivation
+  const startDate = await deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub);
+
+  // 7. Send confirmation email and queue SMS
+  sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
+    app.log.error({ err }, '[Email] Failed to send subscription confirmation email on verify');
   });
+
+  const targetPhone = subRow.phone || request.customer.phone;
+  const notificationsEnabled = subRow.sms_notifications_enabled !== undefined
+    ? subRow.sms_notifications_enabled
+    : request.customer.sms_notifications_enabled;
+
+  if (targetPhone && notificationsEnabled !== false) {
+    queueNotification(pool, {
+      customerId: request.customer.id,
+      phone: targetPhone,
+      templateKey: 'SUBSCRIPTION_ACTIVATED',
+      params: {
+        productName: subRow.product_name || gatewaySub?.notes?.productName || 'Milk',
+        quantity: subRow.quantity || gatewaySub?.notes?.size || '1 Litre',
+        startDate: startDate || 'tomorrow'
+      },
+      idempotencyKey: `sms_sub_activated_${subRow.id || subId}`
+    }).catch(() => {});
+    setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
+  }
+
+  return {
+    verified: true,
+    subscriptionId: subId,
+    paymentId,
+    status: 'active',
+    startDate
+  };
 });
 
 // Razorpay Subscription return callback (with signature verification & open-redirect protection)
@@ -1367,7 +1546,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
   if (pool) {
     try {
       await pool.query(
-        "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1 OR id::text = $1",
+        "UPDATE customer_subscriptions SET status = 'active', razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1 OR id::text = $1",
         [subId]
       );
       sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
@@ -1388,7 +1567,7 @@ app.post('/api/v1/subscriptions/send-confirmation', { preHandler: app.authentica
   if (pool) {
     if (subscriptionId) {
       const { rows } = await pool.query(
-        "SELECT id, customer_id FROM customer_subscriptions WHERE (id::text = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)",
+        "SELECT id, customer_id FROM customer_subscriptions WHERE (id::text = $1 OR razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)",
         [String(subscriptionId)]
       );
       if (rows.length && Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
@@ -2086,7 +2265,7 @@ async function dispatchOrderPaidSms(pool, customerOrderId) {
   if (!pool || !customerOrderId) return;
   try {
     const { rows } = await pool.query(
-      `SELECT co.id, co.order_number, co.total_amount_paise, co.delivery_address, co.customer_id, c.phone, c.sms_notifications_enabled
+      `SELECT co.id, co.order_number, co.total_paise, co.address, co.customer_id, c.phone, c.sms_notifications_enabled
        FROM customer_orders co
        LEFT JOIN customers c ON c.id = co.customer_id
        WHERE co.id = $1`,
@@ -2094,7 +2273,13 @@ async function dispatchOrderPaidSms(pool, customerOrderId) {
     );
     if (!rows[0] || rows[0].sms_notifications_enabled === false) return;
     const ord = rows[0];
-    const targetPhone = ord.delivery_address?.phone || ord.phone;
+    let addr = {};
+    if (ord.address && typeof ord.address === 'object') {
+      addr = ord.address;
+    } else if (typeof ord.address === 'string') {
+      try { addr = JSON.parse(ord.address); } catch {}
+    }
+    const targetPhone = addr.phone || ord.phone;
     if (!targetPhone) return;
 
     await queueNotification(pool, {
@@ -2103,9 +2288,9 @@ async function dispatchOrderPaidSms(pool, customerOrderId) {
       templateKey: 'ORDER_CONFIRMED',
       params: {
         orderNumber: ord.order_number,
-        amount: (Number(ord.total_amount_paise || 0) / 100).toFixed(0),
-        area: ord.delivery_address?.area || 'Hyderabad',
-        deliveryDate: ord.delivery_address?.delivery_date || 'tomorrow'
+        amount: (Number(ord.total_paise || 0) / 100).toFixed(0),
+        area: addr.area || addr.city || 'Hyderabad',
+        deliveryDate: addr.delivery_date || addr.deliveryDate || 'tomorrow'
       },
       idempotencyKey: `sms_order_paid_${ord.id}`
     }).catch(() => {});
@@ -2220,23 +2405,23 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         const eventName = request.body.event;
         if (['subscription.authenticated', 'subscription.activated', 'subscription.charged', 'subscription.resumed'].includes(eventName)) {
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'active', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            "UPDATE customer_subscriptions SET status = 'active', razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
             [subEntity.id]
           );
         } else if (['subscription.cancelled'].includes(eventName)) {
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            "UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
             [subEntity.id]
           );
         } else if (['subscription.halted', 'subscription.pending', 'subscription.paused'].includes(eventName)) {
           // Recoverable billing failure or customer pause: transition to paused so deliveries hold without permanent loss
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'paused', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            "UPDATE customer_subscriptions SET status = 'paused', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
             [subEntity.id]
           );
         } else if (['subscription.completed'].includes(eventName)) {
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'expired', updated_at = NOW() WHERE notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            "UPDATE customer_subscriptions SET status = 'expired', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
             [subEntity.id]
           );
         }
@@ -2458,4 +2643,4 @@ if (process.env.NODE_ENV !== 'test') {
   }
 }
 
-export { app, pool };
+export { app, pool, razorpay };
