@@ -479,7 +479,7 @@ function setAuthToken(token) {
 
 // App State
 const state = {
-  selectedCategory: 'Baking Essentials',
+  selectedCategory: 'Fresh Milk',
   viewMode: 'carousel',
   dietaryFilter: 'all',
   sortBy: 'featured',
@@ -3172,7 +3172,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const handleViewAllAction = () => {
     if (state.viewMode === 'grid') {
       state.viewMode = 'carousel';
-      state.selectedCategory = 'Baking Essentials';
+      state.selectedCategory = 'Fresh Milk';
       state.dietaryFilter = 'all';
       state.carouselIndex = 1;
       document.querySelectorAll('.diet-filter-btn').forEach((b) => {
