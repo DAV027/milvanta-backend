@@ -5,7 +5,13 @@
  */
 
 import crypto from 'node:crypto';
-import { getNowInIST, formatDateYMD, DAILY_DELIVERY_CUTOFF_HOUR_IST, acquireClient } from './subscriptionService.js';
+import {
+  getNowInIST,
+  formatDateYMD,
+  DAILY_DELIVERY_CUTOFF_HOUR_IST,
+  acquireClient,
+  derivePaidThroughDate
+} from './subscriptionService.js';
 import { queueNotification } from './twilioService.js';
 
 // Valid delivery lifecycle status transitions
@@ -43,10 +49,10 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
   try {
     await client.query('BEGIN');
 
-    // 1. Fetch all currently active subscriptions
+    // 1. Fetch all currently active subscriptions with payment & schedule attributes
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
-              cs.notes, cs.next_delivery,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -55,13 +61,50 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
     );
 
     for (const sub of activeSubs) {
-      // 1b. Check if subscription start date is in the future
       const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+
+      // 1a. Require verified payment evidence (fail closed if active row lacks payment proof)
+      const hasPaymentEvidence = Boolean(
+        subNotes.lastPaymentId ||
+        subNotes.paymentId ||
+        (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
+      );
+      if (!hasPaymentEvidence) {
+        skippedCount++;
+        continue;
+      }
+
+      // 1b. Enforce valid subscription start date
       const subStartDate = subNotes.startDate || subNotes.start_date ||
         (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
           ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
-          : null);
-      if (subStartDate && targetDate < subStartDate) {
+          : null) ||
+        (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+
+      if (!subStartDate || targetDate < subStartDate) {
+        skippedCount++;
+        continue;
+      }
+
+      // 1c. Derive and enforce authenticated paid-through end date
+      const paidThroughEndDate = derivePaidThroughDate({
+        startDate: subStartDate,
+        paidThroughDate: subNotes.paidThroughDate,
+        current_end: subNotes.current_end,
+        cost_per_day_paise: sub.cost_per_day_paise,
+        total_amount_paise: sub.total_amount_paise,
+        paidCount: subNotes.paidCount,
+        months: subNotes.months
+      });
+
+      // Fail closed if paid-through entitlement cannot be established
+      if (!paidThroughEndDate) {
+        skippedCount++;
+        continue;
+      }
+
+      // Do not generate deliveries outside the paid entitlement
+      if (targetDate > paidThroughEndDate) {
         skippedCount++;
         continue;
       }

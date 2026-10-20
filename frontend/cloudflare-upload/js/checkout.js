@@ -1071,8 +1071,9 @@
               const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
 
               // SEC-03 & PAY-01: Verify subscription signature and gateway status with backend
+              let verifyRes;
               try {
-                const verifyRes = await api('/api/v1/subscriptions/verify', {
+                verifyRes = await api('/api/v1/subscriptions/verify', {
                   method: 'POST',
                   body: JSON.stringify({
                     razorpay_subscription_id: response?.razorpay_subscription_id || res.subscriptionId,
@@ -1093,6 +1094,20 @@
                   payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`;
                 }
                 return; // Do NOT activate, do NOT clear cart, do NOT show success
+              }
+
+              // Handle mandate-only pending authorization without premature activation or paid confirmation
+              if (verifyRes?.status === 'pending_authorization' || verifyRes?.fulfillmentEntitled === false) {
+                if (errEl) {
+                  errEl.style.color = '#0a3d66';
+                  errEl.style.fontWeight = '600';
+                  errEl.textContent = 'Mandate authorized — awaiting first billing payment.';
+                }
+                if (payBtn) {
+                  payBtn.disabled = true;
+                  payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
+                }
+                return; // Do NOT show "Payment successful", activate subscriptions, clear cart as paid, or send paid-order confirmation emails
               }
 
               const finalFinancials = getOrderFinancials();

@@ -939,8 +939,9 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
   let subscription = subData?.subscription || subData || {};
 
   // If subData is an ID or order number, lookup authoritative record in DB
-  if (pool && (typeof subData === 'string' || typeof subData === 'number' || subData.subscriptionId || subData.orderNumber)) {
-    const lookupId = subData.subscriptionId || subData.orderNumber || subData;
+  let serverRecord = null;
+  if (pool && (typeof subData === 'string' || typeof subData === 'number' || subData.subscriptionId || subData.orderNumber || subData.id)) {
+    const lookupId = subData.subscriptionId || subData.orderNumber || subData.id || subData;
     try {
       const client = await pool.connect();
       try {
@@ -959,6 +960,7 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
         );
         if (subRes.rows[0]) {
           const row = subRes.rows[0];
+          serverRecord = row;
           subscription = {
             id: row.id,
             productName: row.product_name,
@@ -1003,19 +1005,26 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
   }
 
   const subId = subscription?.id ? Number(subscription.id) : null;
-  const paymentKey = String(paymentId || subscription?.notes?.paymentId || subscription?.razorpay_subscription_id || 'initial_activation').trim();
+  // Derive payment email idempotency key strictly from server-side verified records
+  const serverNotes = typeof serverRecord?.notes === 'object' && serverRecord?.notes !== null
+    ? serverRecord.notes
+    : (typeof subscription?.notes === 'object' && subscription?.notes !== null ? subscription.notes : {});
+  const verifiedServerPaymentRef = serverNotes.lastPaymentId || serverNotes.paymentId || serverNotes.mandatePaymentId || serverRecord?.razorpay_subscription_id || subscription?.razorpay_subscription_id;
+  const paymentKey = String(paymentId || verifiedServerPaymentRef || 'initial_activation').trim();
 
-  // Database-backed atomic idempotency lock
+  // Database-backed atomic idempotency lock using transaction advisory lock
   let lockClient = null;
   let advisoryLockAcquired = false;
   if (pool && subId && Number.isSafeInteger(subId)) {
     try {
       lockClient = await pool.connect();
-      // Try acquiring advisory lock to prevent concurrent verification, callback and frontend requests
-      const { rows: lockRows } = await lockClient.query('SELECT pg_try_advisory_lock(98765, $1::integer) AS locked', [subId]);
+      await lockClient.query('BEGIN');
+      // Try acquiring transaction-level advisory lock to prevent concurrent verification, callback and frontend requests
+      const { rows: lockRows } = await lockClient.query('SELECT pg_try_advisory_xact_lock(98765, $1::integer) AS locked', [subId]);
       advisoryLockAcquired = Boolean(lockRows[0]?.locked);
       if (!advisoryLockAcquired) {
         console.log(`[Email Idempotency] Concurrent dispatch in progress for subscription ${subId}. Skipping duplicate run.`);
+        await lockClient.query('ROLLBACK').catch(() => {});
         lockClient.release();
         lockClient = null;
         return {
@@ -1027,11 +1036,20 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
         };
       }
     } catch (lockErr) {
-      console.warn('[Subscription Email] Advisory lock error, proceeding with optimistic concurrency:', lockErr.message);
+      console.warn('[Subscription Email] Advisory lock acquisition failure, failing safely:', lockErr.message);
       if (lockClient) {
+        await lockClient.query('ROLLBACK').catch(() => {});
         lockClient.release();
         lockClient = null;
       }
+      return {
+        success: false,
+        skipped: true,
+        error: 'LOCK_ACQUISITION_FAILED',
+        message: lockErr.message,
+        providerAccepted: false,
+        deliveryStatus: 'lock_failed'
+      };
     }
   }
 
@@ -1279,12 +1297,12 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
     };
   } finally {
     if (lockClient) {
-      if (advisoryLockAcquired) {
-        try {
-          await lockClient.query('SELECT pg_advisory_unlock(98765, $1::integer)', [subId]);
-        } catch {}
+      try {
+        await lockClient.query('COMMIT');
+      } catch {} finally {
+        lockClient.release();
+        lockClient = null;
       }
-      lockClient.release();
     }
   }
 }

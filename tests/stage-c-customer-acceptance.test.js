@@ -223,9 +223,11 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
     if (hasRealDb) {
       await client.query(`
         UPDATE customer_subscriptions
-        SET status = 'active', updated_at = NOW()
+        SET status = 'active',
+            notes = jsonb_set(COALESCE(notes, '{}'::jsonb), '{lastPaymentId}', to_jsonb($2::text)),
+            updated_at = NOW()
         WHERE id = $1
-      `, [cowSubId]);
+      `, [cowSubId, mockPaymentId]);
 
       const check = await client.query('SELECT status FROM customer_subscriptions WHERE id = $1', [cowSubId]);
       assert.equal(check.rows[0].status, 'active');
@@ -263,11 +265,12 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
         INSERT INTO customer_subscriptions (
           customer_id, product_name, quantity, time_slot, frequency,
           cost_per_day_paise, total_amount_paise, status, next_delivery,
-          plan_type, duration_label
+          plan_type, duration_label, notes
         ) VALUES (
           $1, 'Pure Buffalo Milk', '0.5 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
           6500, 195000, 'active', 'Tomorrow, 6:00 AM',
-          'month', '1 Month (30 Days)'
+          'month', '1 Month (30 Days)',
+          '{"lastPaymentId":"pay_buf_acceptance","paidCount":1}'::jsonb
         ) RETURNING id
       `, [customerId]);
 
