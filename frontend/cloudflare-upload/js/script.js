@@ -87,7 +87,7 @@ let products = [
     isVeg: true,
     rating: 4.9,
     reviewsCount: 168,
-    badge: 'Clay Pot Set',
+    badge: 'Clay Pot',
     variants: [
       { size: '200 g', price: 49 },
       { size: '500 g', price: 99 },
@@ -1319,7 +1319,7 @@ function getProductFeatures(p) {
   }
   if (name.includes('curd')) {
     return [
-      { icon: '🏺', text: 'Clay Pot Set' },
+      { icon: '🏺', text: 'Clay Pot' },
       { icon: '✨', text: 'Live Cultures' },
       { icon: '🥛', text: 'Naturally Thick' }
     ];
