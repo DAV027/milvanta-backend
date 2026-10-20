@@ -1064,84 +1064,110 @@
             },
             theme: { color: '#0a3d66' },
             handler: async (response) => {
-              if (payBtn) {
-                payBtn.disabled = true;
-                payBtn.textContent = 'Verifying Subscription Authorization…';
-              }
               const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
-
-              // SEC-03 & PAY-01: Verify subscription signature and gateway status with backend
-              let verifyRes;
+              const signedAuth = {
+                subscriptionId: response?.razorpay_subscription_id || res.subscriptionId,
+                paymentId: response?.razorpay_payment_id,
+                signature: response?.razorpay_signature
+              };
               try {
-                verifyRes = await api('/api/v1/subscriptions/verify', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    razorpay_subscription_id: response?.razorpay_subscription_id || res.subscriptionId,
-                    razorpay_payment_id: response?.razorpay_payment_id,
-                    razorpay_signature: response?.razorpay_signature
-                  })
-                });
-                if (!verifyRes || !verifyRes.verified) {
-                  throw new Error(verifyRes?.error || 'Subscription signature verification failed.');
-                }
-              } catch (verifyErr) {
-                console.error('Subscription verification failed:', verifyErr);
-                if (errEl) {
-                  errEl.textContent = 'Subscription payment was authorized, but could not be verified by our servers. Please contact support with payment reference: ' + (response?.razorpay_payment_id || 'N/A');
-                }
-                if (payBtn) {
-                  payBtn.disabled = false;
-                  payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`;
-                }
-                return; // Do NOT activate, do NOT clear cart, do NOT show success
-              }
+                sessionStorage.setItem('pending_subscription_auth', JSON.stringify(signedAuth));
+              } catch {}
 
-              // Handle mandate-only pending authorization without premature activation or paid confirmation
-              if (verifyRes?.status === 'pending_authorization' || verifyRes?.fulfillmentEntitled === false) {
-                if (errEl) {
-                  errEl.style.color = '#0a3d66';
-                  errEl.style.fontWeight = '600';
-                  errEl.textContent = 'Mandate authorized — awaiting first billing payment.';
-                }
+              const verifySubscriptionWithServer = async (authPayload) => {
                 if (payBtn) {
                   payBtn.disabled = true;
-                  payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
+                  payBtn.textContent = 'Verifying Subscription Authorization…';
                 }
-                return; // Do NOT show "Payment successful", activate subscriptions, clear cart as paid, or send paid-order confirmation emails
-              }
+                if (errEl) {
+                  errEl.textContent = '';
+                }
 
-              const finalFinancials = getOrderFinancials();
-              await activateSubscriptionsFromCart(state.cart, {
-                subscriptionId: res.subscriptionId,
-                paymentId: paymentRef,
-                deliveryFee: finalFinancials.deliveryFee,
-                totalPaid: finalFinancials.total,
-                subtotal: finalFinancials.subtotal
-              });
+                let verifyRes;
+                try {
+                  verifyRes = await api('/api/v1/subscriptions/verify', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      razorpay_subscription_id: authPayload.subscriptionId,
+                      razorpay_payment_id: authPayload.paymentId,
+                      razorpay_signature: authPayload.signature
+                    })
+                  });
+                  if (!verifyRes || !verifyRes.verified) {
+                    throw new Error(verifyRes?.error || 'Subscription signature verification failed.');
+                  }
+                } catch (verifyErr) {
+                  console.error('Subscription verification failed:', verifyErr);
+                  if (errEl) {
+                    errEl.style.color = '#c0392b';
+                    errEl.style.fontWeight = '600';
+                    errEl.textContent = 'Subscription payment was authorized (' + (authPayload?.paymentId || 'N/A') + '), but server verification is pending. Click below to check status without paying again.';
+                  }
+                  if (payBtn) {
+                    payBtn.disabled = false;
+                    payBtn.textContent = 'Check Subscription Status 🔄';
+                    // Rebind onclick to re-check existing signed authorization rather than initiating a new checkout payment
+                    payBtn.onclick = (e) => {
+                      e.preventDefault();
+                      verifySubscriptionWithServer(authPayload);
+                    };
+                  }
+                  return false;
+                }
 
-              // Trigger subscription confirmation email
-              try {
-                await api('/api/v1/subscriptions/send-confirmation', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    subscriptionId: res.subscriptionId,
-                    paymentId: paymentRef,
-                    deliveryFee: finalFinancials.deliveryFee,
-                    totalPaid: finalFinancials.total,
-                    cart: state.cart,
-                    address: state.addressDraft,
-                    customer: {
-                      name: state.addressDraft.name,
-                      email: state.addressDraft.email,
-                      phone: state.addressDraft.phone
-                    }
-                  })
+                // Handle mandate-only pending authorization without premature activation or paid confirmation
+                if (verifyRes?.status === 'pending_authorization' || verifyRes?.fulfillmentEntitled === false) {
+                  try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
+                  if (errEl) {
+                    errEl.style.color = '#0a3d66';
+                    errEl.style.fontWeight = '600';
+                    errEl.textContent = 'Mandate authorized — awaiting first billing payment.';
+                  }
+                  if (payBtn) {
+                    payBtn.disabled = true;
+                    payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
+                  }
+                  return true;
+                }
+
+                // Authoritative active subscription with verified payment!
+                try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
+                const finalFinancials = getOrderFinancials();
+                await activateSubscriptionsFromCart(state.cart, {
+                  subscriptionId: authPayload.subscriptionId,
+                  paymentId: authPayload.paymentId || paymentRef,
+                  deliveryFee: finalFinancials.deliveryFee,
+                  totalPaid: finalFinancials.total,
+                  subtotal: finalFinancials.subtotal
                 });
-              } catch (emErr) {
-                console.warn('Subscription email trigger notice:', emErr);
-              }
 
-              showOrderSuccess(paymentRef, true);
+                // Trigger subscription confirmation email
+                try {
+                  await api('/api/v1/subscriptions/send-confirmation', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      subscriptionId: authPayload.subscriptionId,
+                      paymentId: authPayload.paymentId || paymentRef,
+                      deliveryFee: finalFinancials.deliveryFee,
+                      totalPaid: finalFinancials.total,
+                      cart: state.cart,
+                      address: state.addressDraft,
+                      customer: {
+                        name: state.addressDraft.name,
+                        email: state.addressDraft.email,
+                        phone: state.addressDraft.phone
+                      }
+                    })
+                  });
+                } catch (emErr) {
+                  console.warn('Subscription email trigger notice:', emErr);
+                }
+
+                showOrderSuccess(authPayload.paymentId || paymentRef, true);
+                return true;
+              };
+
+              await verifySubscriptionWithServer(signedAuth);
             },
             modal: {
               ondismiss: () => {

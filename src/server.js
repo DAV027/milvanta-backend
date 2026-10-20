@@ -1523,20 +1523,61 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
   }
 
   // 4. Verify Razorpay payment and subscription identity linkage (authoritative linkage check)
-  if (!gatewayPayment?.subscription_id || gatewayPayment.subscription_id !== subId) {
+  const paymentSubNote = gatewayPayment?.notes?.subscriptionId || gatewayPayment?.notes?.subscription_id || gatewayPayment?.notes?.razorpay_subscription_id;
+
+  // Diagnostic logging for Razorpay payment and subscription linkage (safe statuses/booleans only, no secrets or customer PII)
+  request.log.info({
+    subId,
+    paymentId,
+    gatewaySubStatus: gatewaySub?.status,
+    gatewayPaymentStatus: gatewayPayment?.status,
+    gatewayPaymentAmount: gatewayPayment?.amount,
+    gatewayPaymentCurrency: gatewayPayment?.currency,
+    hasPaymentSubscriptionId: Boolean(gatewayPayment?.subscription_id),
+    paymentSubscriptionIdMatches: gatewayPayment?.subscription_id ? (gatewayPayment.subscription_id === subId) : null,
+    hasPaymentSubNote: Boolean(paymentSubNote),
+    gatewaySubPaidCount: gatewaySub?.paid_count
+  }, '[Subscriptions] Verify diagnostics for payment and subscription linkage');
+
+  // Reject explicitly different payment.subscription_id
+  if (gatewayPayment?.subscription_id && gatewayPayment.subscription_id !== subId) {
     return reply.code(400).send({
       verified: false,
       error: 'payment_subscription_mismatch',
-      message: 'Payment is not authoritatively linked to the specified subscription ID.'
+      message: 'Payment is linked to a different subscription ID.'
     });
   }
-  const paymentSubNote = gatewayPayment?.notes?.subscriptionId || gatewayPayment?.notes?.subscription_id || gatewayPayment?.notes?.razorpay_subscription_id;
+  // Reject contradictory notes
   if (paymentSubNote && paymentSubNote !== subId) {
     return reply.code(400).send({
       verified: false,
       error: 'payment_subscription_mismatch',
       message: 'Payment notes point to a different subscription ID.'
     });
+  }
+
+  // Pre-query server subscription to validate customer ownership when gatewayPayment.subscription_id is missing
+  let preSubRow = null;
+  if (!gatewayPayment?.subscription_id && !request.isAdmin) {
+    const preCheck = await pool.query(
+      `SELECT cs.id, cs.customer_id
+       FROM customer_subscriptions cs
+       WHERE (cs.razorpay_subscription_id = $1 
+              OR cs.notes->>'subscriptionId' = $1 
+              OR cs.notes->>'razorpay_subscription_id' = $1 
+              OR cs.notes->>'subscription_id' = $1 
+              OR cs.id::text = $1)
+         AND cs.customer_id = $2`,
+      [subId, request.customer.id]
+    );
+    preSubRow = preCheck.rows[0];
+    if (!preSubRow) {
+      return reply.code(400).send({
+        verified: false,
+        error: 'payment_subscription_mismatch',
+        message: 'Payment is not authoritatively linked to the specified subscription ID.'
+      });
+    }
   }
 
   // Verify plan amount using Razorpay's actual plan data
@@ -1563,7 +1604,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       gatewayPayment?.notes?.auth_type === 'refundable' ||
       gatewayPayment?.notes?.auth_type === 'mandate_auth' ||
       gatewaySub?.notes?.auth_type === 'refundable' ||
-      (!gatewayPayment?.invoice_id && (gatewaySub?.paid_count === 0 || !gatewaySub?.paid_count) && gatewayPayment.amount <= 50000)
+      (!gatewayPayment?.invoice_id && gatewayPayment.amount <= 50000)
     )
   );
 
@@ -1939,6 +1980,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     if (updateRes.rows.length > 0) {
       subRow.status = 'active';
       subRow.next_delivery = futureNextDelivery;
+      subRow.notes = updatedNotes;
       isNewlyActivated = true;
     } else {
       // Concurrently updated by another request/worker: reread actual database state
@@ -1967,29 +2009,44 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
   }
 
-  // If subscription was already active (e.g. preceding webhook arrived before verify), ensure lastPaymentId is persisted
-  if (subRow && subRow.status === 'active' && paymentId) {
+  // 9. If subscription was already active (e.g. preceding webhook arrived before verify):
+  if (!isNewlyActivated && subRow && subRow.status === 'active') {
     const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
-    if (!existingNotes.lastPaymentId || existingNotes.lastPaymentId !== paymentId) {
+    let notesChanged = false;
+    const notesPatch = { ...existingNotes };
+
+    if (isMandateOnlyAuth) {
+      // Mandate authorization payment reference: record mandatePaymentId and NEVER overwrite captured lastPaymentId
+      if (notesPatch.mandatePaymentId !== paymentId) {
+        notesPatch.mandatePaymentId = paymentId;
+        notesPatch.mandateStatus = 'authenticated';
+        notesPatch.mandateAuthorized = true;
+        notesChanged = true;
+      }
+    } else if (isCapturedBillingCyclePayment) {
+      // Captured billing-cycle recurring charge
+      if (notesPatch.lastPaymentId !== paymentId) {
+        notesPatch.lastPaymentId = paymentId;
+        notesChanged = true;
+      }
+    }
+
+    if (notesChanged) {
       await pool.query(
         `UPDATE customer_subscriptions
-         SET notes = jsonb_set(
-               COALESCE(notes, '{}'::jsonb),
-               '{lastPaymentId}',
-               to_jsonb($1::text)
-             ),
+         SET notes = $1::jsonb,
              updated_at = NOW()
          WHERE id = $2`,
-        [paymentId, subRow.id]
+        [JSON.stringify(notesPatch), subRow.id]
       );
-      subRow.notes = { ...existingNotes, lastPaymentId: paymentId };
+      subRow.notes = notesPatch;
     }
   }
 
-  // 9. Authoritative Start Date derivation
+  // 10. Authoritative Start Date derivation
   const startDate = await deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub);
 
-  // 10. Send confirmation email and queue SMS ONLY if newly transitioned to active (Requirement 6)
+  // 11. Send confirmation email and queue SMS ONLY if newly transitioned to active (Requirement 6)
   if (isNewlyActivated) {
     sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
       app.log.error({ err }, '[Email] Failed to send subscription confirmation email on verify');
@@ -2016,15 +2073,20 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
   }
 
-  return {
+  const finalNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+  return reply.code(200).send({
     verified: true,
     subscriptionId: subId,
     paymentId,
     status: subRow.status,
+    mandateStatus: finalNotes.mandateStatus || (gatewaySub?.status === 'authenticated' ? 'authenticated' : 'authenticated'),
+    fulfillmentEntitled: Boolean(finalNotes.fulfillmentEntitled ?? (subRow.status === 'active')),
+    paidCount: finalNotes.paidCount !== undefined ? finalNotes.paidCount : (gatewaySub?.paid_count || 1),
+    paidThroughDate: finalNotes.paidThroughDate || paidThroughYMD,
     startDate,
     nextDelivery: subRow.next_delivery,
     message: isNewlyActivated ? 'Subscription verified and activated' : 'Subscription already active'
-  };
+  });
 });
 
 // Razorpay Subscription return callback (with signature verification & open-redirect protection)
@@ -2094,7 +2156,12 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
   }
 
   // Authoritative payment and subscription linkage check
-  if (!gatewayPayment?.subscription_id || gatewayPayment.subscription_id !== subId) {
+  // Reject explicitly different payment.subscription_id
+  if (gatewayPayment?.subscription_id && gatewayPayment.subscription_id !== subId) {
+    return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_subscription_mismatch`, 302);
+  }
+  const callbackSubNote = gatewayPayment?.notes?.subscriptionId || gatewayPayment?.notes?.subscription_id || gatewayPayment?.notes?.razorpay_subscription_id;
+  if (callbackSubNote && callbackSubNote !== subId) {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_subscription_mismatch`, 302);
   }
 
@@ -2110,7 +2177,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
       gatewayPayment?.notes?.auth_type === 'refundable' ||
       gatewayPayment?.notes?.auth_type === 'mandate_auth' ||
       gatewaySub?.notes?.auth_type === 'refundable' ||
-      (!gatewayPayment?.invoice_id && (gatewaySub?.paid_count === 0 || !gatewaySub?.paid_count) && gatewayPayment.amount <= 50000)
+      (!gatewayPayment?.invoice_id && gatewayPayment.amount <= 50000)
     )
   );
 
@@ -2192,6 +2259,36 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
       const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id;
       if (gatewayCustId && String(gatewayCustId) !== String(subRow.customer_id)) {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_forbidden`, 302);
+      }
+
+      // If subscription was already activated by webhook with paid entitlement:
+      if (subRow.status === 'active' && existingNotes.fulfillmentEntitled === true) {
+        if (isMandateOnlyAuth && existingNotes.mandatePaymentId !== paymentId) {
+          await pool.query(
+            `UPDATE customer_subscriptions
+             SET notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{mandatePaymentId}',
+                   to_jsonb($1::text)
+                 ),
+                 updated_at = NOW()
+             WHERE id = $2`,
+            [paymentId, subRow.id]
+          );
+        } else if (isCapturedBillingCyclePayment && existingNotes.lastPaymentId !== paymentId) {
+          await pool.query(
+            `UPDATE customer_subscriptions
+             SET notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{lastPaymentId}',
+                   to_jsonb($1::text)
+                 ),
+                 updated_at = NOW()
+             WHERE id = $2`,
+            [paymentId, subRow.id]
+          );
+        }
+        return reply.redirect(`${safeReturnUrl}${separator}subscription=success&payment_id=${encodeURIComponent(paymentId)}`, 302);
       }
 
       // If mandate-only authorization: persist mandate state separately without activating fulfillment
@@ -3544,10 +3641,29 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         } else if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
           // Confirm payment evidence before activating fulfillment
           const paymentEntity = request.body?.payload?.payment?.entity;
-          const isPaymentCaptured = paymentEntity?.status === 'captured';
+          const invoiceEntity = request.body?.payload?.invoice?.entity;
           const rawPaidCount = subEntity.paid_count;
           const hasPositivePaidCount = Number.isInteger(rawPaidCount) && rawPaidCount > 0;
-          const hasPaymentEvidence = hasPositivePaidCount || isPaymentCaptured;
+
+          // Defensible captured billing-cycle evidence requirement:
+          // If paymentEntity is attached: it MUST be captured.
+          // If invoiceEntity is attached: it MUST be paid.
+          // If payment/invoice attached but not captured/paid, payment evidence fails.
+          // If no payment/invoice attached, paid_count alone is insufficient if verifiable.
+          let hasPaymentEvidence = false;
+          if (paymentEntity?.id) {
+            hasPaymentEvidence = paymentEntity.status === 'captured';
+          } else if (invoiceEntity?.id) {
+            hasPaymentEvidence = invoiceEntity.status === 'paid';
+          } else if (hasPositivePaidCount && razorpay) {
+            try {
+              const subPayments = await razorpay.subscriptions.fetchPayments(subEntity.id);
+              const items = subPayments?.items || [];
+              hasPaymentEvidence = items.some(p => p.status === 'captured');
+            } catch {
+              hasPaymentEvidence = false;
+            }
+          }
 
           if (!hasPaymentEvidence) {
             // Mandate activated on gateway or 0 paid_count: DO NOT default paid_count to 1!
@@ -3628,7 +3744,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 subEntity.status || 'active',
                 actualPaidCount,
                 paidThroughYMD,
-                paymentEntity?.id || null
+                paymentEntity?.status === 'captured' ? paymentEntity.id : null
               ]
             );
           }
