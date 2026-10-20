@@ -49,7 +49,7 @@ async function updateDairyProducts() {
       SET name = 'Pot Curd',
           price_paise = 4900,
           selling_unit = '200 g pot',
-          image_url = 'assets/milvanta-curd.jpg',
+          image_url = 'assets/milvanta-curd.jpg?v=2',
           description = 'Thick, creamy set dahi prepared naturally in traditional earthen pots from pure whole milk with live cultures. Naturally sweet, probiotic-rich and velvety.',
           active = TRUE,
           updated_at = NOW()

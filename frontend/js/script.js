@@ -83,7 +83,7 @@ let products = [
     quantity: '200 g to 6 kg available',
     description: 'Thick, creamy set dahi prepared naturally in traditional earthen pots from pure whole milk with live cultures. Naturally sweet, probiotic-rich and velvety.',
     ingredients: ['Pure Pasteurized Whole Milk', 'Active Lactic Cultures'],
-    image: 'assets/milvanta-curd.jpg',
+    image: 'assets/milvanta-curd.jpg?v=2',
     isVeg: true,
     rating: 4.9,
     reviewsCount: 168,

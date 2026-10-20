@@ -44,7 +44,7 @@
     { id: 101, name: 'Cow Milk', price: 60, size: '500 ml pouch', image: 'assets/milvanta-cow-milk.jpg' },
     { id: 102, name: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' },
     { id: 104, name: 'Paneer', price: 400, size: '500 g pack', image: 'assets/milvanta-paneer.jpg' },
-    { id: 105, name: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg' },
+    { id: 105, name: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg?v=2' },
     { id: 103, name: 'Pure Cow Ghee', price: 1500, size: '500 g jar', image: 'assets/milvanta-cow-ghee.jpg' },
     { id: 106, name: 'Pure Buffalo Ghee', price: 1100, size: '500 g jar', image: 'assets/milvanta-buffalo-ghee.jpg' },
     { id: 1, name: 'Walnut Raagi Brownie', price: 299, size: '1 Piece', image: 'assets/walnut-raagi-brownie.jpg' },
@@ -86,7 +86,7 @@
       return { id: 104, name: 'Paneer', price: 400, size: '500 g pack', image: 'assets/milvanta-paneer.jpg' };
     }
     if (numId === 105 || rawName.includes('curd')) {
-      return { id: 105, name: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg' };
+      return { id: 105, name: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg?v=2' };
     }
     if (numId === 103 || (rawName.includes('cow') && rawName.includes('ghee'))) {
       return { id: 103, name: 'Pure Cow Ghee', price: 1500, size: '500 g jar', image: 'assets/milvanta-cow-ghee.jpg' };

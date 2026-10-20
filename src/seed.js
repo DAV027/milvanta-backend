@@ -40,7 +40,7 @@ export const products = [
     category: 'Dairy Products',
     price_paise: 4900,
     selling_unit: '200 g pot',
-    image_url: 'assets/milvanta-curd.jpg',
+    image_url: 'assets/milvanta-curd.jpg?v=2',
     stock_quantity: 90
   },
   {

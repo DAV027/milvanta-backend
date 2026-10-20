@@ -329,7 +329,7 @@
     { id: 101, name: 'Cow Milk', shortName: 'Cow Milk', price: 60, size: '500 ml pouch', image: 'assets/milvanta-cow-milk.jpg' },
     { id: 102, name: 'Buffalo Milk', shortName: 'Buffalo Milk', price: 70, size: '500 ml bottle', image: 'assets/milvanta-buffalo-milk.jpg' },
     { id: 104, name: 'Paneer', shortName: 'Paneer', price: 400, size: '500 g pack', image: 'assets/milvanta-paneer.jpg' },
-    { id: 105, name: 'Pot Curd', shortName: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg' },
+    { id: 105, name: 'Pot Curd', shortName: 'Pot Curd', price: 49, size: '200 g pot', image: 'assets/milvanta-curd.jpg?v=2' },
     { id: 103, name: 'Pure Cow Ghee', shortName: 'Cow Ghee', price: 1500, size: '500 g jar', image: 'assets/milvanta-cow-ghee.jpg' },
     { id: 106, name: 'Pure Buffalo Ghee', shortName: 'Buffalo Ghee', price: 1100, size: '500 g jar', image: 'assets/milvanta-buffalo-ghee.jpg' },
     { id: 1, name: 'Walnut Raagi Brownie', shortName: 'Walnut Brownie', price: 299, size: '1 Piece', image: 'assets/walnut-raagi-brownie.jpg' },
@@ -397,7 +397,7 @@
     if (lower.includes('buffalo ghee') || (lower.includes('buffalo') && lower.includes('ghee'))) return { id: 106, name: 'Pure Buffalo Ghee', size: item.size || '500 g jar', price: 1100, image: 'assets/milvanta-buffalo-ghee.jpg' };
     if (lower.includes('cow ghee') || lower.includes('bilona ghee') || lower.includes('desi cow ghee') || lower.includes('ghee')) return { id: 103, name: 'Pure Cow Ghee', size: item.size || '500 g jar', price: 1500, image: 'assets/milvanta-cow-ghee.jpg' };
     if (lower.includes('paneer')) return { id: 104, name: 'Paneer', size: item.size || '500 g pack', price: 400, image: 'assets/milvanta-paneer.jpg' };
-    if (lower.includes('curd') || lower.includes('dahi')) return { id: 105, name: 'Pot Curd', size: item.size || '200 g pot', price: 49, image: 'assets/milvanta-curd.jpg' };
+    if (lower.includes('curd') || lower.includes('dahi')) return { id: 105, name: 'Pot Curd', size: item.size || '200 g pot', price: 49, image: 'assets/milvanta-curd.jpg?v=2' };
     if (lower.includes('brownie')) return { id: 1, name: 'Walnut Raagi Brownie', size: '1 Piece', price: 299, image: 'assets/walnut-raagi-brownie.jpg' };
     if (lower.includes('butter cake')) return { id: 2, name: 'Butter Cake with Chocolate Chips', size: '250 g cake', price: 350, image: 'assets/butter-cake.jpg' };
     if (lower.includes('kowa cake')) return { id: 3, name: 'Heritage Kowa Cake', size: '1 Piece', price: 150, image: 'assets/kowa-cake.jpg' };
