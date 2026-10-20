@@ -46,11 +46,9 @@
   if (!resolvedApiUrl) {
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       resolvedApiUrl = LOCAL_BACKEND_URL;
-    } else if (PROD_HOSTS.includes(hostname)) {
-      resolvedApiUrl = PROD_BACKEND_URL;
     } else {
-      // Staging domain, Cloudflare preview (*.pages.dev, *.workers.dev), or branch preview
-      resolvedApiUrl = STAGING_BACKEND_URL;
+      // Authoritative target backend for Milvanta launch
+      resolvedApiUrl = PROD_BACKEND_URL;
     }
   }
 

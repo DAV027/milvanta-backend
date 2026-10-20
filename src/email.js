@@ -613,7 +613,16 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
   const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
   const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
   const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
-  const planTag = isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription';
+  const isRefundableAuth = Boolean(
+    subscription?.authType === 'refundable_authorization' ||
+    subscription?.isRefundableAuth ||
+    (subscription?.notes && (subscription.notes.authType === 'refundable_authorization' || subscription.notes.isRefundableAuth))
+  );
+  const authAmountPaise = Number(subscription?.authAmountPaise || subscription?.notes?.authAmountPaise || 200);
+
+  const planTag = isRefundableAuth
+    ? 'E-Mandate Autopay Authorized & Registered'
+    : (isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription');
   const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
   const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
   const subtotalPlan = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
@@ -625,7 +634,9 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
   const totalPaidStr = formatInr(totalPaid);
   const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM');
   const imgUrl = subscription?.image || subscription?.image_url || (productName.toLowerCase().includes('buffalo') ? 'https://milvanta.in/assets/milvanta-buffalo-milk.jpg' : 'https://milvanta.in/assets/milvanta-cow-milk.jpg');
-  const paymentMethod = isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)';
+  const paymentMethod = isRefundableAuth
+    ? 'UPI Autopay / Card E-Mandate (Refundable Authorization)'
+    : (isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)');
 
   const addressLines = [
     address?.house,
@@ -640,7 +651,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Your Morning Milk Subscription is Confirmed - Milvanta</title>
+  <title>${isRefundableAuth ? 'Your Milk Subscription E-Mandate is Registered' : 'Your Morning Milk Subscription is Confirmed'} - Milvanta</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 24px 12px;">
@@ -659,12 +670,15 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
           <!-- Welcome Body -->
           <tr>
             <td style="padding: 28px 28px 16px;">
-              <div style="display: inline-block; background: ${isCustom ? '#dcfce7' : '#e0f2fe'}; color: ${isCustom ? '#15803d' : '#0369a1'}; border: 1px solid ${isCustom ? '#bbf7d0' : '#bae6fd'}; border-radius: 9999px; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 12px;">
+              <div style="display: inline-block; background: ${isRefundableAuth ? '#e0e7ff' : (isCustom ? '#dcfce7' : '#e0f2fe')}; color: ${isRefundableAuth ? '#3730a3' : (isCustom ? '#15803d' : '#0369a1')}; border: 1px solid ${isRefundableAuth ? '#c7d2fe' : (isCustom ? '#bbf7d0' : '#bae6fd')}; border-radius: 9999px; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 12px;">
                 ${planTag}
               </div>
-              <h2 style="color: #0f172a; margin: 0 0 10px; font-size: 20px; font-weight: 700;">Welcome to Morning Fresh Milk, ${customerName}!</h2>
+              <h2 style="color: #0f172a; margin: 0 0 10px; font-size: 20px; font-weight: 700;">${isRefundableAuth ? `Mandate Activated, ${customerName}!` : `Welcome to Morning Fresh Milk, ${customerName}!`}</h2>
               <p style="color: #475569; margin: 0 0 20px; font-size: 14px; line-height: 1.6;">
-                Your daily milk subscription has been activated successfully! Fresh, chilled, unadulterated milk will be placed right at your doorstep every morning.
+                ${isRefundableAuth 
+                  ? `Your subscription autopay mandate has been registered successfully! Regular morning deliveries are scheduled to begin on <strong>${nextDelivery}</strong>. Monthly plan charges will be debited automatically at each recurring billing cycle.`
+                  : `Your daily milk subscription has been activated successfully! Fresh, chilled, unadulterated milk will be placed right at your doorstep every morning.`
+                }
               </p>
 
               <!-- Subscription Highlight Box -->
@@ -691,6 +705,16 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
                   <td style="color: #64748b;">Daily Rate</td>
                   <td style="text-align: right; font-weight: 700; color: #059669;">${dailyRateStr}/day</td>
                 </tr>
+                ${isRefundableAuth ? `
+                <tr>
+                  <td style="color: #64748b;">Mandate Token Authorization</td>
+                  <td style="text-align: right; font-weight: 700; color: #4338ca;">${formatInr(authAmountPaise, true)} (Refundable Auth)</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Recurring Billing Amount</td>
+                  <td style="text-align: right; font-weight: 800; font-size: 14px; color: #0a3d66;">${subtotalPlanStr} / month</td>
+                </tr>
+                ` : `
                 <tr>
                   <td style="color: #64748b;">Deliveries Subtotal</td>
                   <td style="text-align: right; font-weight: 700; color: #0f172a;">${subtotalPlanStr}</td>
@@ -703,6 +727,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
                   <td style="color: #64748b;">Total Amount Paid</td>
                   <td style="text-align: right; font-weight: 800; font-size: 15px; color: #0a3d66;">${totalPaidStr}</td>
                 </tr>
+                `}
                 <tr>
                   <td style="color: #64748b;">Payment Method</td>
                   <td style="text-align: right; font-weight: 600; color: #0f172a;">${paymentMethod}</td>
@@ -763,7 +788,16 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
   const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
   const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
   const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
-  const planTag = isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription';
+  const isRefundableAuth = Boolean(
+    subscription?.authType === 'refundable_authorization' ||
+    subscription?.isRefundableAuth ||
+    (subscription?.notes && (subscription.notes.authType === 'refundable_authorization' || subscription.notes.isRefundableAuth))
+  );
+  const authAmountPaise = Number(subscription?.authAmountPaise || subscription?.notes?.authAmountPaise || 200);
+
+  const planTag = isRefundableAuth
+    ? 'E-Mandate Autopay Authorized & Registered'
+    : (isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription');
   const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
   const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
   const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
@@ -783,7 +817,7 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ALERT: New Morning Milk Subscription</title>
+  <title>${isRefundableAuth ? 'ALERT: New Morning Milk Mandate Registered' : 'ALERT: New Morning Milk Subscription'}</title>
 </head>
 <body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
@@ -793,14 +827,14 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
           
           <tr style="background: #0a3d66; color: #ffffff;">
             <td style="padding: 20px 24px;">
-              <h2 style="margin: 0 0 4px; font-size: 20px; color: #ffffff;">🚨 ACTION REQUIRED: New Morning Milk Subscription</h2>
+              <h2 style="margin: 0 0 4px; font-size: 20px; color: #ffffff;">${isRefundableAuth ? '🚨 ACTION REQUIRED: New Morning Milk Mandate Registered' : '🚨 ACTION REQUIRED: New Morning Milk Subscription'}</h2>
               <div style="font-size: 13px; color: #93c5fd;">Add customer to tomorrow's early morning route sheet</div>
             </td>
           </tr>
 
           <tr>
             <td style="padding: 20px 24px;">
-              <div style="display: inline-block; background: ${isCustom ? '#dcfce7' : '#e0f2fe'}; color: ${isCustom ? '#15803d' : '#0369a1'}; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 700; margin-bottom: 12px;">
+              <div style="display: inline-block; background: ${isRefundableAuth ? '#e0e7ff' : (isCustom ? '#dcfce7' : '#e0f2fe')}; color: ${isRefundableAuth ? '#3730a3' : (isCustom ? '#15803d' : '#0369a1')}; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 700; margin-bottom: 12px;">
                 ${planTag}
               </div>
 
@@ -833,6 +867,16 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
                   <td style="color: #64748b;">Daily Rate</td>
                   <td style="color: #059669; font-weight: 700;">₹${dailyRate}/day</td>
                 </tr>
+                ${isRefundableAuth ? `
+                <tr>
+                  <td style="color: #64748b;">Mandate Auth Amount</td>
+                  <td style="color: #4338ca; font-weight: 700;">${formatInr(authAmountPaise, true)} (Refundable Token Auth)</td>
+                </tr>
+                <tr>
+                  <td style="color: #64748b;">Recurring Plan Charge</td>
+                  <td style="color: #0a3d66; font-weight: 800; font-size: 14px;">₹${totalAmount.toLocaleString('en-IN')} / month</td>
+                </tr>
+                ` : `
                 <tr>
                   <td style="color: #64748b;">Deliveries Subtotal</td>
                   <td><strong>₹${totalAmount.toLocaleString('en-IN')}</strong></td>
@@ -845,6 +889,7 @@ export function buildAdminSubscriptionEmail({ subscription, customer, address, p
                   <td style="color: #64748b;">Total Paid</td>
                   <td style="color: #0a3d66; font-weight: 800; font-size: 15px;">₹${totalPaid.toLocaleString('en-IN')}</td>
                 </tr>
+                `}
                 <tr>
                   <td style="color: #64748b;">Payment / Sub ID</td>
                   <td><code>${escapeHtml(paymentId || 'N/A')}</code></td>
@@ -913,7 +958,10 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
             totalAmount: Math.round((row.total_amount_paise || 0) / 100),
             image: row.image_url,
             status: row.status,
-            nextDelivery: row.next_delivery
+            nextDelivery: row.next_delivery,
+            notes: row.notes,
+            authType: row.notes?.authType,
+            authAmountPaise: row.notes?.authAmountPaise
           };
           customer.name = customer.name || row.full_name;
           customer.email = customer.email || row.email;
@@ -924,6 +972,28 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
       }
     } catch (e) {
       console.warn('[Subscription Email] DB lookup error:', e.message);
+    }
+  }
+
+  // Idempotency: prevent duplicate email dispatch for the same payment/subscription event
+  if (pool && subscription?.id && paymentId) {
+    try {
+      const { rows: subCheck } = await pool.query('SELECT notes FROM customer_subscriptions WHERE id = $1', [subscription.id]);
+      const subNotes = typeof subCheck[0]?.notes === 'object' && subCheck[0]?.notes !== null ? subCheck[0].notes : {};
+      if (subNotes.emailConfirmations && subNotes.emailConfirmations[paymentId]) {
+        console.log(`[Email Idempotency] Subscription confirmation already dispatched for sub ${subscription.id}, payment ${paymentId}`);
+        return {
+          success: true,
+          skipped: true,
+          duplicate: true,
+          results: {
+            customerEmail: { success: true, skipped: true, duplicate: true },
+            adminEmail: { success: true, skipped: true, duplicate: true }
+          }
+        };
+      }
+    } catch (idemErr) {
+      console.warn('[Subscription Email] Idempotency check notice:', idemErr.message);
     }
   }
 
@@ -943,10 +1013,18 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
         costPerDay: subPlan.dailyRate || subItem.variant?.dailyRate || 55,
         totalAmount: subItem.price || subItem.variant?.price || 0,
         image: subItem.image || 'assets/milvanta-cow-milk.jpg',
-        nextDelivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM'
+        nextDelivery: 'Tomorrow Morning · 6:00 AM – 7:00 AM',
+        authType: subData.authType || null,
+        authAmountPaise: subData.authAmountPaise || null
       };
     }
   }
+
+  const isRefundableAuth = Boolean(
+    subscription?.authType === 'refundable_authorization' ||
+    subscription?.isRefundableAuth ||
+    (subscription?.notes && (subscription.notes.authType === 'refundable_authorization' || subscription.notes.isRefundableAuth))
+  );
 
   const recipientCustomerEmail = (customer?.email || address?.email || options.customerEmail || '').trim();
   const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
@@ -961,7 +1039,9 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
 
     results.customerEmail = await sendEmail({
       to: recipientCustomerEmail,
-      subject: `🥛 Subscription Confirmed: ${subscription.productName} - Milvanta Farm Fresh`,
+      subject: isRefundableAuth
+        ? `🥛 Subscription E-Mandate Registered: ${subscription.productName} - Milvanta Farm Fresh`
+        : `🥛 Subscription Confirmed: ${subscription.productName} - Milvanta Farm Fresh`,
       html: custHtml,
       text: custText,
       from: sender
@@ -977,14 +1057,48 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
 
     results.adminEmail = await sendEmail({
       to: adminEmail,
-      subject: `🚨 New Morning Milk Subscription! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`,
+      subject: isRefundableAuth
+        ? `🚨 New Morning Milk Mandate Registered! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`
+        : `🚨 New Morning Milk Subscription! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`,
       html: admHtml,
       text: admText,
       from: sender
     });
   }
 
-  return { success: true, results };
+  // Persist email confirmation record to prevent duplicate future dispatch
+  if (pool && subscription?.id && paymentId) {
+    try {
+      await pool.query(
+        `UPDATE customer_subscriptions
+         SET notes = jsonb_set(
+           COALESCE(notes, '{}'::jsonb),
+           '{emailConfirmations}',
+           COALESCE(notes->'emailConfirmations', '{}'::jsonb) || jsonb_build_object(
+             $1::text, jsonb_build_object(
+               'sentAt', NOW()::text,
+               'customerMsgId', $2::text,
+               'adminMsgId', $3::text
+             )
+           )
+         )
+         WHERE id = $4`,
+        [paymentId, results.customerEmail?.id || null, results.adminEmail?.id || null, subscription.id]
+      );
+    } catch (e) {
+      console.warn('[Subscription Email] Idempotency record error:', e.message);
+    }
+  }
+
+  console.log('[Subscription Email Dispatch Result]', {
+    subId: subscription.id,
+    paymentId,
+    customerMsgId: results.customerEmail?.id || (results.customerEmail?.skipped ? 'SKIPPED' : 'FAILED'),
+    adminMsgId: results.adminEmail?.id || (results.adminEmail?.skipped ? 'SKIPPED' : 'FAILED')
+  });
+
+  const customerFailed = results.customerEmail && !results.customerEmail.success && !results.customerEmail.skipped;
+  return { success: !customerFailed, results };
 }
 
 /**

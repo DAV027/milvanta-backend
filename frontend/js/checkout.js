@@ -811,39 +811,52 @@
       existingSubs.unshift(subItem);
 
       // Persist directly into PostgreSQL customer_subscriptions table
-      try {
-        await api('/api/v1/subscriptions', {
-          method: 'POST',
-          body: JSON.stringify({
-            productId: Number(item.id) === 102 ? 2 : 1,
-            productName: subItem.product,
-            imageUrl: subItem.image,
-            frequency: subItem.frequency,
-            timeSlot: subItem.timeSlot,
-            quantity: subItem.quantity,
-            quantityNum: 1,
-            costPerDayPaise: dailyRate * 100,
-            planType: subItem.planType,
-            durationLabel: subItem.durationLabel,
-            totalAmountPaise: totalPlanAmount * 100,
-            notes: {
-              subscriptionId: subId,
+      // If it's a continuous plan, the Razorpay checkout and verify endpoint already created and activated it.
+      // Only call POST /api/v1/subscriptions for custom-days one-time plans to avoid duplicate subscriptions.
+      if (!isContinuous) {
+        try {
+          await api('/api/v1/subscriptions', {
+            method: 'POST',
+            body: JSON.stringify({
+              productId: Number(item.id) === 102 ? 2 : 1,
+              productName: subItem.product,
+              imageUrl: subItem.image,
+              frequency: subItem.frequency,
+              timeSlot: subItem.timeSlot,
+              quantity: subItem.quantity,
+              quantityNum: 1,
+              costPerDayPaise: dailyRate * 100,
               planType: subItem.planType,
               durationLabel: subItem.durationLabel,
-              days: days,
-              dailyRate: dailyRate,
-              subtotalPaise: totalPlanAmount * 100,
-              deliveryFeePaise: deliveryFee * 100,
-              totalPaidPaise: totalAmountPaid * 100,
-              paymentId: paymentInfo.paymentId || ''
-            },
-            status: 'active'
-          })
-        });
-      } catch (dbErr) {
-        console.warn('Backend subscription PostgreSQL sync notice:', dbErr.message);
+              totalAmountPaise: totalPlanAmount * 100,
+              notes: {
+                subscriptionId: subId,
+                planType: subItem.planType,
+                durationLabel: subItem.durationLabel,
+                days: days,
+                dailyRate: dailyRate,
+                subtotalPaise: totalPlanAmount * 100,
+                deliveryFeePaise: deliveryFee * 100,
+                totalPaidPaise: totalAmountPaid * 100,
+                paymentId: paymentInfo.paymentId || ''
+              },
+              status: 'active'
+            })
+          });
+        } catch (dbErr) {
+          console.warn('Backend subscription PostgreSQL sync notice:', dbErr.message);
+        }
       }
     }
+
+    // Refresh authoritative subscriptions from backend if available
+    try {
+      const serverSubs = await api('/api/v1/subscriptions');
+      if (serverSubs && Array.isArray(serverSubs.subscriptions) && serverSubs.subscriptions.length > 0) {
+        localStorage.setItem('milvanta-subscriptions', JSON.stringify(serverSubs.subscriptions));
+        return;
+      }
+    } catch {}
 
     try {
       localStorage.setItem('milvanta-subscriptions', JSON.stringify(existingSubs));

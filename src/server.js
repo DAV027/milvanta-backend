@@ -287,6 +287,7 @@ const publicUser = (u) => ({
   sms_notifications_enabled: u.sms_notifications_enabled !== false,
   is_admin: Boolean(u.is_admin)
 });
+const isPhoneVerificationMandatory = () => process.env.MANDATORY_PHONE_VERIFICATION === 'true';
 const signToken = (u) => app.jwt.sign({ sub: String(u.id), email: u.email, jti: crypto.randomUUID() });
 const digest = (value) => crypto.createHash('sha256').update(value).digest('hex');
 async function issueToken(user) {
@@ -439,7 +440,7 @@ app.post('/api/v1/auth/signup', {
   schema: {
     body: {
       type: 'object',
-      required: ['name', 'email', 'password'],
+      required: ['name', 'email', 'phone', 'password'],
       additionalProperties: false,
       properties: {
         name: { type: 'string', minLength: 2, maxLength: 100 },
@@ -455,15 +456,22 @@ app.post('/api/v1/auth/signup', {
   const email = request.body.email.trim().toLowerCase();
   const nameClean = name.trim();
   if (nameClean.length < 2) return reply.code(400).send({ error: 'invalid_name' });
+
+  const normalizedPhone = normalizeIndianPhoneNumber(phone);
+  if (!normalizedPhone) {
+    return reply.code(400).send({ error: 'invalid_phone_number', message: 'A valid 10-digit Indian mobile number is required.' });
+  }
+  const cleanPhone = normalizedPhone.replace('+91', '');
+
   const [passwordSalt, passwordDigest] = (await hashPassword(password)).split(':');
 
   let user;
   try {
     const { rows } = await pool.query(
       `INSERT INTO customers (full_name, email, phone, password_salt, password_hash, email_verified)
-       VALUES ($1, $2, $3, $4, $5, TRUE)
-       RETURNING id, full_name, email, phone`,
-      [nameClean, email, phone || null, passwordSalt, passwordDigest]
+       VALUES ($1, $2, $3, $4, $5, FALSE)
+       RETURNING id, full_name, email, phone, phone_verified_at, email_verified`,
+      [nameClean, email, cleanPhone, passwordSalt, passwordDigest]
     );
     user = rows[0];
   } catch (error) {
@@ -750,7 +758,7 @@ app.post('/api/v1/auth/phone/send-otp', {
   });
 
   if (!result.success) {
-    const code = result.error === 'cooldown_active' ? 429 : 400;
+    const code = result.statusCode || (result.error === 'cooldown_active' ? 429 : 400);
     return reply.code(code).send(result);
   }
 
@@ -789,7 +797,7 @@ app.post('/api/v1/auth/phone/verify-otp', {
   });
 
   if (!result.verified) {
-    const status = result.error === 'max_attempts_exceeded' ? 429 : 400;
+    const status = result.statusCode || (result.error === 'max_attempts_exceeded' ? 429 : 400);
     return reply.code(status).send(result);
   }
 
@@ -975,6 +983,12 @@ app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reques
 
 app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  if (isPhoneVerificationMandatory() && !request.customer?.phone_verified_at && !request.isAdmin) {
+    return reply.code(403).send({
+      error: 'phone_verification_required',
+      message: 'Mobile number verification is required before starting a subscription. Please verify your phone number in your profile.'
+    });
+  }
   const {
     productId,
     productName,
@@ -1171,6 +1185,13 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   }
   if (!pool) {
     return reply.code(503).send({ error: 'database_not_configured' });
+  }
+
+  if (isPhoneVerificationMandatory() && !request.customer?.phone_verified_at) {
+    return reply.code(403).send({
+      error: 'phone_verification_required',
+      message: 'Mobile number verification is required before starting a subscription. Please verify your phone number in your profile.'
+    });
   }
 
   const {
@@ -2365,6 +2386,12 @@ app.post('/api/v1/orders', {
   config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
 }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  if (isPhoneVerificationMandatory() && !request.customer?.phone_verified_at) {
+    return reply.code(403).send({
+      error: 'phone_verification_required',
+      message: 'Mobile number verification is required before placing orders. Please verify your phone number in your profile.'
+    });
+  }
   const address = safeAddress(request.body?.address);
   const items = request.body?.items;
   if (!address || !Array.isArray(items) || items.length < 1 || items.length > 50) return reply.code(400).send({ error: 'invalid_checkout' });

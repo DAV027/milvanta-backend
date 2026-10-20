@@ -2201,6 +2201,7 @@ function setAccountMode(mode) {
 
   // Normal Sign-In or Register
   $('#forgotPasswordContainer')?.classList.add('hidden');
+  $('#phoneOtpContainer')?.classList.add('hidden');
   $('#accountForm')?.classList.remove('hidden');
   $('#accountSwitch')?.classList.remove('hidden');
   $('#forgotPasswordLinkWrap')?.classList.toggle('hidden', registering);
@@ -2213,12 +2214,84 @@ function setAccountMode(mode) {
     field.classList.toggle('hidden', !registering);
     const input = field.querySelector('input');
     if (input) {
-      if (input.name === 'name' || input.name === 'confirmPassword') {
+      if (input.name === 'name' || input.name === 'confirmPassword' || input.name === 'phone') {
         input.required = registering;
       }
     }
   });
   $('#accountMessage').textContent = '';
+}
+
+let phoneOtpCooldownTimer = null;
+let pendingPhoneForVerification = '';
+
+function startPhoneOtpCooldown(seconds = 60) {
+  if (phoneOtpCooldownTimer) clearInterval(phoneOtpCooldownTimer);
+  const timerEl = $('#phoneOtpTimer');
+  const resendBtn = $('#btnResendPhoneOtp');
+  if (resendBtn) resendBtn.disabled = true;
+  let remaining = seconds;
+  if (timerEl) timerEl.textContent = `Resend code in ${remaining}s`;
+  phoneOtpCooldownTimer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(phoneOtpCooldownTimer);
+      phoneOtpCooldownTimer = null;
+      if (timerEl) timerEl.textContent = 'Did not receive code?';
+      if (resendBtn) resendBtn.disabled = false;
+    } else {
+      if (timerEl) timerEl.textContent = `Resend code in ${remaining}s`;
+    }
+  }, 1000);
+}
+
+async function startPhoneOtpVerification(phone) {
+  pendingPhoneForVerification = (phone || '').replace('+91', '').trim();
+  const otpContainer = $('#phoneOtpContainer');
+  const accountForm = $('#accountForm');
+  const accountSwitch = $('#accountSwitch');
+  const forgotContainer = $('#forgotPasswordContainer');
+  const descEl = $('#phoneOtpDesc');
+  const noticeEl = $('#phoneOtpUnavailableNotice');
+  const otpForm = $('#phoneOtpForm');
+
+  $('#accountModal')?.classList.remove('hidden');
+  $('#accountModal')?.setAttribute('aria-hidden', 'false');
+  accountForm?.classList.add('hidden');
+  accountSwitch?.classList.add('hidden');
+  forgotContainer?.classList.add('hidden');
+  otpContainer?.classList.remove('hidden');
+
+  $('#accountTitle').textContent = 'Verify Mobile Number';
+  $('#accountMessage').textContent = '';
+
+  if (descEl) {
+    descEl.innerHTML = `We sent a verification code to <strong>+91 ${escapeHtml(pendingPhoneForVerification)}</strong>.`;
+  }
+
+  // Attempt to send OTP via backend
+  try {
+    const res = await apiRequest('/api/v1/auth/phone/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ phone: pendingPhoneForVerification })
+    });
+    if (res && res.success) {
+      noticeEl?.classList.add('hidden');
+      otpForm?.classList.remove('hidden');
+      startPhoneOtpCooldown(res.cooldownSeconds || 60);
+      setTimeout(() => $('#phoneOtpInput')?.focus(), 100);
+    } else {
+      throw new Error(res?.message || 'Unable to send OTP');
+    }
+  } catch (err) {
+    console.warn('send-otp notice:', err.message);
+    // If Twilio service is unconfigured (503) or unavailable
+    if (err.message.includes('unavailable') || err.message.includes('pending configuration') || err.message.includes('503')) {
+      noticeEl?.classList.remove('hidden');
+    } else {
+      $('#accountMessage').textContent = err.message;
+    }
+  }
 }
 
 function openAccount() {
@@ -2227,6 +2300,7 @@ function openAccount() {
   $('#accountForm')?.classList.toggle('hidden', Boolean(state.customer));
   $('#accountSwitch')?.classList.toggle('hidden', Boolean(state.customer));
   $('#forgotPasswordContainer')?.classList.add('hidden');
+  $('#phoneOtpContainer')?.classList.add('hidden');
   $('#accountProfile')?.classList.toggle('hidden', !state.customer);
 
   if (state.customer) {
@@ -2242,6 +2316,11 @@ function openAccount() {
 function closeAccount() {
   $('#accountModal')?.classList.add('hidden');
   $('#accountModal')?.setAttribute('aria-hidden', 'true');
+  $('#phoneOtpContainer')?.classList.add('hidden');
+  if (phoneOtpCooldownTimer) {
+    clearInterval(phoneOtpCooldownTimer);
+    phoneOtpCooldownTimer = null;
+  }
 }
 
 function switchAccountTab(tab) {
@@ -2571,7 +2650,21 @@ function updateAccountButton() {
     const profileEmail = $('#profileEmail');
     if (profileAvatarLarge) profileAvatarLarge.textContent = initial;
     if (profileFullName) profileFullName.textContent = fullName;
-    if (profilePhone) profilePhone.textContent = phone || 'Not provided';
+    const isPhoneVerified = Boolean(state.customer.phone_verified || state.customer.phone_verified_at);
+    if (profilePhone) {
+      if (phone) {
+        const badge = isPhoneVerified
+          ? `<span class="badge" style="background:#ecfdf5; color:#047857; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:700; margin-left:6px;">✓ Verified</span>`
+          : `<span class="badge" style="background:#fef3c7; color:#92400e; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:700; margin-left:6px;">Unverified</span>
+             <button type="button" id="btnProfileVerifyPhone" style="font-size:0.78rem; color:var(--primary); font-weight:700; margin-left:6px; text-decoration:underline; background:none; border:none; cursor:pointer;">Verify Phone →</button>`;
+        profilePhone.innerHTML = `+91 ${escapeHtml(phone)} ${badge}`;
+        $('#btnProfileVerifyPhone')?.addEventListener('click', () => {
+          startPhoneOtpVerification(phone);
+        });
+      } else {
+        profilePhone.textContent = 'Not provided';
+      }
+    }
     if (profileEmail) profileEmail.textContent = email;
   } else {
     btn?.classList.remove('is-logged-in', 'is-open');
@@ -3493,8 +3586,29 @@ document.addEventListener('DOMContentLoaded', () => {
         if (values.password !== values.confirmPassword) {
           throw new Error('Passwords do not match. Please re-enter identical passwords.');
         }
+        const phone = (values.phone || '').trim().replace('+91', '');
+        if (!/^[6-9]\d{9}$/.test(phone)) {
+          throw new Error('Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+        }
         const { confirmPassword, ...signupPayload } = values;
-        await apiRequest('/api/v1/auth/signup', { method: 'POST', body: JSON.stringify(signupPayload) });
+        signupPayload.phone = phone;
+        const res = await apiRequest('/api/v1/auth/signup', { method: 'POST', body: JSON.stringify(signupPayload) });
+        if (res?.token) {
+          setAuthToken(res.token);
+        }
+        state.customer = res.customer || null;
+        if (state.customer) {
+          try {
+            localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
+          } catch {}
+        }
+        $('#accountMessage').textContent = '';
+        updateAccountButton();
+        renderCart();
+
+        // Prompt phone OTP verification
+        startPhoneOtpVerification(phone);
+        return;
       } else {
         await apiRequest('/api/v1/auth/login', { method: 'POST', body: JSON.stringify(values) });
       }
@@ -3520,6 +3634,92 @@ document.addEventListener('DOMContentLoaded', () => {
       $('#accountMessage').textContent = err.message;
     } finally {
       btn.disabled = false;
+    }
+  });
+
+  // Phone OTP Verification Form
+  $('#phoneOtpForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#btnVerifyPhoneOtpSubmit');
+    const input = $('#phoneOtpInput');
+    const code = input?.value?.trim();
+    if (!code) return;
+
+    btn.disabled = true;
+    $('#accountMessage').textContent = 'Verifying code…';
+
+    try {
+      const res = await apiRequest('/api/v1/auth/phone/verify-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone: pendingPhoneForVerification, code })
+      });
+      if (res && res.verified) {
+        if (state.customer) {
+          state.customer.phone_verified = true;
+          state.customer.phone_verified_at = new Date().toISOString();
+          try {
+            localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
+          } catch {}
+        }
+        $('#accountMessage').textContent = '';
+        showStoreToast('✓ Mobile number verified successfully!');
+        if (phoneOtpCooldownTimer) clearInterval(phoneOtpCooldownTimer);
+        closeAccount();
+        updateAccountButton();
+        if (sessionStorage.getItem('milvanta-pending-checkout') === 'true') {
+          sessionStorage.removeItem('milvanta-pending-checkout');
+          window.location.href = 'checkout.html';
+          return;
+        }
+      } else {
+        throw new Error(res?.message || 'Invalid or expired verification code.');
+      }
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('#btnResendPhoneOtp')?.addEventListener('click', async () => {
+    if (!pendingPhoneForVerification) return;
+    try {
+      $('#accountMessage').textContent = 'Resending verification code…';
+      const res = await apiRequest('/api/v1/auth/phone/send-otp', {
+        method: 'POST',
+        body: JSON.stringify({ phone: pendingPhoneForVerification })
+      });
+      if (res && res.success) {
+        startPhoneOtpCooldown(res.cooldownSeconds || 60);
+        $('#accountMessage').textContent = '✓ Verification code resent successfully.';
+      } else {
+        $('#accountMessage').textContent = res?.message || 'Could not resend OTP.';
+      }
+    } catch (err) {
+      $('#accountMessage').textContent = err.message;
+    }
+  });
+
+  $('#btnContinueFromOtp')?.addEventListener('click', () => {
+    if (phoneOtpCooldownTimer) clearInterval(phoneOtpCooldownTimer);
+    closeAccount();
+    updateAccountButton();
+    if (sessionStorage.getItem('milvanta-pending-checkout') === 'true') {
+      sessionStorage.removeItem('milvanta-pending-checkout');
+      window.location.href = 'checkout.html';
+      return;
+    }
+  });
+
+  $('#btnSkipPhoneOtp')?.addEventListener('click', () => {
+    if (phoneOtpCooldownTimer) clearInterval(phoneOtpCooldownTimer);
+    closeAccount();
+    updateAccountButton();
+    showStoreToast('You can verify your mobile number anytime in your profile.');
+    if (sessionStorage.getItem('milvanta-pending-checkout') === 'true') {
+      sessionStorage.removeItem('milvanta-pending-checkout');
+      window.location.href = 'checkout.html';
+      return;
     }
   });
 

@@ -159,13 +159,13 @@ export async function sendPhoneOtp({ phone, ip = '', customerId = null, pool = n
     }
   }
 
-  // 3. In production, never simulate success if credentials are not configured
-  if (process.env.NODE_ENV === 'production') {
+  // 3. In non-test environments, never simulate success if credentials are not configured
+  if (process.env.NODE_ENV !== 'test') {
     return {
       success: false,
       error: 'sms_service_unavailable',
       statusCode: 503,
-      message: 'SMS verification service is currently unavailable. Please configure Twilio credentials or contact support.'
+      message: 'SMS verification service is currently unavailable. Twilio Verify service is pending configuration.'
     };
   }
 
@@ -234,13 +234,13 @@ export async function verifyPhoneOtp({ phone, code, customerId = null, pool = nu
     }
   }
 
-  // In production, never simulate verification without configured service
-  if (process.env.NODE_ENV === 'production') {
+  // In non-test environments, never simulate verification without configured service
+  if (process.env.NODE_ENV !== 'test') {
     return {
       verified: false,
       error: 'sms_service_unavailable',
       statusCode: 503,
-      message: 'SMS verification service is currently unavailable in production.'
+      message: 'SMS verification service is currently unavailable. Twilio Verify service is pending configuration.'
     };
   }
 

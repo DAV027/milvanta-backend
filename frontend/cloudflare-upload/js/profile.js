@@ -47,7 +47,9 @@
     customer: null,
     orders: [],
     addresses: [],
-    subscriptions: []
+    subscriptions: [],
+    selectedSubId: null,
+    calendarData: null
   };
 
   // Helper API fetch
@@ -230,7 +232,7 @@
     if ($('#profileDetailName')) $('#profileDetailName').textContent = state.customer.name;
     const phoneEl = $('#profileDetailPhone');
     if (phoneEl) {
-      const isVerified = Boolean(state.customer.phone_verified);
+      const isVerified = Boolean(state.customer.phone_verified || state.customer.phone_verified_at);
       const verifiedBadge = isVerified
         ? ' <span style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px;">✓ Verified</span>'
         : ' <button type="button" id="btnVerifyPhoneOtp" style="background:#e0f2fe; color:#0369a1; border:none; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px; cursor:pointer;">Verify Mobile via OTP →</button>';
@@ -267,11 +269,15 @@
       });
 
       if (!sendRes?.success) {
-        alert(sendRes?.message || 'Failed to send OTP. Please try again.');
+        if (sendRes?.error === 'sms_service_unavailable' || sendRes?.message?.includes('pending configuration')) {
+          alert('Mobile OTP Service Notice:\nTwilio SMS verification is currently pending configuration. Your account remains active and usable.');
+        } else {
+          alert(sendRes?.message || 'Failed to send OTP. Please try again.');
+        }
         return;
       }
 
-      const code = prompt(`Enter the 6-digit verification code sent to +91 ${phone}:`);
+      const code = prompt(`Enter the verification code sent to +91 ${phone}:`);
       if (!code || !code.trim()) return;
 
       const verifyRes = await apiRequest('/api/v1/auth/phone/verify-otp', {
@@ -280,14 +286,24 @@
       });
 
       if (verifyRes?.verified) {
-        if (state.customer) state.customer.phone_verified = true;
+        if (state.customer) {
+          state.customer.phone_verified = true;
+          state.customer.phone_verified_at = new Date().toISOString();
+          try {
+            localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
+          } catch {}
+        }
         renderUserInfo();
         showToast('✓ Mobile number verified successfully with Milvanta!');
       } else {
         alert(verifyRes?.message || 'Incorrect verification code. Please try again.');
       }
     } catch (err) {
-      alert('Verification request failed. Please check network and try again.');
+      if (err.message?.includes('unavailable') || err.message?.includes('pending configuration') || err.message?.includes('503')) {
+        alert('Mobile OTP Service Notice:\nTwilio SMS verification is currently pending configuration. Your account remains active and usable.');
+      } else {
+        alert(err.message || 'Verification request failed. Please check network and try again.');
+      }
     }
   }
 
@@ -1207,7 +1223,7 @@
   }
 
   // Tomorrow's Drop Quick-Skip Banner
-  function renderTomorrowStrip() {
+  async function renderTomorrowStrip() {
     const container = $('#subTomorrowStripContainer');
     if (!container) return;
 
@@ -1231,11 +1247,18 @@
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const formattedDate = `${dayNames[tomorrow.getDay()]}, ${tomDate} ${monthNames[tomMonth]} ${tomYear}`;
 
-    const isTomPaused = pausedDates.includes(tomKey);
+    let isTomSkipped = false;
+    if (state.calendarData && Array.isArray(state.calendarData.days)) {
+      const tomDayData = state.calendarData.days.find((d) => d.date === tomKey);
+      if (tomDayData && (tomDayData.status === 'skipped' || tomDayData.status === 'vacation' || tomDayData.status === 'paused')) {
+        isTomSkipped = true;
+      }
+    }
+
     const subSummary = activeSubs.map((s) => `${s.quantity || '1 Litre'} ${s.product}`).join(' + ');
 
     container.innerHTML = `
-      <div class="sub-tomorrow-strip ${isTomPaused ? 'is-paused' : 'is-scheduled'}">
+      <div class="sub-tomorrow-strip ${isTomSkipped ? 'is-paused' : 'is-scheduled'}">
         <div class="sub-tomorrow-main">
           <div class="sub-tomorrow-lead">
             <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
@@ -1243,67 +1266,53 @@
             <span class="sub-tomorrow-date">${formattedDate}</span>
           </div>
           <div class="sub-tomorrow-meta">
-            <span class="sub-tomorrow-status-tag ${isTomPaused ? 'paused' : 'scheduled'}">
-              ${isTomPaused ? '⏸ Paused (Will not deliver tomorrow)' : '✓ Scheduled (6:00 AM – 7:00 AM)'}
+            <span class="sub-tomorrow-status-tag ${isTomSkipped ? 'paused' : 'scheduled'}">
+              ${isTomSkipped ? '⏸ Paused (Will not deliver tomorrow)' : '✓ Scheduled (6:00 AM – 7:00 AM)'}
             </span>
             <span class="sub-tomorrow-items-text">${escapeHtml(subSummary)}</span>
           </div>
         </div>
         <div class="sub-tomorrow-cta">
-          <button type="button" class="btn-tomorrow-toggle-action ${isTomPaused ? 'resume' : 'skip'}" id="btnToggleTomorrowDrop" data-tom-key="${tomKey}">
-            ${isTomPaused ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
+          <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" id="btnToggleTomorrowDrop" data-tom-key="${tomKey}">
+            ${isTomSkipped ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
           </button>
         </div>
       </div>
     `;
 
     $('#btnToggleTomorrowDrop')?.addEventListener('click', async () => {
-      const activeSubs = state.subscriptions.filter(s => s.status === 'active');
-      if (pausedDates.includes(tomKey)) {
-        pausedDates = pausedDates.filter((k) => k !== tomKey);
-        for (const sub of activeSubs) {
-          try {
+      const btn = $('#btnToggleTomorrowDrop');
+      if (btn) btn.disabled = true;
+      const targetSubs = state.subscriptions.filter(s => s.status === 'active');
+      try {
+        if (isTomSkipped) {
+          for (const sub of targetSubs) {
             await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
-          } catch (err) {
-            console.warn('API unskip notice:', err);
           }
-        }
-        showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
-      } else {
-        pausedDates.push(tomKey);
-        for (const sub of activeSubs) {
-          try {
+          showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
+        } else {
+          for (const sub of targetSubs) {
             await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
               method: 'POST',
-              body: JSON.stringify({ skipDate: tomKey, reason: 'Skipped tomorrow' })
+              body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
             });
-          } catch (err) {
-            console.warn('API skip notice:', err);
           }
+          showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
         }
-        showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
+        await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        renderTomorrowStrip();
+      } catch (err) {
+        showToast(err.message || 'Failed to update tomorrow delivery status.');
       }
-      try {
-        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
-      } catch {}
-      renderTomorrowStrip();
-      renderMonthlyDeliveryCalendar();
     });
   }
 
-  // Comprehensive One-Month Morning Delivery Calendar
-  let currentCalYear = 2026;
-  let currentCalMonth = 9; // 0-indexed: 9 = October
-  let selectedCalDate = 18; // Tomorrow
-  let pausedDates = [];
-  try {
-    pausedDates = JSON.parse(localStorage.getItem('milvanta-paused-dates') || '[]');
-    if (!Array.isArray(pausedDates)) pausedDates = [];
-  } catch {
-    pausedDates = [];
-  }
+  // Comprehensive Authoritative One-Month Morning Delivery Calendar
+  let currentCalYear = new Date().getFullYear();
+  let currentCalMonth = new Date().getMonth();
+  let selectedCalDate = new Date().getDate();
 
-  function renderMonthlyDeliveryCalendar(year = currentCalYear, month = currentCalMonth) {
+  async function renderMonthlyDeliveryCalendar(year = currentCalYear, month = currentCalMonth) {
     currentCalYear = year;
     currentCalMonth = month;
 
@@ -1322,19 +1331,72 @@
       label.textContent = `${monthNames[month]} ${year}`;
     }
 
+    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
+    const validSubs = activeSubs.length > 0 ? activeSubs : state.subscriptions;
+
+    if (!validSubs.length) {
+      grid.innerHTML = `<div style="grid-column: 1 / -1; padding: 32px 16px; text-align: center; color: #64748b;">No active milk subscription found. Start a subscription above to view your delivery calendar!</div>`;
+      if (statsBar) statsBar.innerHTML = '';
+      $('#calSelectedDayCard')?.classList.add('hidden');
+      return;
+    }
+
+    if (!state.selectedSubId || !validSubs.some((s) => String(s.id) === String(state.selectedSubId))) {
+      state.selectedSubId = validSubs[0].id;
+    }
+
+    // Multi-subscription switcher UI
+    let selectorEl = $('#subCalendarSelector');
+    if (!selectorEl) {
+      selectorEl = document.createElement('div');
+      selectorEl.id = 'subCalendarSelector';
+      selectorEl.className = 'sub-calendar-selector';
+      selectorEl.style.cssText = 'display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;';
+      grid.parentElement?.insertBefore(selectorEl, grid);
+    }
+
+    if (validSubs.length > 1) {
+      selectorEl.style.display = 'flex';
+      selectorEl.innerHTML = validSubs.map((s) => {
+        const isSel = String(s.id) === String(state.selectedSubId);
+        return `<button type="button" class="sub-tab-pill ${isSel ? 'active' : ''}" data-select-cal-sub="${s.id}" style="padding:6px 14px; border-radius:20px; font-size:0.82rem; font-weight:700; cursor:pointer; border:1px solid ${isSel ? '#0284c7' : '#cbd5e1'}; background:${isSel ? '#e0f2fe' : '#ffffff'}; color:${isSel ? '#0369a1' : '#475569'};">
+          🥛 ${escapeHtml(s.product || s.productName || 'Milk Plan')} (${escapeHtml(s.quantity || '500 ml')})
+        </button>`;
+      }).join('');
+
+      selectorEl.querySelectorAll('[data-select-cal-sub]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          state.selectedSubId = btn.dataset.selectCalSub;
+          renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        });
+      });
+    } else if (selectorEl) {
+      selectorEl.style.display = 'none';
+    }
+
+    grid.innerHTML = `<div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: #64748b;">Loading authoritative delivery calendar…</div>`;
+
+    let calDays = [];
+    let calSubInfo = null;
+
+    try {
+      const data = await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/calendar?year=${year}&month=${month}`);
+      if (data && Array.isArray(data.days)) {
+        calDays = data.days;
+        calSubInfo = data;
+        state.calendarData = data;
+      }
+    } catch (err) {
+      console.warn('Calendar backend fetch failed:', err.message);
+    }
+
     const firstDayIndex = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const prevMonthDays = new Date(year, month, 0).getDate();
 
-    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
-    const hasActiveSubs = activeSubs.length > 0;
     let scheduledCount = 0;
     let deliveredCount = 0;
     let pausedCount = 0;
-
-    const now = new Date();
-    const isCurrentCalendarMonth = (now.getFullYear() === year && now.getMonth() === month);
-    const todayDate = now.getDate();
 
     let gridHtml = weekdays.map((day) => `<div class="month-cal-weekday">${day}</div>`).join('');
 
@@ -1349,41 +1411,45 @@
       `;
     }
 
+    const dayMap = new Map(calDays.map((d) => [d.day, d]));
+
     // Days of current month
     for (let day = 1; day <= daysInMonth; day++) {
-      const isToday = isCurrentCalendarMonth && day === todayDate;
-      const isPast = isCurrentCalendarMonth ? day < todayDate : (year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth()));
-      const isTomorrow = isCurrentCalendarMonth && day === todayDate + 1;
+      const dayData = dayMap.get(day);
       const isSelected = day === selectedCalDate;
-
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const isDatePaused = pausedDates.includes(dateKey);
 
       let badgeHtml = '';
-      let statusType = 'none';
+      let statusType = dayData ? dayData.status : 'scheduled';
+      const isToday = dayData ? dayData.isToday : false;
 
-      if (!hasActiveSubs) {
-        badgeHtml = `<span class="month-cal-day-badge badge-none">No Drop</span>`;
-      } else if (isDatePaused) {
-        pausedCount++;
-        statusType = 'paused';
-        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Paused</span>`;
-      } else if (isPast) {
+      if (statusType === 'delivered') {
         deliveredCount++;
-        statusType = 'delivered';
         badgeHtml = `<span class="month-cal-day-badge badge-delivered">✔ Delivered</span>`;
-      } else if (isToday) {
+      } else if (statusType === 'skipped') {
+        pausedCount++;
+        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Skipped</span>`;
+      } else if (statusType === 'vacation') {
+        pausedCount++;
+        badgeHtml = `<span class="month-cal-day-badge badge-paused" style="background:#fef2f2; color:#b91c1c;">✈️ Vacation</span>`;
+      } else if (statusType === 'paused') {
+        pausedCount++;
+        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Paused</span>`;
+      } else if (statusType === 'not_started') {
+        badgeHtml = `<span class="month-cal-day-badge badge-none">Not Started</span>`;
+      } else if (statusType === 'cancelled') {
+        badgeHtml = `<span class="month-cal-day-badge badge-none">Cancelled</span>`;
+      } else if (statusType === 'past') {
+        badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
+      } else if (statusType === 'scheduled') {
         scheduledCount++;
-        statusType = 'today';
-        badgeHtml = `<span class="month-cal-day-badge badge-today">🚚 Today</span>`;
-      } else if (isTomorrow) {
-        scheduledCount++;
-        statusType = 'tomorrow';
-        badgeHtml = `<span class="month-cal-day-badge badge-scheduled" style="background:#dbeafe; color:#1d4ed8; font-weight:800;">🥛 Tomorrow</span>`;
+        if (isToday) {
+          badgeHtml = `<span class="month-cal-day-badge badge-today">🚚 Today</span>`;
+        } else {
+          badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
+        }
       } else {
-        scheduledCount++;
-        statusType = 'scheduled';
-        badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
+        badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
       }
 
       gridHtml += `
@@ -1403,7 +1469,16 @@
         selectedCalDate = d;
         grid.querySelectorAll('.month-cal-day-cell').forEach((c) => c.classList.remove('is-selected'));
         cell.classList.add('is-selected');
-        renderSelectedDayInspector(year, month, d, cell.dataset.dateKey, cell.dataset.status);
+        const selectedDayData = dayMap.get(d) || {
+          date: cell.dataset.dateKey,
+          day: d,
+          status: cell.dataset.status,
+          detail: '',
+          isEditable: true,
+          productName: calSubInfo?.productName || 'Milk Plan',
+          quantity: calSubInfo?.quantity || '500 ml'
+        };
+        renderSelectedDayInspector(year, month, d, cell.dataset.dateKey, selectedDayData);
       });
     });
 
@@ -1415,18 +1490,26 @@
         </div>
         <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
         <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
-        ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused</span>` : ''}
-        <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
+        ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused/Skipped</span>` : ''}
+        <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM IST</strong></span>
       `;
     }
 
     const selectedKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(selectedCalDate).padStart(2, '0')}`;
-    const selectedCell = grid.querySelector(`[data-day="${selectedCalDate}"]`);
-    const currentStatus = selectedCell ? selectedCell.dataset.status : 'scheduled';
-    renderSelectedDayInspector(year, month, selectedCalDate, selectedKey, currentStatus);
+    const initialDayData = dayMap.get(selectedCalDate) || {
+      date: selectedKey,
+      day: selectedCalDate,
+      status: 'scheduled',
+      detail: '',
+      isEditable: true,
+      productName: calSubInfo?.productName || 'Milk Plan',
+      quantity: calSubInfo?.quantity || '500 ml'
+    };
+    $('#calSelectedDayCard')?.classList.remove('hidden');
+    renderSelectedDayInspector(year, month, selectedCalDate, selectedKey, initialDayData);
   }
 
-  function renderSelectedDayInspector(year, month, day, dateKey, status) {
+  function renderSelectedDayInspector(year, month, day, dateKey, dayData) {
     const inspector = $('#calSelectedDayCard');
     if (!inspector) return;
 
@@ -1438,38 +1521,60 @@
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dObj.getDay()];
     const formattedDate = `${dayName}, ${day} ${monthNames[month]} ${year}`;
 
-    const isDatePaused = pausedDates.includes(dateKey);
-    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
-    const subNames = activeSubs.map((s) => `${s.quantity || '500 ml'} ${s.product}`).join(' + ') || 'Pure Farm Fresh Milk (500 ml)';
+    const status = dayData?.status || 'scheduled';
+    const isEditable = Boolean(dayData?.isEditable);
+    const productName = dayData?.productName || 'Pure Farm Fresh Milk';
+    const quantity = dayData?.quantity || '500 ml';
 
     let statusBadge = '';
     let actionBtn = '';
 
-    if (isDatePaused) {
-      statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏸ Delivery Paused For This Day</span>`;
-      actionBtn = `<button type="button" class="btn-resume-day" id="btnToggleDayDelivery" style="background:#059669; color:#fff; border:none; border-radius:8px; padding:8px 16px; font-weight:700; cursor:pointer;">▶ Resume Delivery For This Day</button>`;
+    if (status === 'skipped') {
+      statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏸ Delivery Skipped</span>`;
+      if (isEditable) {
+        actionBtn = `<button type="button" class="btn-resume-day" id="btnToggleDayDelivery" style="background:#059669; color:#fff; border:none; border-radius:8px; padding:8px 16px; font-weight:700; cursor:pointer;">▶ Resume Delivery For This Day</button>`;
+      } else {
+        actionBtn = `<span style="font-size:0.78rem; color:#dc2626; font-weight:600;">⚠️ Cutoff passed (8:00 PM IST)</span>`;
+      }
+    } else if (status === 'vacation') {
+      statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✈️ Vacation Mode</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Part of planned vacation pause</span>`;
     } else if (status === 'delivered') {
-      statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered at 6:15 AM</span>`;
-      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Delivered by Hafeezpet Route Van</span>`;
+      statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#15803d; font-weight:600;">${escapeHtml(dayData.detail || 'Delivered to doorstep')}</span>`;
+    } else if (status === 'paused') {
+      statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏸ Subscription Paused</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Resume subscription to reactivate daily drops</span>`;
+    } else if (status === 'not_started') {
+      statusBadge = `<span style="background:#f1f5f9; color:#475569; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Starts Later</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">${escapeHtml(dayData.detail || 'Before start date')}</span>`;
+    } else if (status === 'cancelled') {
+      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Cancelled</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Subscription cancelled</span>`;
+    } else if (status === 'past') {
+      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Past Date</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">No past delivery recorded</span>`;
     } else {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
-      actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip / Pause This Day</button>`;
+      if (isEditable) {
+        actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip Delivery For This Day</button>`;
+      } else {
+        actionBtn = `<span style="font-size:0.78rem; color:#dc2626; font-weight:600;">⚠️ Cutoff passed (8:00 PM IST)</span>`;
+      }
     }
-
-    const planTagHtml = `<span class="order-type-badge badge-sub-continuous" style="font-size:0.72rem; padding:2px 8px;">🔄 Continuous Monthly Plan</span>`;
 
     inspector.innerHTML = `
       <div style="flex: 1; min-width: 260px;">
         <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap;">
           <h5 style="margin: 0; font-size: 1rem; color: #0f172a; font-weight: 700;">${formattedDate}</h5>
           ${statusBadge}
-          ${planTagHtml}
+          <span class="order-type-badge badge-sub-continuous" style="font-size:0.72rem; padding:2px 8px;">🔄 Continuous Autopay</span>
         </div>
         <div style="font-size: 0.88rem; color: #334155; margin-bottom: 4px;">
-          Scheduled: <strong>${escapeHtml(subNames)}</strong>
+          Product: <strong>${escapeHtml(quantity)} ${escapeHtml(productName)}</strong>
         </div>
         <div style="font-size: 0.82rem; color: #64748b; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
-          <span>⏰ Delivery Slot: <strong style="color:#0f172a;">6:00 AM – 7:00 AM</strong></span>
+          <span>⏰ Delivery Slot: <strong style="color:#0f172a;">6:00 AM – 7:00 AM IST</strong></span>
           <span>📍 Hub: <strong>Hafeezpet Cold-Chain Hub</strong></span>
         </div>
       </div>
@@ -1478,18 +1583,28 @@
       </div>
     `;
 
-    $('#btnToggleDayDelivery')?.addEventListener('click', () => {
-      if (pausedDates.includes(dateKey)) {
-        pausedDates = pausedDates.filter((k) => k !== dateKey);
-        showToast(`▶ Delivery resumed for ${formattedDate}!`);
-      } else {
-        pausedDates.push(dateKey);
-        showToast(`⏸ Delivery paused for ${formattedDate}. You will not receive milk on this date.`);
-      }
+    $('#btnToggleDayDelivery')?.addEventListener('click', async () => {
+      const toggleBtn = $('#btnToggleDayDelivery');
+      if (toggleBtn) toggleBtn.disabled = true;
+
       try {
-        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
-      } catch {}
-      renderMonthlyDeliveryCalendar(year, month);
+        if (status === 'skipped') {
+          await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/skip-date?skipDate=${dateKey}`, {
+            method: 'DELETE'
+          });
+          showToast(`▶ Delivery resumed for ${formattedDate}!`);
+        } else {
+          await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/skip-date`, {
+            method: 'POST',
+            body: JSON.stringify({ skipDate: dateKey, reason: 'Customer single-day skip' })
+          });
+          showToast(`⏸ Delivery skipped for ${formattedDate}. You will not receive milk on this date.`);
+        }
+        await renderMonthlyDeliveryCalendar(year, month);
+        renderTomorrowStrip();
+      } catch (err) {
+        showToast(err.message || 'Action could not be completed.');
+      }
     });
   }
 
@@ -2484,46 +2599,32 @@
         }
       }
 
-      let cur = new Date(startDate);
-      let count = 0;
-      while (cur <= endDate) {
-        const key = formatYMD(cur);
-        if (!pausedDates.includes(key)) {
-          pausedDates.push(key);
-        }
-        count++;
-        cur = new Date(cur.getTime() + 24 * 3600 * 1000);
-      }
-
-      try {
-        localStorage.setItem('milvanta-paused-dates', JSON.stringify(pausedDates));
-      } catch {}
-
       const sStr = startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
       const eStr = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
       const resumeDate = new Date(endDate.getTime() + 24 * 3600 * 1000);
       const rStr = resumeDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 
       closeModal();
-      renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
-      showToast(`✈️ Vacation pause active from ${sStr} to ${eStr} (${count} mornings paused). Deliveries resume on ${rStr}!`);
+      await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+      renderTomorrowStrip();
+      showToast(`✈️ Vacation pause active from ${sStr} to ${eStr}. Deliveries resume on ${rStr}!`);
     });
 
-    // Clear all paused dates
-    clearBtn?.addEventListener('click', () => {
-      if (!pausedDates || pausedDates.length === 0) {
-        showToast('No dates are currently paused.');
+    // Clear all paused/vacation dates for current month
+    clearBtn?.addEventListener('click', async () => {
+      const activeSubs = state.subscriptions.filter(s => s.status === 'active');
+      if (confirm('Clear all paused dates and resume morning deliveries?')) {
+        for (const sub of activeSubs) {
+          try {
+            await apiRequest(`/api/v1/subscriptions/${sub.id}/resume`, { method: 'POST', body: JSON.stringify({}) });
+          } catch (err) {
+            console.warn('API resume notice:', err);
+          }
+        }
         closeModal();
-        return;
-      }
-      if (confirm('Clear all paused dates and resume morning deliveries for all days?')) {
-        pausedDates = [];
-        try {
-          localStorage.setItem('milvanta-paused-dates', JSON.stringify([]));
-        } catch {}
-        closeModal();
-        renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
-        showToast('✓ All paused dates cleared. Morning deliveries will arrive every day as scheduled!');
+        await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        renderTomorrowStrip();
+        showToast('✓ Morning deliveries resumed for all days!');
       }
     });
   }
