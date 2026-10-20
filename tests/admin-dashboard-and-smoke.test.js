@@ -224,9 +224,57 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       assert.ok(data.totalOrders >= 1);
       assert.ok(data.totalCustomers >= 2);
       assert.ok(data.totalSubscriptions >= 1);
-      assert.ok(data.totalRevenuePaise >= 155000);
-      assert.ok(data.subscriptionRevenuePaise >= 315000);
-      assert.ok(data.combinedRevenuePaise >= 470000);
+      assert.equal(data.orderRevenuePaise, 155000);
+      assert.equal(data.collectedSubscriptionRevenuePaise, 0);
+      assert.equal(data.activeSubscriptionContractValuePaise, 315000);
+      assert.equal(data.subscriptionRevenuePaise, 315000);
+      // Total Paid Revenue must strictly equal collected revenue (155000), NOT uncollected contracts (470000)
+      assert.equal(data.totalRevenuePaise, 155000, 'Total Paid Revenue must reflect money received only');
+      assert.equal(data.combinedRevenuePaise, 155000, 'Combined Revenue must NOT include uncollected contract commitments');
+    });
+
+    it('GET /api/v1/admin/stats: verifies revenue reporting accuracy when verified captured subscription payment exists', async () => {
+      // Seed an active multi-month subscription where only 1 monthly cycle was captured
+      const paidSubId = `sub_paid_cycle_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Buffalo Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '6 Months Contract',
+           1800000, $2, $3::jsonb
+         )`,
+        [
+          regularCustId,
+          paidSubId,
+          JSON.stringify({
+            subscriptionId: paidSubId,
+            authType: 'recurring_charge',
+            lastPaymentId: 'pay_sub_captured_kpi_test',
+            authAmountPaise: 300000, // ₹3,000 captured for first cycle
+            paidThroughDate: '2026-11-20',
+            startDate: '2026-10-21'
+          })
+        ]
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/stats',
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.payload);
+
+      assert.equal(data.orderRevenuePaise, 155000, 'Order revenue must reflect paid orders');
+      assert.equal(data.collectedSubscriptionRevenuePaise, 300000, 'Collected subscription revenue must reflect captured charges');
+      assert.equal(data.totalRevenuePaise, 455000, 'Total Paid Revenue must equal 155000 + 300000');
+      assert.equal(data.combinedRevenuePaise, 455000, 'Combined revenue must equal Total Paid Revenue');
+      assert.equal(data.activeSubscriptionContractValuePaise, 315000 + 1800000, 'Contract value must sum full commitments');
+      // Verify that uncollected contract commitment (₹15,000) is NOT added to Total Paid Revenue
+      assert.notEqual(data.totalRevenuePaise, 455000 + 1500000, 'Unpaid contract commitment must NEVER be included in Total Paid Revenue');
     });
 
     it('GET /api/v1/admin/orders: supports search, pagination and status filters', async () => {
@@ -371,6 +419,79 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       assert.equal(content.includes('ADMIN_API_KEY'), false, 'frontend must never contain ADMIN_API_KEY');
       assert.equal(content.includes('DATABASE_URL'), false, 'frontend must never contain DATABASE_URL');
       assert.equal(content.includes('test_admin_secret_key_12345'), false, 'frontend must never contain admin secret key');
+    });
+  });
+
+  // =========================================================================
+  // 5. Admin Dashboard Security: HTML Injection Prevention, Safe DOM & Session Storage
+  // =========================================================================
+  describe('5. Admin Dashboard Security: HTML Injection Prevention, Safe DOM & Session Storage', () => {
+    const adminPath = path.resolve('frontend/admin.html');
+    const htmlContent = fs.readFileSync(adminPath, 'utf8');
+
+    it('verifies frontend/admin.html has NO inline onclick attributes constructed from order or customer data', () => {
+      const inlineOnclickRegex = /onclick\s*=\s*["'][^"']*["']/gi;
+      const matches = htmlContent.match(inlineOnclickRegex) || [];
+      assert.equal(matches.length, 0, `Expected 0 inline onclick attributes, found: ${matches.join(', ')}`);
+    });
+
+    it('verifies frontend/admin.html does NOT use innerHTML for dynamic tables or error reporting', () => {
+      // Find any innerHTML assignments inside the script block
+      const scriptMatch = htmlContent.match(/<script>([\s\S]*?)<\/script>/i);
+      assert.ok(scriptMatch, 'script tag must exist');
+      const scriptCode = scriptMatch[1];
+      const innerHtmlRegex = /\.innerHTML\s*=/g;
+      const innerHtmlMatches = scriptCode.match(innerHtmlRegex) || [];
+      assert.equal(innerHtmlMatches.length, 0, 'No innerHTML assignments should exist in admin script');
+    });
+
+    it('verifies frontend/admin.html prefers sessionStorage for admin tokens and clears localStorage', () => {
+      assert.ok(
+        htmlContent.includes("sessionStorage.getItem('milvanta-admin-token')"),
+        'Must check sessionStorage for milvanta-admin-token'
+      );
+      assert.ok(
+        htmlContent.includes("sessionStorage.setItem('milvanta-admin-token'"),
+        'Must store token in sessionStorage on login'
+      );
+      assert.ok(
+        htmlContent.includes("localStorage.removeItem('milvanta-auth-token')"),
+        'Must remove admin token from persistent localStorage'
+      );
+    });
+
+    it('regression: safe DOM creation neutralizes hostile HTML and quotation-mark inputs', () => {
+      // Hostile customer, address, courier, tracking, and item payload
+      const hostileData = {
+        name: '<script>alert("xss-name")</script>',
+        email: 'attacker"><img src=x onerror=alert(1)>@evil.com',
+        phone: "'+1234567890' OR '1'='1",
+        house: '<img src=x onerror=alert("house")>',
+        street: '"><svg/onload=alert("street")>',
+        city: 'O\'Fallon "City"',
+        item: '<b onmouseover="alert(\'item\')">Dangerous Ghee</b>',
+        courier: 'Courier\'); alert("pwned"); //',
+        tracking: 'TRK"><script>alert("trk")</script>'
+      };
+
+      // Verify template uses safe DOM node creation
+      assert.ok(htmlContent.includes('document.createElement'), 'Must use document.createElement for safe DOM nodes');
+      assert.ok(htmlContent.includes('textContent ='), 'Must use textContent to prevent HTML execution');
+      assert.ok(htmlContent.includes('document.createTextNode'), 'Must use createTextNode for text elements');
+
+      // Verify that hostile values assigned to textContent are treated as literal text
+      const mockElem = { textContent: '' };
+      mockElem.textContent = hostileData.name;
+      assert.equal(mockElem.textContent, '<script>alert("xss-name")</script>');
+
+      mockElem.textContent = hostileData.courier;
+      assert.equal(mockElem.textContent, 'Courier\'); alert("pwned"); //');
+
+      // Verify KPI revenue label displays accurate non-revenue notice
+      assert.ok(
+        htmlContent.includes('Active Subscription Contract Value (not collected revenue)'),
+        'Must contain accurate contract value KPI label'
+      );
     });
   });
 });

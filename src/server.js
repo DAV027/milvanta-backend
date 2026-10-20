@@ -3346,22 +3346,37 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
         COUNT(*) FILTER (WHERE status = 'active') AS active_subscriptions,
         COUNT(*) FILTER (WHERE status = 'pending_authorization') AS pending_subscriptions,
         COUNT(*) FILTER (WHERE status = 'paused') AS paused_subscriptions,
-        COALESCE(SUM(total_amount_paise) FILTER (WHERE status = 'active'), 0) AS subscription_revenue_paise
+        COALESCE(SUM(total_amount_paise) FILTER (WHERE status = 'active'), 0) AS active_contract_value_paise,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN (notes->>'authType' = 'recurring_charge' OR notes->>'lastPaymentId' IS NOT NULL)
+               AND (notes->>'authAmountPaise') ~ '^[0-9]+$'
+              THEN (notes->>'authAmountPaise')::bigint
+              ELSE 0
+            END
+          ),
+          0
+        ) AS collected_subscription_revenue_paise
       FROM customer_subscriptions
     `)
   ]);
 
   const orderRevenue = Number(ordersSummary.rows[0].total_revenue_paise);
-  const subRevenue = Number(subSummary.rows[0].subscription_revenue_paise);
+  const activeContractValue = Number(subSummary.rows[0].active_contract_value_paise || 0);
+  const collectedSubRevenue = Number(subSummary.rows[0].collected_subscription_revenue_paise || 0);
+  const totalPaidRevenue = orderRevenue + collectedSubRevenue;
 
   return {
     totalOrders: Number(ordersSummary.rows[0].total_orders),
     activeOrders: Number(ordersSummary.rows[0].active_orders),
     deliveredOrders: Number(ordersSummary.rows[0].delivered_orders),
-    totalRevenuePaise: orderRevenue,
+    totalRevenuePaise: totalPaidRevenue,
     orderRevenuePaise: orderRevenue,
-    subscriptionRevenuePaise: subRevenue,
-    combinedRevenuePaise: orderRevenue + subRevenue,
+    collectedSubscriptionRevenuePaise: collectedSubRevenue,
+    activeSubscriptionContractValuePaise: activeContractValue,
+    subscriptionRevenuePaise: activeContractValue,
+    combinedRevenuePaise: totalPaidRevenue,
     totalCustomers: Number(customerSummary.rows[0].total_customers),
     totalSubscriptions: Number(subSummary.rows[0].total_subscriptions),
     activeSubscriptions: Number(subSummary.rows[0].active_subscriptions),
