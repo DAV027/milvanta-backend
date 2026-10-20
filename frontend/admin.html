@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Milvanta Admin Dashboard | Live Operations & Reporting</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, private" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <link rel="icon" href="assets/milvanta-mark.jpg" type="image/jpeg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css?v=20261012-3" />
+  <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
+  <style>
+    :root {
+      --admin-navy: #0a3d66;
+      --admin-navy-dark: #072b49;
+      --admin-green: #1f7a4d;
+      --admin-bg: #f8fafc;
+      --admin-card-bg: #ffffff;
+      --admin-border: #e2e8f0;
+      --admin-text-main: #0f172a;
+      --admin-text-muted: #64748b;
+      --admin-amber: #d97706;
+      --admin-red: #dc2626;
+      --admin-purple: #7c3aed;
+      --admin-blue: #2563eb;
+    }
+
+    body {
+      background-color: var(--admin-bg);
+      color: var(--admin-text-main);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+
+    .admin-navbar {
+      background: var(--admin-navy-dark);
+      color: #ffffff;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+    }
+
+    .admin-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: #ffffff;
+    }
+
+    .admin-brand img.logo {
+      height: 34px;
+      width: auto;
+    }
+
+    .admin-badge-portal {
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      color: #e2e8f0;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .admin-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .refresh-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      color: #e2e8f0;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .refresh-pill:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #10b981;
+      border-radius: 50%;
+      box-shadow: 0 0 6px #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.9); }
+    }
+
+    .operator-pill {
+      font-size: 0.825rem;
+      color: #cbd5e1;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-nav-action {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      color: #ffffff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.825rem;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.2s;
+    }
+
+    .btn-nav-action:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .admin-container {
+      max-width: 1440px;
+      margin: 24px auto;
+      padding: 0 20px 60px;
+    }
+
+    /* KPI Stats Grid */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .kpi-card {
+      background: var(--admin-card-bg);
+      border: 1px solid var(--admin-border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      position: relative;
+    }
+
+    .kpi-label {
+      font-size: 0.775rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--admin-text-muted);
+      margin-bottom: 6px;
+    }
+
+    .kpi-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--admin-navy);
+      font-family: 'Inter', sans-serif;
+    }
+
+    .kpi-sub {
+      font-size: 0.775rem;
+      color: var(--admin-text-muted);
+      margin-top: 4px;
+    }
+
+    /* Tabs */
+    .admin-tabs {
+      display: flex;
+      gap: 12px;
+      border-bottom: 2px solid var(--admin-border);
+      margin-bottom: 20px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      padding: 10px 18px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--admin-text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: -2px;
+    }
+
+    .tab-btn.active {
+      color: var(--admin-navy);
+      border-bottom-color: var(--admin-navy);
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: var(--admin-navy);
+    }
+
+    /* Filters Bar */
+    .filter-bar {
+      background: var(--admin-card-bg);
+      border: 1px solid var(--admin-border);
+      border-radius: 8px;
+      padding: 14px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+    }
+
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .filter-input, .filter-select {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 0.85rem;
+      color: var(--admin-text-main);
+      background: #ffffff;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    .filter-input:focus, .filter-select:focus {
+      border-color: var(--admin-navy);
+      box-shadow: 0 0 0 2px rgba(10, 61, 102, 0.1);
+    }
+
+    .filter-input {
+      min-width: 220px;
+    }
+
+    .btn-export {
+      background: #ffffff;
+      border: 1px solid #0a3d66;
+      color: #0a3d66;
+      font-weight: 600;
+      font-size: 0.825rem;
+      padding: 7px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+      margin-left: auto;
+    }
+
+    .btn-export:hover {
+      background: #0a3d66;
+      color: #ffffff;
+    }
+
+    .btn-reset {
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      color: #475569;
+      font-size: 0.825rem;
+      padding: 7px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .btn-reset:hover {
+      background: #e2e8f0;
+    }
+
+    /* Table Component */
+    .table-wrapper {
+      background: var(--admin-card-bg);
+      border: 1px solid var(--admin-border);
+      border-radius: 8px;
+      overflow-x: auto;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    }
+
+    table.admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.85rem;
+    }
+
+    table.admin-table th {
+      background: #f1f5f9;
+      color: #475569;
+      font-weight: 600;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--admin-border);
+      white-space: nowrap;
+    }
+
+    table.admin-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--admin-border);
+      vertical-align: top;
+      color: #1e293b;
+    }
+
+    table.admin-table tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 0.725rem;
+      font-weight: 600;
+      text-transform: capitalize;
+      white-space: nowrap;
+    }
+
+    .badge-paid, .badge-active, .badge-delivered {
+      background: #dcfce7;
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+
+    .badge-pending, .badge-pending_authorization, .badge-processing {
+      background: #fef3c7;
+      color: #b45309;
+      border: 1px solid #fde68a;
+    }
+
+    .badge-paused {
+      background: #f3e8ff;
+      color: #7e22ce;
+      border: 1px solid #e9d5ff;
+    }
+
+    .badge-cancelled, .badge-failed {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 1px solid #fecaca;
+    }
+
+    .badge-expired {
+      background: #f1f5f9;
+      color: #64748b;
+      border: 1px solid #cbd5e1;
+    }
+
+    /* Pagination */
+    .pagination-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 18px;
+      background: var(--admin-card-bg);
+      border-top: 1px solid var(--admin-border);
+      font-size: 0.825rem;
+      color: var(--admin-text-muted);
+    }
+
+    .pagination-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .btn-page {
+      padding: 5px 12px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #1e293b;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .btn-page:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .btn-page:hover:not(:disabled) {
+      background: #f1f5f9;
+    }
+
+    /* Auth Screens */
+    .auth-overlay {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 80vh;
+      padding: 20px;
+    }
+
+    .auth-card {
+      background: #ffffff;
+      border: 1px solid var(--admin-border);
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      text-align: center;
+    }
+
+    .auth-card h2 {
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      font-size: 1.8rem;
+      color: var(--admin-navy);
+      margin: 12px 0 6px;
+    }
+
+    .auth-card p {
+      font-size: 0.875rem;
+      color: var(--admin-text-muted);
+      margin-bottom: 24px;
+    }
+
+    .auth-form {
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .auth-form label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #334155;
+    }
+
+    .auth-form input {
+      padding: 10px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .btn-admin-login {
+      background: var(--admin-navy);
+      color: #ffffff;
+      border: none;
+      padding: 11px;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: background 0.2s;
+    }
+
+    .btn-admin-login:hover {
+      background: var(--admin-navy-dark);
+    }
+
+    .access-denied-box {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 20px;
+      color: #991b1b;
+      margin-top: 16px;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      padding: 20px;
+    }
+
+    .modal-content {
+      background: #ffffff;
+      border-radius: 10px;
+      max-width: 600px;
+      width: 100%;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 24px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--admin-border);
+      padding-bottom: 12px;
+      margin-bottom: 16px;
+    }
+
+    .modal-header h3 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--admin-navy);
+    }
+
+    .btn-close-modal {
+      background: transparent;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #64748b;
+    }
+  </style>
+  <script src="js/config.js"></script>
+</head>
+<body>
+
+  <!-- Sticky Admin Navigation -->
+  <header class="admin-navbar">
+    <a href="admin.html" class="admin-brand">
+      <img src="assets/milvanta-mark.png" alt="Milvanta" class="logo" />
+      <img src="assets/milvanta-wordmark.png" alt="Milvanta" style="height: 24px; filter: brightness(0) invert(1);" />
+      <span class="admin-badge-portal">Operations</span>
+    </a>
+
+    <div class="admin-controls" id="adminControlsArea" style="display: none;">
+      <button class="refresh-pill" id="btnManualRefresh" title="Click to refresh live tables">
+        <span class="live-dot"></span>
+        <span id="refreshTimerLabel">Live (30s)</span>
+      </button>
+
+      <span class="operator-pill" id="operatorLabel">Admin</span>
+
+      <a href="index.html" class="btn-nav-action" target="_blank" title="Open Storefront in new tab">Storefront ↗</a>
+      <button class="btn-nav-action" id="btnAdminLogout">Sign Out</button>
+    </div>
+  </header>
+
+  <!-- Login Overlay (Visible when not authenticated) -->
+  <div class="auth-overlay" id="authGate">
+    <div class="auth-card">
+      <img src="assets/milvanta-mark.png" alt="Milvanta" width="56" height="56" />
+      <h2>Milvanta Operations Portal</h2>
+      <p>Secure administrative access for live order fulfillment, recurring milk subscriptions, and accounting reports.</p>
+
+      <form class="auth-form" id="adminLoginForm">
+        <div>
+          <label for="adminEmail">Operator Email</label>
+          <input type="email" id="adminEmail" required placeholder="admin@milvanta.in" autocomplete="email" />
+        </div>
+        <div>
+          <label for="adminPassword">Password</label>
+          <input type="password" id="adminPassword" required placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button type="submit" class="btn-admin-login" id="btnSubmitLogin">Sign In as Administrator</button>
+        <div id="loginErrorMsg" style="color: #dc2626; font-size: 0.8rem; margin-top: 6px; display: none;"></div>
+      </form>
+
+      <div class="access-denied-box hidden" id="accessDeniedBox">
+        <strong>403 Forbidden: Administrator Privileges Required</strong>
+        <p style="margin: 6px 0 10px;">The logged-in account (<span id="deniedUserEmail"></span>) does not have administrator privileges in PostgreSQL.</p>
+        <button type="button" class="btn-reset" id="btnSwitchAccount" style="width: 100%;">Sign Out & Try Approved Account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Live Dashboard (Visible when authenticated as admin) -->
+  <main class="admin-container hidden" id="dashboardView">
+
+    <!-- KPI Metrics Grid -->
+    <section class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-label">Total Orders</div>
+        <div class="kpi-value" id="kpiTotalOrders">0</div>
+        <div class="kpi-sub"><span id="kpiActiveOrders">0</span> active · <span id="kpiDeliveredOrders">0</span> delivered</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Milk Subscriptions</div>
+        <div class="kpi-value" id="kpiActiveSubs">0</div>
+        <div class="kpi-sub"><span id="kpiPendingSubs">0</span> pending payment · <span id="kpiPausedSubs">0</span> paused</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Paid Storefront Revenue</div>
+        <div class="kpi-value" id="kpiOrderRevenue">₹0</div>
+        <div class="kpi-sub">One-time and custom order payments</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Active Subscription Revenue</div>
+        <div class="kpi-value" id="kpiSubRevenue">₹0</div>
+        <div class="kpi-sub">Authoritative active recurring plans</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Total Paid Revenue</div>
+        <div class="kpi-value" id="kpiTotalRevenue" style="color: var(--admin-green);">₹0</div>
+        <div class="kpi-sub">Combined verified cashflow</div>
+      </div>
+
+      <div class="kpi-card">
+        <div class="kpi-label">Registered Customers</div>
+        <div class="kpi-value" id="kpiTotalCustomers">0</div>
+        <div class="kpi-sub">PostgreSQL customer records</div>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="admin-tabs">
+      <button class="tab-btn active" id="tabBtnSubscriptions" data-tab="subscriptions">🥛 Milk Subscriptions (<span id="tabCountSubs">0</span>)</button>
+      <button class="tab-btn" id="tabBtnOrders" data-tab="orders">📦 Customer Orders (<span id="tabCountOrders">0</span>)</button>
+    </nav>
+
+    <!-- Tab 1: Milk Subscriptions -->
+    <section id="subscriptionsSection">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <input type="text" class="filter-input" id="subSearchInput" placeholder="Search customer, email, phone, sub ID..." />
+        </div>
+        <div class="filter-group">
+          <select class="filter-select" id="subStatusFilter">
+            <option value="all">All Subscription Statuses</option>
+            <option value="active">Active (Fulfillment Entitled)</option>
+            <option value="pending_authorization">Pending Payment / Mandate</option>
+            <option value="paused">Paused / Hold</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="expired">Expired</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <input type="date" class="filter-input" id="subDateFilter" title="Filter by delivery date or start date" />
+        </div>
+        <button class="btn-reset" id="btnResetSubFilters">Reset</button>
+
+        <button class="btn-export" id="btnExportSubsCsv">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export All Subscriptions CSV
+        </button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Customer</th>
+              <th>Product & Pack Size</th>
+              <th>Frequency & Slot</th>
+              <th>Daily Rate</th>
+              <th>Total Amount</th>
+              <th>Status</th>
+              <th>Next Delivery (IST)</th>
+              <th>Paid Through</th>
+              <th>Created Date (IST)</th>
+            </tr>
+          </thead>
+          <tbody id="subscriptionsTableBody">
+            <tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">Loading subscriptions from PostgreSQL...</td></tr>
+          </tbody>
+        </table>
+
+        <div class="pagination-bar">
+          <span id="subPaginationLabel">Showing 0-0 of 0 subscriptions</span>
+          <div class="pagination-controls">
+            <button class="btn-page" id="btnSubPrevPage" disabled>← Previous</button>
+            <span id="subPageIndicator">Page 1</span>
+            <button class="btn-page" id="btnSubNextPage" disabled>Next →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 2: Orders -->
+    <section id="ordersSection" class="hidden">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <input type="text" class="filter-input" id="orderSearchInput" placeholder="Search order #, customer, phone, courier..." />
+        </div>
+        <div class="filter-group">
+          <select class="filter-select" id="orderStatusFilter">
+            <option value="all">All Order Statuses</option>
+            <option value="placed">Placed</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="processing">Processing</option>
+            <option value="shipped">Shipped</option>
+            <option value="out_for_delivery">Out for Delivery</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <select class="filter-select" id="orderPaymentFilter">
+            <option value="all">All Payment Statuses</option>
+            <option value="paid">Paid</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <input type="date" class="filter-input" id="orderDateFilter" title="Filter by date" />
+        </div>
+        <button class="btn-reset" id="btnResetOrderFilters">Reset</button>
+
+        <button class="btn-export" id="btnExportOrdersCsv">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export All Orders CSV
+        </button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Order Number</th>
+              <th>Date (IST)</th>
+              <th>Customer</th>
+              <th>Items</th>
+              <th>Total (INR)</th>
+              <th>Payment</th>
+              <th>Fulfillment Status</th>
+              <th>Courier & Tracking</th>
+              <th>Delivery Address</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="ordersTableBody">
+            <tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">Loading orders from PostgreSQL...</td></tr>
+          </tbody>
+        </table>
+
+        <div class="pagination-bar">
+          <span id="orderPaginationLabel">Showing 0-0 of 0 orders</span>
+          <div class="pagination-controls">
+            <button class="btn-page" id="btnOrderPrevPage" disabled>← Previous</button>
+            <span id="orderPageIndicator">Page 1</span>
+            <button class="btn-page" id="btnOrderNextPage" disabled>Next →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Status Update Modal -->
+  <div class="modal-backdrop hidden" id="statusModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Update Order Fulfillment</h3>
+        <button class="btn-close-modal" id="btnCloseModal">×</button>
+      </div>
+      <form id="orderStatusForm">
+        <input type="hidden" id="modalOrderNumber" />
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Order Status</label>
+          <select id="modalStatusSelect" class="filter-select" style="width: 100%;">
+            <option value="confirmed">Confirmed</option>
+            <option value="processing">Processing</option>
+            <option value="shipped">Shipped</option>
+            <option value="out_for_delivery">Out for Delivery</option>
+            <option value="delivered">Delivered</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Courier Name (Optional)</label>
+          <input type="text" id="modalCourier" class="filter-input" style="width: 100%; box-sizing: border-box;" placeholder="e.g. BlueDart, DTDC, Milvanta Direct" />
+        </div>
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Tracking Number (Optional)</label>
+          <input type="text" id="modalTracking" class="filter-input" style="width: 100%; box-sizing: border-box;" placeholder="e.g. BLU12345678" />
+        </div>
+        <div style="margin-bottom: 18px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Internal Audit Note</label>
+          <input type="text" id="modalNote" class="filter-input" style="width: 100%; box-sizing: border-box;" placeholder="Note about dispatch or status change" />
+        </div>
+        <button type="submit" class="btn-admin-login" style="width: 100%;">Save Changes</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const API_BASE = window.MILVANTA_API_URL || 'https://milvanta-backend.onrender.com';
+      let currentToken = sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || '';
+      let activeTab = 'subscriptions';
+      let refreshTimer = null;
+      let refreshSecondsLeft = 30;
+
+      // State
+      const subState = {
+        page: 0,
+        limit: 50,
+        total: 0,
+        status: 'all',
+        search: '',
+        date: ''
+      };
+
+      const orderState = {
+        page: 0,
+        limit: 50,
+        total: 0,
+        status: 'all',
+        payment_status: 'all',
+        search: '',
+        date: ''
+      };
+
+      // Formatters
+      function formatINR(paise) {
+        const val = Number(paise || 0) / 100;
+        return '₹' + val.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+      }
+
+      function formatIST(isoStr) {
+        if (!isoStr) return '—';
+        try {
+          const d = new Date(isoStr);
+          if (Number.isNaN(d.getTime())) return String(isoStr);
+          return d.toLocaleString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true
+          });
+        } catch {
+          return String(isoStr);
+        }
+      }
+
+      // Safe CSV formula injection escaping
+      function sanitizeCsvCell(val) {
+        if (val === null || val === undefined) return '';
+        let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+        // Neutralize Excel/Sheets formula execution tokens =, +, -, @, tab, CR
+        if (/^[=+\-@\t\r]/.test(str)) {
+          str = "'" + str;
+        }
+        if (/[",\n\r]/.test(str)) {
+          return '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+      }
+
+      // API Request Helper
+      async function apiRequest(path, options = {}) {
+        const headers = {
+          'Content-Type': 'application/json',
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache',
+          ...(options.headers || {})
+        };
+        if (currentToken) {
+          headers['Authorization'] = 'Bearer ' + currentToken;
+        }
+
+        const res = await fetch(API_BASE + path, { ...options, headers });
+        if (res.status === 401 || res.status === 403) {
+          if (res.status === 403) {
+            handleAccessDenied();
+          }
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || errData.error || 'Unauthorized');
+        }
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.message || errData.error || 'Server error: ' + res.status);
+        }
+        return res.json();
+      }
+
+      // DOM Elements
+      const authGate = document.getElementById('authGate');
+      const dashboardView = document.getElementById('dashboardView');
+      const adminControlsArea = document.getElementById('adminControlsArea');
+      const adminLoginForm = document.getElementById('adminLoginForm');
+      const loginErrorMsg = document.getElementById('loginErrorMsg');
+      const accessDeniedBox = document.getElementById('accessDeniedBox');
+      const deniedUserEmail = document.getElementById('deniedUserEmail');
+      const operatorLabel = document.getElementById('operatorLabel');
+      const btnAdminLogout = document.getElementById('btnAdminLogout');
+      const btnSwitchAccount = document.getElementById('btnSwitchAccount');
+      const btnManualRefresh = document.getElementById('btnManualRefresh');
+      const refreshTimerLabel = document.getElementById('refreshTimerLabel');
+
+      // Init & Auth Check
+      async function checkAuthAndInit() {
+        if (!currentToken) {
+          showLoginScreen();
+          return;
+        }
+
+        try {
+          const meData = await apiRequest('/api/v1/auth/me');
+          const user = meData.user || meData.customer;
+          if (!user || !user.is_admin) {
+            handleAccessDenied(user?.email || 'Logged-in user');
+            return;
+          }
+
+          // Authenticated as Admin
+          authGate.classList.add('hidden');
+          dashboardView.classList.remove('hidden');
+          adminControlsArea.style.display = 'flex';
+          operatorLabel.textContent = `Operator: ${user.full_name || 'Admin'} (${user.email})`;
+
+          await refreshAllData();
+          startLiveRefreshLoop();
+        } catch (err) {
+          console.warn('Admin auth verification failed:', err.message);
+          showLoginScreen();
+        }
+      }
+
+      function showLoginScreen() {
+        authGate.classList.remove('hidden');
+        dashboardView.classList.add('hidden');
+        adminControlsArea.style.display = 'none';
+        accessDeniedBox.classList.add('hidden');
+        adminLoginForm.style.display = 'flex';
+      }
+
+      function handleAccessDenied(email = '') {
+        authGate.classList.remove('hidden');
+        dashboardView.classList.add('hidden');
+        adminControlsArea.style.display = 'none';
+        adminLoginForm.style.display = 'none';
+        deniedUserEmail.textContent = email || 'Your Account';
+        accessDeniedBox.classList.remove('hidden');
+      }
+
+      function logout() {
+        sessionStorage.removeItem('milvanta-auth-token');
+        localStorage.removeItem('milvanta-auth-token');
+        currentToken = '';
+        if (refreshTimer) clearInterval(refreshTimer);
+        showLoginScreen();
+      }
+
+      btnAdminLogout.addEventListener('click', logout);
+      btnSwitchAccount.addEventListener('click', logout);
+
+      // Login form handler
+      adminLoginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        loginErrorMsg.style.display = 'none';
+        const email = document.getElementById('adminEmail').value.trim();
+        const password = document.getElementById('adminPassword').value;
+
+        try {
+          const res = await fetch(API_BASE + '/api/v1/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.message || data.error || 'Login failed');
+          if (!data.token) throw new Error('No authentication token returned');
+
+          currentToken = data.token;
+          sessionStorage.setItem('milvanta-auth-token', currentToken);
+          localStorage.setItem('milvanta-auth-token', currentToken);
+
+          await checkAuthAndInit();
+        } catch (err) {
+          loginErrorMsg.textContent = err.message;
+          loginErrorMsg.style.display = 'block';
+        }
+      });
+
+      // Live Refresh Timer Loop
+      function startLiveRefreshLoop() {
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshSecondsLeft = 30;
+        refreshTimerLabel.textContent = `Live (${refreshSecondsLeft}s)`;
+
+        refreshTimer = setInterval(async () => {
+          refreshSecondsLeft--;
+          if (refreshSecondsLeft <= 0) {
+            refreshSecondsLeft = 30;
+            await refreshAllData();
+          }
+          refreshTimerLabel.textContent = `Live (${refreshSecondsLeft}s)`;
+        }, 1000);
+      }
+
+      btnManualRefresh.addEventListener('click', async () => {
+        refreshSecondsLeft = 30;
+        refreshTimerLabel.textContent = 'Refreshing...';
+        await refreshAllData();
+        refreshTimerLabel.textContent = `Live (${refreshSecondsLeft}s)`;
+      });
+
+      async function refreshAllData() {
+        try {
+          await Promise.all([
+            loadStats(),
+            activeTab === 'subscriptions' ? loadSubscriptions() : loadOrders()
+          ]);
+        } catch (e) {
+          console.error('Refresh cycle error:', e);
+        }
+      }
+
+      // Load Statistics
+      async function loadStats() {
+        try {
+          const stats = await apiRequest('/api/v1/admin/stats');
+          document.getElementById('kpiTotalOrders').textContent = stats.totalOrders.toLocaleString();
+          document.getElementById('kpiActiveOrders').textContent = stats.activeOrders.toLocaleString();
+          document.getElementById('kpiDeliveredOrders').textContent = stats.deliveredOrders.toLocaleString();
+          document.getElementById('kpiActiveSubs').textContent = (stats.activeSubscriptions || 0).toLocaleString();
+          document.getElementById('kpiPendingSubs').textContent = (stats.pendingSubscriptions || 0).toLocaleString();
+          document.getElementById('kpiPausedSubs').textContent = (stats.pausedSubscriptions || 0).toLocaleString();
+          document.getElementById('kpiOrderRevenue').textContent = formatINR(stats.orderRevenuePaise || stats.totalRevenuePaise);
+          document.getElementById('kpiSubRevenue').textContent = formatINR(stats.subscriptionRevenuePaise || 0);
+          document.getElementById('kpiTotalRevenue').textContent = formatINR(stats.combinedRevenuePaise || stats.totalRevenuePaise);
+          document.getElementById('kpiTotalCustomers').textContent = stats.totalCustomers.toLocaleString();
+          document.getElementById('tabCountSubs').textContent = (stats.totalSubscriptions || 0).toLocaleString();
+          document.getElementById('tabCountOrders').textContent = stats.totalOrders.toLocaleString();
+        } catch (err) {
+          console.warn('Failed to load stats:', err.message);
+        }
+      }
+
+      // Load Subscriptions
+      async function loadSubscriptions() {
+        const tbody = document.getElementById('subscriptionsTableBody');
+        const params = new URLSearchParams({
+          limit: subState.limit,
+          offset: subState.page * subState.limit,
+          status: subState.status
+        });
+        if (subState.search) params.set('search', subState.search);
+        if (subState.date) params.set('delivery_date', subState.date);
+
+        try {
+          const data = await apiRequest('/api/v1/admin/subscriptions?' + params.toString());
+          subState.total = data.total || 0;
+          renderSubscriptionsTable(data.subscriptions || []);
+          updateSubPagination();
+        } catch (err) {
+          tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #dc2626; padding: 20px;">Error loading subscriptions: ${err.message}</td></tr>`;
+        }
+      }
+
+      function renderSubscriptionsTable(subs) {
+        const tbody = document.getElementById('subscriptionsTableBody');
+        if (!subs.length) {
+          tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">No matching subscriptions found in PostgreSQL database.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = subs.map(s => {
+          const notes = typeof s.notes === 'object' && s.notes !== null ? s.notes : {};
+          const statusClass = 'badge-' + (s.status || 'expired');
+          const cleanStatus = (s.status === 'pending_authorization') ? 'Pending Payment' : s.status;
+
+          return `<tr>
+            <td style="font-family: monospace; font-size: 0.8rem;">
+              <strong>#${s.id}</strong><br />
+              <span style="color: #64748b;">${s.razorpay_subscription_id || '—'}</span>
+            </td>
+            <td>
+              <strong>${s.customer_name || 'Customer #' + s.customer_id}</strong><br />
+              <span style="color: #64748b; font-size: 0.8rem;">${s.customer_email || ''}</span><br />
+              <span style="color: #64748b; font-size: 0.8rem;">${s.customer_phone || ''}</span>
+            </td>
+            <td><strong>${s.product_name}</strong><br /><span style="color: #64748b;">${s.quantity}</span></td>
+            <td>${s.frequency || 'Daily'}<br /><span style="color: #64748b;">${s.time_slot || ''}</span></td>
+            <td><strong>${formatINR(s.cost_per_day_paise)}</strong> /day</td>
+            <td><strong>${formatINR(s.total_amount_paise)}</strong><br /><span style="color: #64748b; font-size: 0.75rem;">${s.duration_label || ''}</span></td>
+            <td><span class="badge ${statusClass}">${cleanStatus}</span></td>
+            <td><strong>${s.next_delivery || '—'}</strong></td>
+            <td>${notes.paidThroughDate || '—'}</td>
+            <td style="color: #64748b; font-size: 0.8rem;">${formatIST(s.created_at)}</td>
+          </tr>`;
+        }).join('');
+      }
+
+      function updateSubPagination() {
+        const start = subState.total ? subState.page * subState.limit + 1 : 0;
+        const end = Math.min((subState.page + 1) * subState.limit, subState.total);
+        document.getElementById('subPaginationLabel').textContent = `Showing ${start}-${end} of ${subState.total} subscriptions`;
+        document.getElementById('subPageIndicator').textContent = `Page ${subState.page + 1}`;
+        document.getElementById('btnSubPrevPage').disabled = subState.page === 0;
+        document.getElementById('btnSubNextPage').disabled = end >= subState.total;
+      }
+
+      // Load Orders
+      async function loadOrders() {
+        const tbody = document.getElementById('ordersTableBody');
+        const params = new URLSearchParams({
+          limit: orderState.limit,
+          offset: orderState.page * orderState.limit,
+          status: orderState.status,
+          payment_status: orderState.payment_status
+        });
+        if (orderState.search) params.set('search', orderState.search);
+        if (orderState.date) params.set('delivery_date', orderState.date);
+
+        try {
+          const data = await apiRequest('/api/v1/admin/orders?' + params.toString());
+          orderState.total = data.total || 0;
+          renderOrdersTable(data.orders || []);
+          updateOrderPagination();
+        } catch (err) {
+          tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: #dc2626; padding: 20px;">Error loading orders: ${err.message}</td></tr>`;
+        }
+      }
+
+      function renderOrdersTable(orders) {
+        const tbody = document.getElementById('ordersTableBody');
+        if (!orders.length) {
+          tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">No matching orders found in PostgreSQL database.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = orders.map(o => {
+          const addr = typeof o.address === 'object' && o.address !== null ? o.address : {};
+          const fullAddr = [addr.house, addr.street, addr.city, addr.pincode].filter(Boolean).join(', ');
+
+          let itemsSummary = '—';
+          if (Array.isArray(o.items) && o.items.length) {
+            itemsSummary = o.items.map(i => `${i.name || i.productName || 'Item'} (×${i.quantity || 1})`).join('<br />');
+          }
+
+          const payBadge = o.payment_status === 'paid' ? 'badge-paid' : (o.payment_status === 'failed' ? 'badge-failed' : 'badge-pending');
+          const orderBadge = ['delivered', 'confirmed', 'shipped', 'placed', 'processing', 'cancelled'].includes(o.order_status)
+            ? 'badge-' + o.order_status
+            : 'badge-expired';
+
+          return `<tr>
+            <td style="font-family: monospace; font-weight: 700;">#${o.order_number}</td>
+            <td style="font-size: 0.8rem; color: #64748b;">${formatIST(o.created_at)}</td>
+            <td>
+              <strong>${o.customer_name || 'Customer #' + o.customer_id}</strong><br />
+              <span style="color: #64748b; font-size: 0.8rem;">${o.customer_email || ''}</span><br />
+              <span style="color: #64748b; font-size: 0.8rem;">${o.customer_phone || addr.phone || ''}</span>
+            </td>
+            <td style="font-size: 0.8rem; line-height: 1.4;">${itemsSummary}</td>
+            <td>
+              <strong>${formatINR(o.total_paise)}</strong><br />
+              <span style="color: #64748b; font-size: 0.75rem;">Items: ${formatINR(o.subtotal_paise)} + Delivery: ${formatINR(o.delivery_charge_paise)}</span>
+            </td>
+            <td><span class="badge ${payBadge}">${o.payment_status || 'pending'}</span></td>
+            <td><span class="badge ${orderBadge}">${o.order_status || 'placed'}</span></td>
+            <td>
+              ${o.courier_name ? `<strong>${o.courier_name}</strong><br />` : ''}
+              <span style="font-family: monospace; font-size: 0.75rem; color: #64748b;">${o.tracking_number || 'No tracking'}</span>
+            </td>
+            <td style="font-size: 0.8rem; max-width: 180px; color: #475569;">${fullAddr || '—'}</td>
+            <td>
+              <button class="btn-page" style="padding: 4px 8px; font-size: 0.75rem;" onclick="window.openStatusModal('${o.order_number}', '${o.order_status}', '${o.courier_name || ''}', '${o.tracking_number || ''}')">Update</button>
+            </td>
+          </tr>`;
+        }).join('');
+      }
+
+      function updateOrderPagination() {
+        const start = orderState.total ? orderState.page * orderState.limit + 1 : 0;
+        const end = Math.min((orderState.page + 1) * orderState.limit, orderState.total);
+        document.getElementById('orderPaginationLabel').textContent = `Showing ${start}-${end} of ${orderState.total} orders`;
+        document.getElementById('orderPageIndicator').textContent = `Page ${orderState.page + 1}`;
+        document.getElementById('btnOrderPrevPage').disabled = orderState.page === 0;
+        document.getElementById('btnOrderNextPage').disabled = end >= orderState.total;
+      }
+
+      // Tab Switching
+      const tabBtnSubs = document.getElementById('tabBtnSubscriptions');
+      const tabBtnOrders = document.getElementById('tabBtnOrders');
+      const subSection = document.getElementById('subscriptionsSection');
+      const ordersSection = document.getElementById('ordersSection');
+
+      tabBtnSubs.addEventListener('click', () => {
+        activeTab = 'subscriptions';
+        tabBtnSubs.classList.add('active');
+        tabBtnOrders.classList.remove('active');
+        subSection.classList.remove('hidden');
+        ordersSection.classList.add('hidden');
+        loadSubscriptions();
+      });
+
+      tabBtnOrders.addEventListener('click', () => {
+        activeTab = 'orders';
+        tabBtnOrders.classList.add('active');
+        tabBtnSubs.classList.remove('active');
+        ordersSection.classList.remove('hidden');
+        subSection.classList.add('hidden');
+        loadOrders();
+      });
+
+      // Sub Filter Listeners
+      let subSearchDebounce = null;
+      document.getElementById('subSearchInput').addEventListener('input', (e) => {
+        clearTimeout(subSearchDebounce);
+        subSearchDebounce = setTimeout(() => {
+          subState.search = e.target.value.trim();
+          subState.page = 0;
+          loadSubscriptions();
+        }, 300);
+      });
+
+      document.getElementById('subStatusFilter').addEventListener('change', (e) => {
+        subState.status = e.target.value;
+        subState.page = 0;
+        loadSubscriptions();
+      });
+
+      document.getElementById('subDateFilter').addEventListener('change', (e) => {
+        subState.date = e.target.value;
+        subState.page = 0;
+        loadSubscriptions();
+      });
+
+      document.getElementById('btnResetSubFilters').addEventListener('click', () => {
+        document.getElementById('subSearchInput').value = '';
+        document.getElementById('subStatusFilter').value = 'all';
+        document.getElementById('subDateFilter').value = '';
+        subState.search = '';
+        subState.status = 'all';
+        subState.date = '';
+        subState.page = 0;
+        loadSubscriptions();
+      });
+
+      document.getElementById('btnSubPrevPage').addEventListener('click', () => {
+        if (subState.page > 0) {
+          subState.page--;
+          loadSubscriptions();
+        }
+      });
+
+      document.getElementById('btnSubNextPage').addEventListener('click', () => {
+        if ((subState.page + 1) * subState.limit < subState.total) {
+          subState.page++;
+          loadSubscriptions();
+        }
+      });
+
+      // Order Filter Listeners
+      let orderSearchDebounce = null;
+      document.getElementById('orderSearchInput').addEventListener('input', (e) => {
+        clearTimeout(orderSearchDebounce);
+        orderSearchDebounce = setTimeout(() => {
+          orderState.search = e.target.value.trim();
+          orderState.page = 0;
+          loadOrders();
+        }, 300);
+      });
+
+      document.getElementById('orderStatusFilter').addEventListener('change', (e) => {
+        orderState.status = e.target.value;
+        orderState.page = 0;
+        loadOrders();
+      });
+
+      document.getElementById('orderPaymentFilter').addEventListener('change', (e) => {
+        orderState.payment_status = e.target.value;
+        orderState.page = 0;
+        loadOrders();
+      });
+
+      document.getElementById('orderDateFilter').addEventListener('change', (e) => {
+        orderState.date = e.target.value;
+        orderState.page = 0;
+        loadOrders();
+      });
+
+      document.getElementById('btnResetOrderFilters').addEventListener('click', () => {
+        document.getElementById('orderSearchInput').value = '';
+        document.getElementById('orderStatusFilter').value = 'all';
+        document.getElementById('orderPaymentFilter').value = 'all';
+        document.getElementById('orderDateFilter').value = '';
+        orderState.search = '';
+        orderState.status = 'all';
+        orderState.payment_status = 'all';
+        orderState.date = '';
+        orderState.page = 0;
+        loadOrders();
+      });
+
+      document.getElementById('btnOrderPrevPage').addEventListener('click', () => {
+        if (orderState.page > 0) {
+          orderState.page--;
+          loadOrders();
+        }
+      });
+
+      document.getElementById('btnOrderNextPage').addEventListener('click', () => {
+        if ((orderState.page + 1) * orderState.limit < orderState.total) {
+          orderState.page++;
+          loadOrders();
+        }
+      });
+
+      // CSV Export Handlers with formula-injection protection
+      async function triggerExport(urlPath, defaultFilename) {
+        try {
+          const res = await fetch(API_BASE + urlPath, {
+            headers: {
+              'Authorization': 'Bearer ' + currentToken,
+              'Pragma': 'no-cache',
+              'Cache-Control': 'no-cache'
+            }
+          });
+          if (!res.ok) throw new Error('Export request failed: ' + res.status);
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.style.display = 'none';
+          a.href = url;
+          a.download = defaultFilename;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          a.remove();
+        } catch (err) {
+          alert('Export failed: ' + err.message);
+        }
+      }
+
+      document.getElementById('btnExportSubsCsv').addEventListener('click', () => {
+        const params = new URLSearchParams({
+          status: subState.status
+        });
+        if (subState.search) params.set('search', subState.search);
+        if (subState.date) params.set('delivery_date', subState.date);
+        triggerExport('/api/v1/admin/subscriptions/export?' + params.toString(), `milvanta-subscriptions-${Date.now()}.csv`);
+      });
+
+      document.getElementById('btnExportOrdersCsv').addEventListener('click', () => {
+        const params = new URLSearchParams({
+          status: orderState.status,
+          payment_status: orderState.payment_status
+        });
+        if (orderState.search) params.set('search', orderState.search);
+        if (orderState.date) params.set('delivery_date', orderState.date);
+        triggerExport('/api/v1/admin/orders/export?' + params.toString(), `milvanta-orders-${Date.now()}.csv`);
+      });
+
+      // Modal Status Update
+      const statusModal = document.getElementById('statusModal');
+      window.openStatusModal = function(orderNumber, currentStatus, courier, tracking) {
+        document.getElementById('modalOrderNumber').value = orderNumber;
+        document.getElementById('modalStatusSelect').value = currentStatus || 'confirmed';
+        document.getElementById('modalCourier').value = courier || '';
+        document.getElementById('modalTracking').value = tracking || '';
+        document.getElementById('modalNote').value = '';
+        statusModal.classList.remove('hidden');
+      };
+
+      document.getElementById('btnCloseModal').addEventListener('click', () => {
+        statusModal.classList.add('hidden');
+      });
+
+      document.getElementById('orderStatusForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const orderNumber = document.getElementById('modalOrderNumber').value;
+        const status = document.getElementById('modalStatusSelect').value;
+        const courierName = document.getElementById('modalCourier').value.trim();
+        const trackingNumber = document.getElementById('modalTracking').value.trim();
+        const note = document.getElementById('modalNote').value.trim();
+
+        try {
+          await apiRequest(`/api/v1/admin/orders/${encodeURIComponent(orderNumber)}/status`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status, courierName, trackingNumber, note })
+          });
+          statusModal.classList.add('hidden');
+          await loadOrders();
+          await loadStats();
+        } catch (err) {
+          alert('Failed to update order status: ' + err.message);
+        }
+      });
+
+      // Boot
+      checkAuthAndInit();
+    })();
+  </script>
+</body>
+</html>

@@ -2885,10 +2885,47 @@ app.get('/api/v1/orders/:orderNumber/track', { preHandler: app.authenticate }, a
   };
 });
 
+// ---------- Helper: Safe CSV Escaping & Formula Injection Protection ----------
+function sanitizeCsvCell(val) {
+  if (val === null || val === undefined) return '';
+  let str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+  // Formula-injection protection: neutralize =, +, -, @, tab, CR
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function formatISTDateTime(isoOrDate) {
+  if (!isoOrDate) return '';
+  try {
+    const d = new Date(isoOrDate);
+    if (Number.isNaN(d.getTime())) return String(isoOrDate);
+    return d.toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }).replace(',', '');
+  } catch {
+    return String(isoOrDate);
+  }
+}
+
 // ---------- Admin Order Management ----------
 app.get('/api/v1/admin/orders', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const { status, search, limit = 50, offset = 0 } = request.query || {};
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+
+  const { status, payment_status, search, delivery_date, limit = 50, offset = 0 } = request.query || {};
   const queryParams = [];
   const conditions = [];
 
@@ -2897,14 +2934,28 @@ app.get('/api/v1/admin/orders', { preHandler: app.requireAdmin }, async (request
     conditions.push(`co.order_status = $${queryParams.length}`);
   }
 
+  if (payment_status && payment_status !== 'all') {
+    queryParams.push(payment_status);
+    conditions.push(`co.payment_status = $${queryParams.length}`);
+  }
+
   if (search && search.trim()) {
     queryParams.push(`%${search.trim().toLowerCase()}%`);
     conditions.push(`(
       LOWER(co.order_number) LIKE $${queryParams.length} OR
       LOWER(c.full_name) LIKE $${queryParams.length} OR
       LOWER(c.email) LIKE $${queryParams.length} OR
-      LOWER(co.address->>'phone') LIKE $${queryParams.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(co.address->>'phone', '')) LIKE $${queryParams.length} OR
       LOWER(COALESCE(co.tracking_number, '')) LIKE $${queryParams.length}
+    )`);
+  }
+
+  if (delivery_date && delivery_date.trim()) {
+    queryParams.push(`%${delivery_date.trim()}%`);
+    conditions.push(`(
+      DATE(co.estimated_delivery)::text LIKE $${queryParams.length} OR
+      DATE(co.created_at)::text LIKE $${queryParams.length}
     )`);
   }
 
@@ -2915,7 +2966,7 @@ app.get('/api/v1/admin/orders', { preHandler: app.requireAdmin }, async (request
 
   const { rows } = await pool.query(
     `SELECT co.id, co.order_number, co.customer_id, c.full_name AS customer_name, c.email AS customer_email,
-            co.address, co.items, co.subtotal_paise, co.delivery_charge_paise, co.total_paise,
+            c.phone AS customer_phone, co.address, co.items, co.subtotal_paise, co.delivery_charge_paise, co.total_paise,
             co.order_status, co.payment_status, co.courier_name, co.tracking_number, co.estimated_delivery,
             co.created_at, co.updated_at
      FROM customer_orders co
@@ -2932,6 +2983,288 @@ app.get('/api/v1/admin/orders', { preHandler: app.requireAdmin }, async (request
   );
 
   return { orders: rows, total: Number(countRes.rows[0].total) };
+});
+
+app.get('/api/v1/admin/orders/export', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+
+  const { status, payment_status, search, delivery_date } = request.query || {};
+  const queryParams = [];
+  const conditions = [];
+
+  if (status && status !== 'all') {
+    queryParams.push(status);
+    conditions.push(`co.order_status = $${queryParams.length}`);
+  }
+
+  if (payment_status && payment_status !== 'all') {
+    queryParams.push(payment_status);
+    conditions.push(`co.payment_status = $${queryParams.length}`);
+  }
+
+  if (search && search.trim()) {
+    queryParams.push(`%${search.trim().toLowerCase()}%`);
+    conditions.push(`(
+      LOWER(co.order_number) LIKE $${queryParams.length} OR
+      LOWER(c.full_name) LIKE $${queryParams.length} OR
+      LOWER(c.email) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(co.address->>'phone', '')) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(co.tracking_number, '')) LIKE $${queryParams.length}
+    )`);
+  }
+
+  if (delivery_date && delivery_date.trim()) {
+    queryParams.push(`%${delivery_date.trim()}%`);
+    conditions.push(`(
+      DATE(co.estimated_delivery)::text LIKE $${queryParams.length} OR
+      DATE(co.created_at)::text LIKE $${queryParams.length}
+    )`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT co.id, co.order_number, co.customer_id, c.full_name AS customer_name, c.email AS customer_email,
+            COALESCE(c.phone, co.address->>'phone', '') AS customer_phone,
+            co.address, co.items, co.subtotal_paise, co.delivery_charge_paise, co.total_paise,
+            co.order_status, co.payment_status, co.courier_name, co.tracking_number, co.estimated_delivery,
+            co.created_at
+     FROM customer_orders co
+     JOIN customers c ON c.id = co.customer_id
+     ${whereClause}
+     ORDER BY co.created_at DESC
+     LIMIT 10000`,
+    queryParams
+  );
+
+  const headers = [
+    'Order ID',
+    'Order Number',
+    'Date (IST)',
+    'Customer Name',
+    'Customer Email',
+    'Customer Phone',
+    'Order Status',
+    'Payment Status',
+    'Subtotal (INR)',
+    'Delivery Fee (INR)',
+    'Total (INR)',
+    'Courier',
+    'Tracking Number',
+    'Estimated Delivery (IST)',
+    'Delivery Address',
+    'Items'
+  ];
+
+  const csvRows = [headers.join(',')];
+  for (const row of rows) {
+    const addr = typeof row.address === 'object' && row.address !== null ? row.address : {};
+    const fullAddress = [addr.house, addr.building, addr.street, addr.landmark, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
+
+    let itemsStr = '';
+    if (Array.isArray(row.items)) {
+      itemsStr = row.items.map(i => `${i.name || i.productName || 'Item'} x${i.quantity || 1}`).join('; ');
+    }
+
+    const values = [
+      row.id,
+      row.order_number,
+      formatISTDateTime(row.created_at),
+      addr.name || addr.recipient_name || row.customer_name,
+      row.customer_email,
+      row.customer_phone,
+      row.order_status,
+      row.payment_status,
+      ((row.subtotal_paise || 0) / 100).toFixed(2),
+      ((row.delivery_charge_paise || 0) / 100).toFixed(2),
+      ((row.total_paise || 0) / 100).toFixed(2),
+      row.courier_name || '',
+      row.tracking_number || '',
+      formatISTDateTime(row.estimated_delivery),
+      fullAddress,
+      itemsStr
+    ];
+
+    csvRows.push(values.map(sanitizeCsvCell).join(','));
+  }
+
+  const csvContent = csvRows.join('\r\n');
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="milvanta-orders-${Date.now()}.csv"`)
+    .send(csvContent);
+});
+
+// ---------- Admin Subscriptions Management ----------
+app.get('/api/v1/admin/subscriptions', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+
+  const { status, search, delivery_date, limit = 50, offset = 0 } = request.query || {};
+  const queryParams = [];
+  const conditions = [];
+
+  if (status && status !== 'all') {
+    queryParams.push(status);
+    conditions.push(`cs.status = $${queryParams.length}`);
+  }
+
+  if (search && search.trim()) {
+    queryParams.push(`%${search.trim().toLowerCase()}%`);
+    conditions.push(`(
+      LOWER(cs.product_name) LIKE $${queryParams.length} OR
+      LOWER(c.full_name) LIKE $${queryParams.length} OR
+      LOWER(c.email) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(cs.razorpay_subscription_id, '')) LIKE $${queryParams.length} OR
+      LOWER(cs.id::text) LIKE $${queryParams.length}
+    )`);
+  }
+
+  if (delivery_date && delivery_date.trim()) {
+    queryParams.push(`%${delivery_date.trim()}%`);
+    conditions.push(`(
+      cs.next_delivery LIKE $${queryParams.length} OR
+      cs.notes->>'startDate' LIKE $${queryParams.length} OR
+      cs.notes->>'paidThroughDate' LIKE $${queryParams.length}
+    )`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const parsedLimit = Math.min(100, Math.max(1, Number(limit) || 50));
+  const parsedOffset = Math.max(0, Number(offset) || 0);
+  queryParams.push(parsedLimit, parsedOffset);
+
+  const { rows } = await pool.query(
+    `SELECT cs.id, cs.customer_id, c.full_name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+            cs.product_name, cs.quantity, cs.frequency, cs.time_slot, cs.cost_per_day_paise,
+            cs.status, cs.next_delivery, cs.plan_type, cs.duration_label, cs.total_amount_paise,
+            cs.razorpay_subscription_id, cs.razorpay_plan_id, cs.notes, cs.created_at, cs.updated_at
+     FROM customer_subscriptions cs
+     JOIN customers c ON c.id = cs.customer_id
+     ${whereClause}
+     ORDER BY cs.created_at DESC
+     LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
+    queryParams
+  );
+
+  const countRes = await pool.query(
+    `SELECT COUNT(*) AS total FROM customer_subscriptions cs JOIN customers c ON c.id = cs.customer_id ${whereClause}`,
+    queryParams.slice(0, -2)
+  );
+
+  return { subscriptions: rows, total: Number(countRes.rows[0].total) };
+});
+
+app.get('/api/v1/admin/subscriptions/export', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+
+  const { status, search, delivery_date } = request.query || {};
+  const queryParams = [];
+  const conditions = [];
+
+  if (status && status !== 'all') {
+    queryParams.push(status);
+    conditions.push(`cs.status = $${queryParams.length}`);
+  }
+
+  if (search && search.trim()) {
+    queryParams.push(`%${search.trim().toLowerCase()}%`);
+    conditions.push(`(
+      LOWER(cs.product_name) LIKE $${queryParams.length} OR
+      LOWER(c.full_name) LIKE $${queryParams.length} OR
+      LOWER(c.email) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(cs.razorpay_subscription_id, '')) LIKE $${queryParams.length} OR
+      LOWER(cs.id::text) LIKE $${queryParams.length}
+    )`);
+  }
+
+  if (delivery_date && delivery_date.trim()) {
+    queryParams.push(`%${delivery_date.trim()}%`);
+    conditions.push(`(
+      cs.next_delivery LIKE $${queryParams.length} OR
+      cs.notes->>'startDate' LIKE $${queryParams.length} OR
+      cs.notes->>'paidThroughDate' LIKE $${queryParams.length}
+    )`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT cs.id, cs.customer_id, c.full_name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+            cs.product_name, cs.quantity, cs.frequency, cs.time_slot, cs.cost_per_day_paise,
+            cs.status, cs.next_delivery, cs.plan_type, cs.duration_label, cs.total_amount_paise,
+            cs.razorpay_subscription_id, cs.notes, cs.created_at
+     FROM customer_subscriptions cs
+     JOIN customers c ON c.id = cs.customer_id
+     ${whereClause}
+     ORDER BY cs.created_at DESC
+     LIMIT 10000`,
+    queryParams
+  );
+
+  const headers = [
+    'Subscription ID',
+    'Customer Name',
+    'Customer Email',
+    'Customer Phone',
+    'Product',
+    'Quantity',
+    'Frequency',
+    'Time Slot',
+    'Daily Rate (INR)',
+    'Plan Type',
+    'Duration Label',
+    'Total Amount (INR)',
+    'Status',
+    'Next Delivery',
+    'Gateway Subscription ID',
+    'Last Payment ID',
+    'Paid Through Date',
+    'Start Date',
+    'Created At (IST)'
+  ];
+
+  const csvRows = [headers.join(',')];
+  for (const row of rows) {
+    const notes = typeof row.notes === 'object' && row.notes !== null ? row.notes : {};
+    const values = [
+      row.id,
+      row.customer_name,
+      row.customer_email,
+      row.customer_phone || '',
+      row.product_name,
+      row.quantity,
+      row.frequency,
+      row.time_slot,
+      ((row.cost_per_day_paise || 0) / 100).toFixed(2),
+      row.plan_type || 'month',
+      row.duration_label || '',
+      ((row.total_amount_paise || 0) / 100).toFixed(2),
+      row.status,
+      row.next_delivery || '',
+      row.razorpay_subscription_id || '',
+      notes.lastPaymentId || notes.paymentId || notes.mandatePaymentId || '',
+      notes.paidThroughDate || '',
+      notes.startDate || '',
+      formatISTDateTime(row.created_at)
+    ];
+
+    csvRows.push(values.map(sanitizeCsvCell).join(','));
+  }
+
+  const csvContent = csvRows.join('\r\n');
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="milvanta-subscriptions-${Date.now()}.csv"`)
+    .send(csvContent);
 });
 
 app.patch('/api/v1/admin/orders/:orderNumber/status', { preHandler: app.requireAdmin }, async (request, reply) => {
@@ -2994,7 +3327,10 @@ app.patch('/api/v1/admin/orders/:orderNumber/status', { preHandler: app.requireA
 
 app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const [ordersSummary, customerSummary] = await Promise.all([
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+
+  const [ordersSummary, customerSummary, subSummary] = await Promise.all([
     pool.query(`
       SELECT
         COUNT(*) AS total_orders,
@@ -3003,15 +3339,34 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
         COALESCE(SUM(total_paise) FILTER (WHERE payment_status = 'paid'), 0) AS total_revenue_paise
       FROM customer_orders
     `),
-    pool.query('SELECT COUNT(*) AS total_customers FROM customers')
+    pool.query('SELECT COUNT(*) AS total_customers FROM customers'),
+    pool.query(`
+      SELECT
+        COUNT(*) AS total_subscriptions,
+        COUNT(*) FILTER (WHERE status = 'active') AS active_subscriptions,
+        COUNT(*) FILTER (WHERE status = 'pending_authorization') AS pending_subscriptions,
+        COUNT(*) FILTER (WHERE status = 'paused') AS paused_subscriptions,
+        COALESCE(SUM(total_amount_paise) FILTER (WHERE status = 'active'), 0) AS subscription_revenue_paise
+      FROM customer_subscriptions
+    `)
   ]);
+
+  const orderRevenue = Number(ordersSummary.rows[0].total_revenue_paise);
+  const subRevenue = Number(subSummary.rows[0].subscription_revenue_paise);
 
   return {
     totalOrders: Number(ordersSummary.rows[0].total_orders),
     activeOrders: Number(ordersSummary.rows[0].active_orders),
     deliveredOrders: Number(ordersSummary.rows[0].delivered_orders),
-    totalRevenuePaise: Number(ordersSummary.rows[0].total_revenue_paise),
-    totalCustomers: Number(customerSummary.rows[0].total_customers)
+    totalRevenuePaise: orderRevenue,
+    orderRevenuePaise: orderRevenue,
+    subscriptionRevenuePaise: subRevenue,
+    combinedRevenuePaise: orderRevenue + subRevenue,
+    totalCustomers: Number(customerSummary.rows[0].total_customers),
+    totalSubscriptions: Number(subSummary.rows[0].total_subscriptions),
+    activeSubscriptions: Number(subSummary.rows[0].active_subscriptions),
+    pendingSubscriptions: Number(subSummary.rows[0].pending_subscriptions),
+    pausedSubscriptions: Number(subSummary.rows[0].paused_subscriptions)
   };
 });
 
