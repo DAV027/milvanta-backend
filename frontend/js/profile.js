@@ -2862,7 +2862,7 @@
               <h1 class="brand-title">MILVANTA</h1>
               <div class="brand-sub">Pure Dairy · Artisan Bakes · Heritage Pickles</div>
               <div style="font-size: 11px; color: #475569; margin-top: 6px;">
-                Milvanta Foods Pvt Ltd · FSSAI Lic No: 13624014000452<br>
+                Milvanta · FSSAI Lic No: 23626448000158<br>
                 Hafeezpet Cold-Chain Hub, Hyderabad - 500049, Telangana<br>
                 Email: projects@milvanta.in | WhatsApp: +91 9052222256
               </div>
@@ -2928,7 +2928,7 @@
           </div>
 
           <div class="footer-note">
-            This is a computer-generated tax invoice issued by Milvanta Foods Pvt Ltd.<br>
+            This is a computer-generated tax invoice issued by Milvanta.<br>
             All milk deliveries are dispatched unadulterated directly from ethical partner farms in temperature-controlled cold chain.<br>
             Thank you for choosing farm-fresh pure nutrition!
           </div>

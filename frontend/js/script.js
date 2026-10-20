@@ -50,7 +50,7 @@ let products = [
       { size: '500 ml', price: 70 },
       { size: '1 Litre', price: 130 }
     ],
-    details: 'High natural milk-fat (7.5%+), dense nutrition, and rich texture.'
+    details: 'High natural milk-fat (7%+), dense nutrition, and rich texture.'
   },
   {
     id: 104,
@@ -1282,7 +1282,7 @@ function getProductFeatures(p) {
   // Fresh Milk
   if (name.includes('buffalo milk')) {
     return [
-      { icon: '🥛', text: '7.5%+ Natural Fat' },
+      { icon: '🥛', text: '7%+ Natural Fat' },
       { icon: '🛡️', text: 'No Preservatives' },
       { icon: '❄️', text: 'Chilled Under 4°C' }
     ];
