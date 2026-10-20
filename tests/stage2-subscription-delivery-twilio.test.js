@@ -1,3 +1,4 @@
+import './helpers/testDbGuard.js';
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -97,23 +98,26 @@ describe('Milvanta Stage 2-5: Subscriptions, Automated Delivery Engine & Twilio 
     });
 
     it('API: POST /api/v1/auth/phone/send-otp handles requests and validates input', async () => {
+      const testPhoneApi = '9' + Math.floor(100000000 + Math.random() * 900000000);
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/auth/phone/send-otp',
-        payload: { phone: '9876543210' }
+        payload: { phone: testPhoneApi }
       });
       assert.equal(res.statusCode, 200);
       const data = JSON.parse(res.payload);
       assert.equal(data.success, true);
-      assert.equal(data.phone, '+919876543210');
+      assert.equal(data.phone, `+91${testPhoneApi}`);
       assert.equal(data.code, undefined);
     });
 
     it('API: POST /api/v1/auth/phone/verify-otp validates OTP correctly', async () => {
+      const testPhoneVerify = '9' + Math.floor(100000000 + Math.random() * 900000000);
+      await sendPhoneOtp({ phone: testPhoneVerify });
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/auth/phone/verify-otp',
-        payload: { phone: '9876543210', code: '123456' }
+        payload: { phone: testPhoneVerify, code: '123456' }
       });
       assert.equal(res.statusCode, 200);
       const data = JSON.parse(res.payload);
