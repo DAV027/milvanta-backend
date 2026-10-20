@@ -1489,7 +1489,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
   }
 
   // 3. Confirm payment and subscription are authorized by Razorpay gateway
-  const isSubAuthorized = ['active', 'authenticated'].includes(gatewaySub?.status);
+  // Subscriptions with total_count = 1 transition to 'completed' immediately upon charging the cycle.
+  const isSubAuthorized = ['active', 'authenticated', 'completed'].includes(gatewaySub?.status);
   const isPaymentAuthorized = ['captured', 'authorized'].includes(gatewayPayment?.status);
 
   if (!isSubAuthorized || !isPaymentAuthorized) {
@@ -1748,8 +1749,15 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
   }
 
-  // 7. Prevent duplicate verification from changing cancelled, paused or expired back to active (Requirement 1)
-  if (subRow && ['cancelled', 'paused', 'expired'].includes(subRow.status)) {
+  // 7. Check local subscription state
+  // If local status is 'expired' but gateway confirms captured payment and subscription completed/active,
+  // this is a premature expiry caused by Razorpay's subscription.completed webhook race condition on 1-month plans.
+  // Reconcile it safely to active fulfillment through the paid-through date!
+  const isPrematureCompletedExpiry = subRow && subRow.status === 'expired' &&
+    gatewayPayment?.status === 'captured' &&
+    (gatewaySub?.status === 'completed' || gatewaySub?.status === 'active' || isFullPlanCharge);
+
+  if (subRow && (['cancelled', 'paused'].includes(subRow.status) || (subRow.status === 'expired' && !isPrematureCompletedExpiry))) {
     return reply.code(409).send({
       verified: false,
       error: 'subscription_state_conflict',
@@ -1758,8 +1766,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     });
   }
 
-  // 8. Validation against server-side records if existing draft (Requirement 3)
-  if (subRow && subRow.status === 'pending_authorization') {
+  // 8. Validation against server-side records if existing draft or prematurely expired subscription
+  if (subRow && (subRow.status === 'pending_authorization' || isPrematureCompletedExpiry)) {
     // Validate plan ID
     if (subRow.razorpay_plan_id && gatewaySub.plan_id && subRow.razorpay_plan_id !== gatewaySub.plan_id) {
       return reply.code(400).send({
@@ -1782,7 +1790,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       }
     }
 
-    // Move pending_authorization to active idempotently using atomic conditional update
+    // Move pending_authorization (or reconcile premature expiry) to active idempotently
     const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
       ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
       : null;
@@ -1790,12 +1798,20 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
       : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
 
+    const paidThroughYMD = gatewaySub?.current_end && Number.isFinite(gatewaySub.current_end)
+      ? new Date(gatewaySub.current_end * 1000).toISOString().slice(0, 10)
+      : null;
+
     const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
     const updatedNotes = {
       ...existingNotes,
       subscriptionId: subId,
       razorpay_subscription_id: subId,
       lastPaymentId: paymentId,
+      gatewayStatus: gatewaySub?.status || 'active',
+      billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
+      paidCount: gatewaySub?.paid_count || 1,
+      paidThroughDate: paidThroughYMD || existingNotes.paidThroughDate || null,
       authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
       authAmountPaise: gatewayPayment.amount,
       start_at: gatewaySub?.start_at || existingNotes.start_at || null,
@@ -1810,9 +1826,9 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
            next_delivery = $2,
            notes = $3::jsonb,
            updated_at = NOW()
-       WHERE id = $4 AND status = 'pending_authorization'
+       WHERE id = $4 AND (status = 'pending_authorization' OR (status = 'expired' AND $5::boolean))
        RETURNING id`,
-      [subId, futureNextDelivery, JSON.stringify(updatedNotes), subRow.id]
+      [subId, futureNextDelivery, JSON.stringify(updatedNotes), subRow.id, isPrematureCompletedExpiry]
     );
 
     if (updateRes.rows.length > 0) {
@@ -1834,8 +1850,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       }
       isNewlyActivated = false;
 
-      // Never report active if the record was concurrently paused, cancelled or expired
-      if (['cancelled', 'paused', 'expired'].includes(subRow.status)) {
+      // Never report active if the record was concurrently paused, cancelled or truly expired
+      if (['cancelled', 'paused'].includes(subRow.status) || (subRow.status === 'expired' && !isPrematureCompletedExpiry)) {
         return reply.code(409).send({
           verified: false,
           error: 'subscription_state_conflict',
@@ -1843,6 +1859,25 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
           status: subRow.status
         });
       }
+    }
+  }
+
+  // If subscription was already active (e.g. preceding webhook arrived before verify), ensure lastPaymentId is persisted
+  if (subRow && subRow.status === 'active' && paymentId) {
+    const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+    if (!existingNotes.lastPaymentId || existingNotes.lastPaymentId !== paymentId) {
+      await pool.query(
+        `UPDATE customer_subscriptions
+         SET notes = jsonb_set(
+               COALESCE(notes, '{}'::jsonb),
+               '{lastPaymentId}',
+               to_jsonb($1::text)
+             ),
+             updated_at = NOW()
+         WHERE id = $2`,
+        [paymentId, subRow.id]
+      );
+      subRow.notes = { ...existingNotes, lastPaymentId: paymentId };
     }
   }
 
@@ -1937,7 +1972,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=gateway_fetch_failed`, 302);
   }
 
-  const isSubAuthorized = ['active', 'authenticated'].includes(gatewaySub?.status);
+  const isSubAuthorized = ['active', 'authenticated', 'completed'].includes(gatewaySub?.status);
   const isPaymentAuthorized = ['captured', 'authorized'].includes(gatewayPayment?.status);
   if (!isSubAuthorized || !isPaymentAuthorized) {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_not_authorized`, 302);
@@ -1996,8 +2031,12 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_not_found`, 302);
       }
 
-      // Prevent resurrecting cancelled, paused or expired subscriptions
-      if (['cancelled', 'paused', 'expired'].includes(subRow.status)) {
+      const isPrematureCompletedExpiry = subRow && subRow.status === 'expired' &&
+        gatewayPayment?.status === 'captured' &&
+        (gatewaySub?.status === 'completed' || gatewaySub?.status === 'active' || isFullPlanCharge);
+
+      // Prevent resurrecting cancelled, paused or truly expired subscriptions
+      if (['cancelled', 'paused'].includes(subRow.status) || (subRow.status === 'expired' && !isPrematureCompletedExpiry)) {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_state_conflict`, 302);
       }
 
@@ -2007,8 +2046,8 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_forbidden`, 302);
       }
 
-      // Activate ONLY if pending_authorization using atomic conditional update for concurrency
-      if (subRow.status === 'pending_authorization') {
+      // Activate if pending_authorization or reconcile premature expiry
+      if (subRow.status === 'pending_authorization' || isPrematureCompletedExpiry) {
         const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
         const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
           ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
@@ -2017,6 +2056,10 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
           : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
 
+        const paidThroughYMD = gatewaySub?.current_end && Number.isFinite(gatewaySub.current_end)
+          ? new Date(gatewaySub.current_end * 1000).toISOString().slice(0, 10)
+          : null;
+
         const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
            SET status = 'active', 
@@ -2024,7 +2067,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
                next_delivery = $2,
                notes = $3::jsonb,
                updated_at = NOW() 
-           WHERE id = $4 AND status = 'pending_authorization'
+           WHERE id = $4 AND (status = 'pending_authorization' OR (status = 'expired' AND $5::boolean))
            RETURNING id`,
           [
             subId,
@@ -2034,6 +2077,10 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
               subscriptionId: subId,
               razorpay_subscription_id: subId,
               lastPaymentId: paymentId,
+              gatewayStatus: gatewaySub?.status || 'active',
+              billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
+              paidCount: gatewaySub?.paid_count || 1,
+              paidThroughDate: paidThroughYMD || existingNotes.paidThroughDate || null,
               authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
               authAmountPaise: gatewayPayment.amount,
               start_at: gatewaySub?.start_at || existingNotes.start_at || null,
@@ -2041,7 +2088,8 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
               activatedVia: 'callback',
               verifiedAt: new Date().toISOString()
             }),
-            subRow.id
+            subRow.id,
+            isPrematureCompletedExpiry
           ]
         );
         if (updateRes.rows.length > 0) {
@@ -2051,7 +2099,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         } else {
           // Concurrently updated by another request/worker: reread actual database state
           const freshRes = await pool.query('SELECT status FROM customer_subscriptions WHERE id = $1', [subRow.id]);
-          if (freshRes.rows.length > 0 && ['cancelled', 'paused', 'expired'].includes(freshRes.rows[0].status)) {
+          if (freshRes.rows.length > 0 && (['cancelled', 'paused'].includes(freshRes.rows[0].status) || (freshRes.rows[0].status === 'expired' && !isPrematureCompletedExpiry))) {
             return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_state_conflict`, 302);
           }
         }
@@ -2938,16 +2986,47 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       // B. Razorpay Subscription Lifecycle Events
       const subEntity = request.body?.payload?.subscription?.entity;
       if (subEntity?.id) {
-        if (['subscription.authenticated', 'subscription.activated', 'subscription.charged'].includes(eventName)) {
-          // Do not resurrect cancelled, expired, or paused subscriptions
+        if (['subscription.authenticated'].includes(eventName)) {
+          // Mandate authorization alone must NOT authorize unpaid deliveries.
+          // Record authenticated gateway state in notes without activating deliveries.
+          await client.query(
+            `UPDATE customer_subscriptions 
+             SET notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{gatewayStatus}',
+                   '"authenticated"'
+                 ),
+                 updated_at = NOW() 
+             WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
+            [subEntity.id]
+          );
+        } else if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
+          // Recurring cycle paid / payment captured: active for fulfillment!
+          const paidThroughYMD = subEntity.current_end && Number.isFinite(subEntity.current_end)
+            ? new Date(subEntity.current_end * 1000).toISOString().slice(0, 10)
+            : null;
+
           await client.query(
             `UPDATE customer_subscriptions 
              SET status = 'active', 
                  razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
+                 notes = jsonb_set(
+                   jsonb_set(
+                     jsonb_set(
+                       COALESCE(notes, '{}'::jsonb),
+                       '{gatewayStatus}',
+                       to_jsonb($2::text)
+                     ),
+                     '{paidCount}',
+                     to_jsonb(COALESCE($3::integer, 1))
+                   ),
+                   '{paidThroughDate}',
+                   COALESCE(to_jsonb($4::text), notes->'paidThroughDate', 'null'::jsonb)
+                 ),
                  updated_at = NOW() 
              WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
-               AND status NOT IN ('cancelled', 'expired', 'paused')`,
-            [subEntity.id]
+               AND status NOT IN ('cancelled', 'paused')`,
+            [subEntity.id, subEntity.status || 'active', subEntity.paid_count || 1, paidThroughYMD]
           );
         } else if (['subscription.resumed'].includes(eventName)) {
           // Resume paused subscriptions, but never cancelled/expired
@@ -2955,6 +3034,11 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             `UPDATE customer_subscriptions 
              SET status = 'active', 
                  razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
+                 notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{gatewayStatus}',
+                   '"active"'
+                 ),
                  updated_at = NOW() 
              WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
                AND status NOT IN ('cancelled', 'expired')`,
@@ -2962,20 +3046,106 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           );
         } else if (['subscription.cancelled'].includes(eventName)) {
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'cancelled', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+            `UPDATE customer_subscriptions 
+             SET status = 'cancelled', 
+                 notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{gatewayStatus}',
+                   '"cancelled"'
+                 ),
+                 updated_at = NOW() 
+             WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
             [subEntity.id]
           );
         } else if (['subscription.halted', 'subscription.pending', 'subscription.paused'].includes(eventName)) {
           // Recoverable billing failure or customer pause: transition to paused so deliveries hold without permanent loss
           await client.query(
-            "UPDATE customer_subscriptions SET status = 'paused', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
-            [subEntity.id]
+            `UPDATE customer_subscriptions 
+             SET status = 'paused', 
+                 notes = jsonb_set(
+                   COALESCE(notes, '{}'::jsonb),
+                   '{gatewayStatus}',
+                   to_jsonb($2::text)
+                 ),
+                 updated_at = NOW() 
+             WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
+            [subEntity.id, eventName.replace('subscription.', '')]
           );
         } else if (['subscription.completed'].includes(eventName)) {
-          await client.query(
-            "UPDATE customer_subscriptions SET status = 'expired', updated_at = NOW() WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1",
+          // CRITICAL: Separate Razorpay billing-cycle completion from fulfillment entitlement.
+          // For subscriptions with total_count = 1, Razorpay marks subscription.completed immediately
+          // after charging the first (and only) month.
+          // The month is FULLY PAID through its paid-through date; deliveries MUST remain ACTIVE!
+          const { rows: subRows } = await client.query(
+            `SELECT id, status, notes, total_amount_paise, created_at, next_delivery
+             FROM customer_subscriptions
+             WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
             [subEntity.id]
           );
+          if (subRows.length > 0) {
+            const sub = subRows[0];
+            const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+            const isPaid = (subEntity.paid_count && subEntity.paid_count > 0) || Boolean(notes.lastPaymentId || notes.paymentId);
+
+            const paidThroughDate = subEntity.current_end && Number.isFinite(subEntity.current_end)
+              ? new Date(subEntity.current_end * 1000).toISOString().slice(0, 10)
+              : (notes.paidThroughDate || notes.endDate || null);
+
+            const nowYMD = new Date().toISOString().slice(0, 10);
+            const isStillWithinPaidPeriod = paidThroughDate ? paidThroughDate >= nowYMD : true;
+
+            if (isPaid && isStillWithinPaidPeriod && sub.status !== 'cancelled' && sub.status !== 'paused') {
+              // Fulfillment entitlement remains ACTIVE through paid-through period, while billingStatus is marked completed
+              await client.query(
+                `UPDATE customer_subscriptions
+                 SET status = 'active',
+                     notes = jsonb_set(
+                       jsonb_set(
+                         jsonb_set(
+                           COALESCE(notes, '{}'::jsonb),
+                           '{billingStatus}',
+                           '"completed"'
+                         ),
+                         '{gatewayStatus}',
+                         '"completed"'
+                       ),
+                       '{paidThroughDate}',
+                       to_jsonb($2::text)
+                     ),
+                     updated_at = NOW()
+                 WHERE id = $1`,
+                [sub.id, paidThroughDate || '']
+              );
+            } else if (!isPaid) {
+              // Mandate ended without any cycle payment captured
+              await client.query(
+                `UPDATE customer_subscriptions
+                 SET status = 'expired',
+                     notes = jsonb_set(
+                       jsonb_set(COALESCE(notes, '{}'::jsonb), '{billingStatus}', '"completed_unpaid"'),
+                       '{gatewayStatus}',
+                       '"completed"'
+                     ),
+                     updated_at = NOW()
+                 WHERE id = $1`,
+                [sub.id]
+              );
+            } else {
+              // Paid-through date has truly elapsed
+              await client.query(
+                `UPDATE customer_subscriptions
+                 SET status = 'expired',
+                     notes = jsonb_set(
+                       jsonb_set(COALESCE(notes, '{}'::jsonb), '{billingStatus}', '"completed"'),
+                       '{gatewayStatus}',
+                       '"completed"'
+                     ),
+                     updated_at = NOW()
+                 WHERE id = $1`,
+                [sub.id]
+              );
+            }
+          }
         }
       }
     }

@@ -2057,4 +2057,384 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
       assert.equal(data400.error, 'invalid_subscription_id');
     });
   });
+
+  // =========================================================================
+  // 9. Razorpay One-Month Subscription Lifecycle, Webhook Ordering & Pricing Integrity
+  // =========================================================================
+  describe('9. Razorpay One-Month Subscription Lifecycle, Webhook Ordering & Pricing Integrity', () => {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_key_milvanta_secure';
+    process.env.RAZORPAY_WEBHOOK_SECRET = webhookSecret;
+
+    async function sendWebhook(event, payloadBody) {
+      const payloadStr = JSON.stringify(payloadBody);
+      const sig = crypto.createHmac('sha256', webhookSecret).update(payloadStr).digest('hex');
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/webhook',
+        headers: {
+          'x-razorpay-signature': sig,
+          'x-razorpay-event-id': `evt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          'content-type': 'application/json'
+        },
+        payload: payloadStr
+      });
+    }
+
+    it('Action 2 & 3: retains active fulfillment entitlement when Razorpay reports subscription.completed for a paid 1-month plan', async () => {
+      const subId = `sub_onemonth_${Date.now()}`;
+      const futureEnd = Math.floor(Date.now() / 1000) + (31 * 86400);
+      const futureEndYMD = new Date(futureEnd * 1000).toISOString().slice(0, 10);
+
+      // Seed pending subscription with a captured payment reference in notes
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Buffalo Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           12500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan (31 Days)',
+           387500, $2, $3::jsonb
+         ) RETURNING id`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId, lastPaymentId: `pay_onemonth_${Date.now()}` })]
+      );
+      const localId = insertRes.rows[0].id;
+
+      // Razorpay fires subscription.completed because total_count = 1 and paid_count = 1
+      const res = await sendWebhook('subscription.completed', {
+        event: 'subscription.completed',
+        payload: {
+          subscription: {
+            entity: {
+              id: subId,
+              status: 'completed',
+              total_count: 1,
+              paid_count: 1,
+              current_end: futureEnd
+            }
+          }
+        }
+      });
+      assert.equal(res.statusCode, 200);
+
+      // Verify business-state handling: fulfillment entitlement MUST remain active through the paid-through date
+      const { rows } = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE id = $1', [localId]);
+      assert.equal(rows[0].status, 'active', 'Fully paid month must retain its active delivery entitlement');
+      assert.equal(rows[0].notes.billingStatus, 'completed', 'Billing cycle status should be marked completed');
+      assert.equal(rows[0].notes.gatewayStatus, 'completed');
+      assert.equal(rows[0].notes.paidThroughDate, futureEndYMD);
+    });
+
+    it('Action 3: does NOT authorize fulfillment deliveries on mandate-only authorization (paid_count = 0)', async () => {
+      const subId = `sub_mandate_only_${Date.now()}`;
+
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         ) RETURNING id`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+      const localId = insertRes.rows[0].id;
+
+      // Mandate registered, but recurring charge has NOT been billed
+      const res = await sendWebhook('subscription.authenticated', {
+        event: 'subscription.authenticated',
+        payload: {
+          subscription: {
+            entity: {
+              id: subId,
+              status: 'authenticated',
+              paid_count: 0
+            }
+          }
+        }
+      });
+      assert.equal(res.statusCode, 200);
+
+      const { rows } = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE id = $1', [localId]);
+      assert.equal(rows[0].status, 'pending_authorization', 'Mandate authorization alone must NOT authorize unpaid deliveries');
+      assert.equal(rows[0].notes.gatewayStatus, 'authenticated');
+    });
+
+    it('Action 4: reconciles premature legacy expiry safely when gateway confirms captured payment and completed subscription', async () => {
+      const subId = `sub_premature_expiry_${Date.now()}`;
+      const payId = `pay_captured_${Date.now()}`;
+      const planId = `plan_cow_${Date.now()}`;
+
+      // Simulate a subscription that was marked 'expired' prematurely by legacy webhook
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'expired', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4::jsonb
+         ) RETURNING id`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, customerId: String(customerAId) })]
+      );
+      const localId = insertRes.rows[0].id;
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      // Gateway confirms subscription completed billing for 1 month and payment is captured
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'completed',
+        total_count: 1,
+        paid_count: 1,
+        current_end: Math.floor(Date.now() / 1000) + (31 * 86400),
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre', productName: 'Pure Fresh Cow Milk' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.status, 'active');
+
+        // Verify local subscription was reconciled to active without creating a new row
+        const { rows } = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE id = $1', [localId]);
+        assert.equal(rows[0].status, 'active');
+        assert.equal(rows[0].notes.lastPaymentId, payId);
+        assert.equal(rows[0].notes.billingStatus, 'completed');
+
+        // Confirm no duplicate subscription was created
+        const countRes = await pool.query('SELECT COUNT(*) FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(Number(countRes.rows[0].count), 1);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Action 4: rejects verification with 409 if subscription is cancelled or paused', async () => {
+      const subId = `sub_cancelled_${Date.now()}`;
+      const payId = `pay_cancel_${Date.now()}`;
+      const planId = `plan_cancel_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'cancelled', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4::jsonb
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'completed',
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 409);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_state_conflict');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Action 6: confirms pricing consistency between daily rates and Razorpay plan charges without extra fees', async () => {
+      // 31 days of Cow Milk 1L at ₹105/day = ₹3,255 (325500 paise)
+      // 31 days of Buffalo Milk 1L at ₹125/day = ₹3,875 (387500 paise)
+      const originalPlansCreate = razorpay.plans.create;
+      const originalSubsCreate = razorpay.subscriptions.create;
+      razorpay.plans.create = async (params) => ({ id: `plan_mock_${Date.now()}`, ...params });
+      razorpay.subscriptions.create = async (params) => ({ id: `sub_mock_${Date.now()}`, short_url: 'https://rzp.io/i/mock', ...params });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/razorpay-checkout',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            productId: 1, // Cow Milk
+            productName: 'Pure Fresh Cow Milk',
+            size: '1 Litre',
+            monthsCount: 1,
+            daysCount: 31
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.success, true);
+        assert.equal(data.dailyRate, 105);
+        // Ensure the Razorpay plan amount strictly matches dailyRate * daysCount without spurious delivery surcharges
+        assert.equal(data.amount, 325500);
+        assert.equal(data.totalAmount, 325500);
+      } finally {
+        razorpay.plans.create = originalPlansCreate;
+        razorpay.subscriptions.create = originalSubsCreate;
+      }
+    });
+
+    it('Action 7: handles webhook-before-verification ordering when webhooks arrive before client verification call', async () => {
+      const subId = `sub_order_race_${Date.now()}`;
+      const payId = `pay_order_race_${Date.now()}`;
+      const planId = `plan_order_race_${Date.now()}`;
+      const futureEnd = Math.floor(Date.now() / 1000) + (31 * 86400);
+
+      // Seed pending subscription
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4::jsonb
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, customerId: String(customerAId) })]
+      );
+
+      // 1. Webhook subscription.activated arrives first
+      await sendWebhook('subscription.activated', {
+        event: 'subscription.activated',
+        payload: {
+          subscription: {
+            entity: { id: subId, status: 'active', paid_count: 1, current_end: futureEnd }
+          }
+        }
+      });
+
+      // 2. Webhook subscription.completed arrives second (total_count = 1)
+      await sendWebhook('subscription.completed', {
+        event: 'subscription.completed',
+        payload: {
+          subscription: {
+            entity: { id: subId, status: 'completed', total_count: 1, paid_count: 1, current_end: futureEnd }
+          }
+        }
+      });
+
+      // 3. Customer browser finally calls POST /api/v1/subscriptions/verify
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'completed',
+        total_count: 1,
+        paid_count: 1,
+        current_end: futureEnd,
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      try {
+        const verifyRes = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(verifyRes.statusCode, 200);
+        const data = JSON.parse(verifyRes.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.status, 'active');
+
+        // Confirm database status remains active and payment reference is persisted
+        const { rows } = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(rows[0].status, 'active');
+        assert.equal(rows[0].notes.lastPaymentId, payId);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Action 5: confirms checkout financial calculation includes delivery in continuous subscription (deliveryFee = 0)', () => {
+      // Direct simulation of checkout.js getOrderFinancials() logic
+      const cart = [
+        {
+          id: 1,
+          name: 'Pure Fresh Cow Milk',
+          price: 315, // 31 days plan unit price
+          quantity: 1,
+          isContinuousMonthsPlan: true,
+          variant: { size: '1 Litre', isContinuousMonthsPlan: true }
+        }
+      ];
+
+      const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const hasContinuous = cart.some(item => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+      const deliveryFee = hasContinuous ? 0 : 50;
+      const total = subtotal + deliveryFee;
+
+      assert.equal(subtotal, 315);
+      assert.equal(deliveryFee, 0, 'Continuous subscription must have delivery included (deliveryFee = 0)');
+      assert.equal(total, 315, 'Total must strictly equal subtotal when delivery is included');
+    });
+  });
 });

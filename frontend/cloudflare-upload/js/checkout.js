@@ -242,15 +242,18 @@
       ? deliveryHelper.getDeliveryInfo(pin)
       : { fee: 50, distanceKm: 1, serviceable: true, inHyderabad: true, area: 'Hafeezpet', shortArea: 'Hafeezpet' };
 
-    // Delivery charges: ₹50 for within 5km, ₹80 for 6-10km and Core City (500001–500096)
-    const deliveryFee = info.serviceable ? (Number(info.fee) || 50) : 50;
+    // Continuous milk subscriptions include daily doorstep morning delivery in the subscription daily rate.
+    // Regular orders below ₹499 incur delivery fee (₹50 within 5km, ₹80 for 6-10km and Core City).
+    const hasContinuous = state.cart.some((item) => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+    const deliveryFee = hasContinuous ? 0 : (info.serviceable ? (Number(info.fee) || 50) : 50);
     const total = subtotal + deliveryFee;
 
     return {
       subtotal,
       deliveryFee,
       total,
-      deliveryInfo: info
+      deliveryInfo: info,
+      isDeliveryIncluded: hasContinuous
     };
   }
 
@@ -300,7 +303,7 @@
     }).join('');
 
     $('#summarySubtotal').textContent = `₹${subtotal.toLocaleString('en-IN')}`;
-    $('#summaryDeliveryFee').textContent = `₹${deliveryFee}`;
+    $('#summaryDeliveryFee').textContent = deliveryFee === 0 ? 'FREE (Included)' : `₹${deliveryFee}`;
     $('#summaryTotal').textContent = `₹${total.toLocaleString('en-IN')}`;
   }
 
@@ -997,7 +1000,8 @@
     const errEl = $('#checkoutErrorMessage');
     if (errEl) errEl.textContent = '';
 
-    const { total } = getOrderFinancials();
+    const orderFinancials = getOrderFinancials();
+    const currentTotal = orderFinancials.total;
     const continuousItem = state.cart.find((item) => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
     const hasContinuous = Boolean(continuousItem);
 
@@ -1029,7 +1033,7 @@
               size: size,
               monthsCount,
               daysCount,
-              totalAmountPaise: Math.round(total * 100),
+              totalAmountPaise: Math.round(currentTotal * 100),
               dailyRatePaise,
               startOffset
             })
@@ -1039,7 +1043,7 @@
           if (errEl) errEl.textContent = subErr.message || 'Unable to initialize subscription checkout. Please try again.';
           if (payBtn) {
             payBtn.disabled = false;
-            payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+            payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`;
           }
           return;
         }
@@ -1086,18 +1090,18 @@
                 }
                 if (payBtn) {
                   payBtn.disabled = false;
-                  payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+                  payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`;
                 }
                 return; // Do NOT activate, do NOT clear cart, do NOT show success
               }
 
-              const { deliveryFee, total, subtotal } = getOrderFinancials();
+              const finalFinancials = getOrderFinancials();
               await activateSubscriptionsFromCart(state.cart, {
                 subscriptionId: res.subscriptionId,
                 paymentId: paymentRef,
-                deliveryFee: deliveryFee,
-                totalPaid: total,
-                subtotal: subtotal
+                deliveryFee: finalFinancials.deliveryFee,
+                totalPaid: finalFinancials.total,
+                subtotal: finalFinancials.subtotal
               });
 
               // Trigger subscription confirmation email
@@ -1107,8 +1111,8 @@
                   body: JSON.stringify({
                     subscriptionId: res.subscriptionId,
                     paymentId: paymentRef,
-                    deliveryFee: deliveryFee,
-                    totalPaid: total,
+                    deliveryFee: finalFinancials.deliveryFee,
+                    totalPaid: finalFinancials.total,
                     cart: state.cart,
                     address: state.addressDraft,
                     customer: {
@@ -1129,7 +1133,7 @@
                 if (errEl) errEl.textContent = 'Subscription checkout was cancelled. You can retry whenever ready.';
                 if (payBtn) {
                   payBtn.disabled = false;
-                  payBtn.textContent = `Pay ₹${total.toFixed(0)} via Subscription 🔒`;
+                  payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`;
                 }
               }
             }
@@ -1174,12 +1178,12 @@
         if (errEl) errEl.textContent = orderErr.message || 'Unable to place order. Please review your cart and try again.';
         if (payBtn) {
           payBtn.disabled = false;
-          payBtn.textContent = `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+          payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
         }
         return;
       }
 
-      const totalAmountPaise = Math.round(total * 100);
+      const totalAmountPaise = Math.round(currentTotal * 100);
       const serverAmount = Number(order?.amount || 0);
 
       const options = {
@@ -1187,7 +1191,7 @@
         amount: serverAmount > 0 ? serverAmount : totalAmountPaise,
         currency: order.currency || 'INR',
         name: 'Milvanta',
-        description: `Order ${order.orderNumber} (Total ₹${total.toFixed(0)} incl. delivery)`,
+        description: `Order ${order.orderNumber} (Total ₹${currentTotal.toFixed(0)} incl. delivery)`,
         ...(order.orderId ? { order_id: order.orderId } : {}),
         prefill: {
           name: state.addressDraft.name,
@@ -1217,7 +1221,7 @@
             }
             if (payBtn) {
               payBtn.disabled = false;
-              payBtn.textContent = `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+              payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
             }
             return; // Do NOT activate, do NOT clear cart, do NOT show success
           }
@@ -1230,12 +1234,12 @@
           } catch {}
 
           // Activate any Custom Days plan (or subscription items) in profile subscriptions & PostgreSQL!
-          const { deliveryFee, total, subtotal } = getOrderFinancials();
+          const finalFinancials = getOrderFinancials();
           await activateSubscriptionsFromCart(state.cart, {
             paymentId: response?.razorpay_payment_id || '',
-            deliveryFee: deliveryFee,
-            totalPaid: total,
-            subtotal: subtotal
+            deliveryFee: finalFinancials.deliveryFee,
+            totalPaid: finalFinancials.total,
+            subtotal: finalFinancials.subtotal
           });
 
           showOrderSuccess(order.orderNumber, false);
@@ -1245,7 +1249,7 @@
             if (errEl) errEl.textContent = 'Payment was cancelled. You can retry placing the order whenever ready.';
             if (payBtn) {
               payBtn.disabled = false;
-              payBtn.textContent = `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+              payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
             }
           }
         }
@@ -1262,8 +1266,8 @@
       if (payBtn) {
         payBtn.disabled = false;
         payBtn.textContent = hasContinuous
-          ? `Pay ₹${total.toFixed(0)} via Subscription 🔒`
-          : `Pay ₹${total.toFixed(0)} via Razorpay 🔒`;
+          ? `Pay ₹${currentTotal.toFixed(0)} via Subscription 🔒`
+          : `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
       }
     }
   }
