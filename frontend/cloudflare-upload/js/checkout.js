@@ -156,6 +156,7 @@
       pincode: '500049'
     },
     isSubmitting: false,
+    isPaymentProcessing: false,
     checkoutKey: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('mv-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8))
   };
 
@@ -339,6 +340,35 @@
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  // Validate and read pending subscription authorization state from sessionStorage
+  function validatePendingSubscriptionAuth(auth) {
+    if (!auth || typeof auth !== 'object') return null;
+    const subId = typeof auth.subscriptionId === 'string' ? auth.subscriptionId.trim() : '';
+    const payId = typeof auth.paymentId === 'string' ? auth.paymentId.trim() : '';
+    const sig = typeof auth.signature === 'string' ? auth.signature.trim() : '';
+    if (!subId || !/^sub_[A-Za-z0-9_]+$/.test(subId)) return null;
+    if (!payId || !/^pay_[A-Za-z0-9_]+$/.test(payId)) return null;
+    if (!sig || !/^[a-fA-F0-9]{32,128}$/.test(sig)) return null;
+    return { subscriptionId: subId, paymentId: payId, signature: sig };
+  }
+
+  function getPendingSubscriptionAuth() {
+    try {
+      const raw = sessionStorage.getItem('pending_subscription_auth');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const validated = validatePendingSubscriptionAuth(parsed);
+      if (!validated) {
+        sessionStorage.removeItem('pending_subscription_auth');
+        return null;
+      }
+      return validated;
+    } catch {
+      try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
+      return null;
+    }
+  }
+
   // AUTH CHECK: User MUST be logged in to access checkout page
   async function checkAuthAndInit() {
     let customerData = null;
@@ -382,7 +412,15 @@
 
     await loadSavedAddresses();
     updateAccountButton();
-    renderStep1();
+    const pendingAuth = getPendingSubscriptionAuth();
+    const hasContinuous = state.cart.some((item) => item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
+    if (pendingAuth && hasContinuous) {
+      state.currentStep = 3;
+      updateStepper();
+      renderStep3();
+    } else {
+      renderStep1();
+    }
     return true;
   }
 
@@ -979,7 +1017,21 @@
       renderStep2();
     });
 
-    $('#payRazorpayBtn')?.addEventListener('click', executeOrderPayment);
+    const pendingAuth = getPendingSubscriptionAuth();
+    if (pendingAuth && hasContinuous) {
+      const payBtn = $('#payRazorpayBtn');
+      const errEl = $('#checkoutErrorMessage');
+      if (payBtn) {
+        payBtn.textContent = 'Check Subscription Status 🔄';
+      }
+      if (errEl) {
+        errEl.style.color = '#c0392b';
+        errEl.style.fontWeight = '600';
+        errEl.textContent = `Subscription payment was authorized (${pendingAuth.paymentId}), but server verification is pending. Click below to check status without paying again.`;
+      }
+    }
+
+    $('#payRazorpayBtn')?.addEventListener('click', onPayButtonClick);
   }
 
   // Load Razorpay Script Dynamically
@@ -994,8 +1046,132 @@
     });
   }
 
+  // Server-Authoritative Subscription Verification & Fulfillment Activation
+  async function verifySubscriptionWithServer(authPayload) {
+    if (!authPayload) return false;
+    const payBtn = $('#payRazorpayBtn');
+    const errEl = $('#checkoutErrorMessage');
+
+    state.isPaymentProcessing = true;
+    if (payBtn) {
+      payBtn.disabled = true;
+      payBtn.textContent = 'Verifying Subscription Authorization…';
+    }
+    if (errEl) {
+      errEl.textContent = '';
+    }
+
+    let verifyRes;
+    try {
+      verifyRes = await api('/api/v1/subscriptions/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          razorpay_subscription_id: authPayload.subscriptionId,
+          razorpay_payment_id: authPayload.paymentId,
+          razorpay_signature: authPayload.signature
+        })
+      });
+      if (!verifyRes || !verifyRes.verified) {
+        throw new Error(verifyRes?.error || 'Subscription signature verification failed.');
+      }
+    } catch (verifyErr) {
+      console.error('Subscription verification failed:', verifyErr);
+      // On unresolved verification, preserve the signed authorization and prevent a new payment
+      try {
+        sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+      } catch {}
+
+      if (errEl) {
+        errEl.style.color = '#c0392b';
+        errEl.style.fontWeight = '600';
+        errEl.textContent = `Subscription payment was authorized (${authPayload?.paymentId || 'N/A'}), but server verification is pending. Click below to check status without paying again.`;
+      }
+      if (payBtn) {
+        payBtn.disabled = false;
+        payBtn.textContent = 'Check Subscription Status 🔄';
+      }
+      state.isPaymentProcessing = false;
+      return false;
+    }
+
+    // Handle mandate-only pending authorization without premature activation or paid confirmation
+    if (verifyRes?.status === 'pending_authorization' || verifyRes?.fulfillmentEntitled === false) {
+      // Preserve signed authorization so customer is not prompted to initiate another checkout
+      try {
+        sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+      } catch {}
+
+      if (errEl) {
+        errEl.style.color = '#0a3d66';
+        errEl.style.fontWeight = '600';
+        errEl.textContent = 'Mandate authorized — awaiting first billing payment.';
+      }
+      if (payBtn) {
+        payBtn.disabled = true;
+        payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
+      }
+      state.isPaymentProcessing = false;
+      return true;
+    }
+
+    // Authoritative active subscription with verified captured payment!
+    try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
+    const finalFinancials = getOrderFinancials();
+    await activateSubscriptionsFromCart(state.cart, {
+      subscriptionId: authPayload.subscriptionId,
+      paymentId: authPayload.paymentId,
+      deliveryFee: finalFinancials.deliveryFee,
+      totalPaid: finalFinancials.total,
+      subtotal: finalFinancials.subtotal
+    });
+
+    // Trigger subscription confirmation email
+    try {
+      await api('/api/v1/subscriptions/send-confirmation', {
+        method: 'POST',
+        body: JSON.stringify({
+          subscriptionId: authPayload.subscriptionId,
+          paymentId: authPayload.paymentId,
+          deliveryFee: finalFinancials.deliveryFee,
+          totalPaid: finalFinancials.total,
+          cart: state.cart,
+          address: state.addressDraft,
+          customer: {
+            name: state.addressDraft.name,
+            email: state.addressDraft.email,
+            phone: state.addressDraft.phone
+          }
+        })
+      });
+    } catch (emErr) {
+      console.warn('Subscription email trigger notice:', emErr);
+    }
+
+    state.isPaymentProcessing = false;
+    showOrderSuccess(authPayload.paymentId, true);
+    return true;
+  }
+
+  // Unified Pay Button Handler with Duplicate-Click & State Routing Protection
+  async function onPayButtonClick(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (state.isPaymentProcessing) {
+      console.warn('Payment or verification already in progress. Duplicate click ignored.');
+      return;
+    }
+
+    const pendingAuth = getPendingSubscriptionAuth();
+    if (pendingAuth) {
+      // Clicking "Check Subscription Status" calls only verification, NEVER razorpay-checkout or Razorpay.open()
+      return await verifySubscriptionWithServer(pendingAuth);
+    }
+
+    return await executeOrderPayment();
+  }
+
   // Execute Payment
   async function executeOrderPayment() {
+    state.isPaymentProcessing = true;
     const payBtn = $('#payRazorpayBtn');
     const errEl = $('#checkoutErrorMessage');
     if (errEl) errEl.textContent = '';
@@ -1039,6 +1215,7 @@
             })
           });
         } catch (subErr) {
+          state.isPaymentProcessing = false;
           console.error('Subscription checkout creation failed:', subErr);
           if (errEl) errEl.textContent = subErr.message || 'Unable to initialize subscription checkout. Please try again.';
           if (payBtn) {
@@ -1064,7 +1241,6 @@
             },
             theme: { color: '#0a3d66' },
             handler: async (response) => {
-              const paymentRef = response?.razorpay_payment_id || res.subscriptionId;
               const signedAuth = {
                 subscriptionId: response?.razorpay_subscription_id || res.subscriptionId,
                 paymentId: response?.razorpay_payment_id,
@@ -1074,103 +1250,11 @@
                 sessionStorage.setItem('pending_subscription_auth', JSON.stringify(signedAuth));
               } catch {}
 
-              const verifySubscriptionWithServer = async (authPayload) => {
-                if (payBtn) {
-                  payBtn.disabled = true;
-                  payBtn.textContent = 'Verifying Subscription Authorization…';
-                }
-                if (errEl) {
-                  errEl.textContent = '';
-                }
-
-                let verifyRes;
-                try {
-                  verifyRes = await api('/api/v1/subscriptions/verify', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      razorpay_subscription_id: authPayload.subscriptionId,
-                      razorpay_payment_id: authPayload.paymentId,
-                      razorpay_signature: authPayload.signature
-                    })
-                  });
-                  if (!verifyRes || !verifyRes.verified) {
-                    throw new Error(verifyRes?.error || 'Subscription signature verification failed.');
-                  }
-                } catch (verifyErr) {
-                  console.error('Subscription verification failed:', verifyErr);
-                  if (errEl) {
-                    errEl.style.color = '#c0392b';
-                    errEl.style.fontWeight = '600';
-                    errEl.textContent = 'Subscription payment was authorized (' + (authPayload?.paymentId || 'N/A') + '), but server verification is pending. Click below to check status without paying again.';
-                  }
-                  if (payBtn) {
-                    payBtn.disabled = false;
-                    payBtn.textContent = 'Check Subscription Status 🔄';
-                    // Rebind onclick to re-check existing signed authorization rather than initiating a new checkout payment
-                    payBtn.onclick = (e) => {
-                      e.preventDefault();
-                      verifySubscriptionWithServer(authPayload);
-                    };
-                  }
-                  return false;
-                }
-
-                // Handle mandate-only pending authorization without premature activation or paid confirmation
-                if (verifyRes?.status === 'pending_authorization' || verifyRes?.fulfillmentEntitled === false) {
-                  try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
-                  if (errEl) {
-                    errEl.style.color = '#0a3d66';
-                    errEl.style.fontWeight = '600';
-                    errEl.textContent = 'Mandate authorized — awaiting first billing payment.';
-                  }
-                  if (payBtn) {
-                    payBtn.disabled = true;
-                    payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
-                  }
-                  return true;
-                }
-
-                // Authoritative active subscription with verified payment!
-                try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
-                const finalFinancials = getOrderFinancials();
-                await activateSubscriptionsFromCart(state.cart, {
-                  subscriptionId: authPayload.subscriptionId,
-                  paymentId: authPayload.paymentId || paymentRef,
-                  deliveryFee: finalFinancials.deliveryFee,
-                  totalPaid: finalFinancials.total,
-                  subtotal: finalFinancials.subtotal
-                });
-
-                // Trigger subscription confirmation email
-                try {
-                  await api('/api/v1/subscriptions/send-confirmation', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                      subscriptionId: authPayload.subscriptionId,
-                      paymentId: authPayload.paymentId || paymentRef,
-                      deliveryFee: finalFinancials.deliveryFee,
-                      totalPaid: finalFinancials.total,
-                      cart: state.cart,
-                      address: state.addressDraft,
-                      customer: {
-                        name: state.addressDraft.name,
-                        email: state.addressDraft.email,
-                        phone: state.addressDraft.phone
-                      }
-                    })
-                  });
-                } catch (emErr) {
-                  console.warn('Subscription email trigger notice:', emErr);
-                }
-
-                showOrderSuccess(authPayload.paymentId || paymentRef, true);
-                return true;
-              };
-
               await verifySubscriptionWithServer(signedAuth);
             },
             modal: {
               ondismiss: () => {
+                state.isPaymentProcessing = false;
                 if (errEl) errEl.textContent = 'Subscription checkout was cancelled. You can retry whenever ready.';
                 if (payBtn) {
                   payBtn.disabled = false;
@@ -1215,6 +1299,7 @@
           body: JSON.stringify(orderBody)
         });
       } catch (orderErr) {
+        state.isPaymentProcessing = false;
         console.error('Order creation failed:', orderErr);
         if (errEl) errEl.textContent = orderErr.message || 'Unable to place order. Please review your cart and try again.';
         if (payBtn) {
@@ -1283,10 +1368,12 @@
             subtotal: finalFinancials.subtotal
           });
 
+          state.isPaymentProcessing = false;
           showOrderSuccess(order.orderNumber, false);
         },
         modal: {
           ondismiss: () => {
+            state.isPaymentProcessing = false;
             if (errEl) errEl.textContent = 'Payment was cancelled. You can retry placing the order whenever ready.';
             if (payBtn) {
               payBtn.disabled = false;
@@ -1300,6 +1387,7 @@
       rzp.open();
 
     } catch (err) {
+      state.isPaymentProcessing = false;
       console.error('Payment execution failed:', err);
       if (errEl) {
         errEl.textContent = err.message || 'Payment could not be completed. Please try again.';

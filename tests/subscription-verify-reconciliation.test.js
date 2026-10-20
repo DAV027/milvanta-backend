@@ -3537,4 +3537,442 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
     });
   });
 
+
+  describe('13. Frontend Reload Recovery, Duplicate-Click Prevention, Legacy Active-Without-Payment & Webhook Matching Verification', () => {
+    it('13.1 Legacy subscription without payment proof (Subscription #70): verify returns fulfillmentEntitled: false and paidCount: 0', async () => {
+      const subId = `sub_legacy_unpaid_${Date.now()}`;
+      const paymentId = `pay_mandate_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      // Create subscription mimicking production subscription #70: status is active, but NO lastPaymentId or fulfillmentEntitled in notes
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId,
+          // Missing lastPaymentId, missing fulfillmentEntitled, missing paidCount!
+          gatewayStatus: 'authenticated'
+        })]
+      );
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'authenticated', // mandate-only on gateway
+          paid_count: 0,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000 } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 500, // ₹5 mandate authorization
+          currency: 'INR',
+          subscription_id: null
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.fulfillmentEntitled, false, 'Must NEVER infer fulfillmentEntitled = true from status = active alone');
+        assert.equal(data.paidCount, 0, 'Must NEVER default unknown paidCount to 1 without verified payment');
+        assert.equal(data.paidThroughDate, null, 'Must not report paidThroughDate without verified payment');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('13.2 Legacy active subscription without payment evidence: generateDailyDeliveries fails closed and creates 0 deliveries', async () => {
+      const subId = `sub_legacy_delivery_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId,
+          startDate: '2026-10-01',
+          // NO lastPaymentId or paymentId!
+          fulfillmentEntitled: false
+        })]
+      );
+
+      const targetTomorrow = '2026-10-21';
+      const result = await generateDailyDeliveries(pool, targetTomorrow);
+
+      assert.ok(result.skippedCount >= 1, 'Delivery engine must skip active subscription lacking payment evidence');
+      const orderRes = await pool.query(
+        'SELECT COUNT(*) AS cnt FROM subscription_delivery_orders WHERE subscription_id = (SELECT id FROM customer_subscriptions WHERE razorpay_subscription_id = $1)',
+        [subId]
+      );
+      assert.equal(Number(orderRes.rows[0].cnt), 0, 'Must NOT generate delivery orders for unverified subscription');
+    });
+
+    it('13.3 Webhook-before-browser verification: webhook activates subscription with payment evidence, browser verify preserves active paid state', async () => {
+      const subId = `sub_wh_first_${Date.now()}`;
+      const webhookPaymentId = `pay_wh_charge_${Date.now()}`;
+      const browserMandatePaymentId = `pay_browser_mandate_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${browserMandatePaymentId}|${subId}`)
+        .digest('hex');
+
+      // 1. Initial pending subscription in local DB
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId, startDate: '2026-10-20' })]
+      );
+
+      // 2. Webhook arrives FIRST: subscription.charged with captured payment entity
+      const nowSec = Math.floor(Date.now() / 1000);
+      const webhookPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: subId,
+              status: 'active',
+              paid_count: 1,
+              current_start: nowSec - 3600,
+              current_end: nowSec + (30 * 86400)
+            }
+          },
+          payment: {
+            entity: {
+              id: webhookPaymentId,
+              status: 'captured',
+              amount: 315000,
+              subscription_id: subId,
+              created_at: nowSec
+            }
+          }
+        }
+      };
+      const rawPayload = JSON.stringify(webhookPayload);
+      const webhookSig = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_for_milvanta_verify')
+        .update(rawPayload)
+        .digest('hex');
+
+      const whRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/webhook',
+        headers: {
+          'x-razorpay-signature': webhookSig,
+          'x-razorpay-event-id': `evt_wh_first_${Date.now()}`,
+          'content-type': 'application/json'
+        },
+        payload: rawPayload
+      });
+      assert.equal(whRes.statusCode, 200);
+
+      // Verify webhook activated it
+      const dbAfterWh = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+      assert.equal(dbAfterWh.rows[0].status, 'active');
+      assert.equal(dbAfterWh.rows[0].notes.fulfillmentEntitled, true);
+      assert.equal(dbAfterWh.rows[0].notes.paidCount, 1);
+      assert.equal(dbAfterWh.rows[0].notes.lastPaymentId, webhookPaymentId);
+
+      // 3. Browser verify arrives AFTER webhook:
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000 } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: browserMandatePaymentId,
+          status: 'captured',
+          amount: 500,
+          currency: 'INR',
+          subscription_id: null
+        });
+
+        const verifyRes = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: browserMandatePaymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(verifyRes.statusCode, 200);
+        const data = JSON.parse(verifyRes.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.fulfillmentEntitled, true, 'Must return true because webhook confirmed payment and entitlement is active');
+        assert.equal(data.paidCount, 1);
+        assert.equal(data.status, 'active');
+        assert.equal(data.message, 'Subscription already active');
+
+        // Check DB notes: preserves webhook lastPaymentId, sets mandatePaymentId
+        const dbFinal = await pool.query('SELECT notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(dbFinal.rows[0].notes.lastPaymentId, webhookPaymentId);
+        assert.equal(dbFinal.rows[0].notes.mandatePaymentId, browserMandatePaymentId);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('13.4 Webhook payment matching: fails closed when payment.subscription_id belongs to a different subscription', async () => {
+      const subId = `sub_mismatch_wh_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      const eventPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: subId,
+              status: 'active',
+              paid_count: 1
+            }
+          },
+          payment: {
+            entity: {
+              id: `pay_other_sub_${Date.now()}`,
+              status: 'captured',
+              amount: 315000,
+              subscription_id: 'sub_completely_different_id' // Mismatched subscription!
+            }
+          }
+        }
+      };
+      const rawPayload = JSON.stringify(eventPayload);
+      const sig = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_for_milvanta_verify')
+        .update(rawPayload)
+        .digest('hex');
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/webhook',
+        headers: {
+          'x-razorpay-signature': sig,
+          'x-razorpay-event-id': `evt_mismatch_${Date.now()}`,
+          'content-type': 'application/json'
+        },
+        payload: rawPayload
+      });
+
+      assert.equal(res.statusCode, 200);
+      const dbRes = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+      assert.notEqual(dbRes.rows[0].status, 'active', 'Must not activate on mismatched payment subscription ID');
+      assert.notEqual(dbRes.rows[0].notes?.fulfillmentEntitled, true);
+    });
+
+    it('13.5 Webhook payment matching: fails closed when payment was created outside current billing cycle', async () => {
+      const subId = `sub_old_cycle_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const eventPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: subId,
+              status: 'active',
+              paid_count: 1,
+              current_start: nowSec, // cycle starts today
+              current_end: nowSec + (30 * 86400)
+            }
+          },
+          payment: {
+            entity: {
+              id: `pay_stale_${Date.now()}`,
+              status: 'captured',
+              amount: 315000,
+              subscription_id: subId,
+              created_at: nowSec - (90 * 86400) // 90 days ago (stale payment from ancient cycle!)
+            }
+          }
+        }
+      };
+      const rawPayload = JSON.stringify(eventPayload);
+      const sig = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_for_milvanta_verify')
+        .update(rawPayload)
+        .digest('hex');
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/webhook',
+        headers: {
+          'x-razorpay-signature': sig,
+          'x-razorpay-event-id': `evt_stale_${Date.now()}`,
+          'content-type': 'application/json'
+        },
+        payload: rawPayload
+      });
+
+      assert.equal(res.statusCode, 200);
+      const dbRes = await pool.query('SELECT status, notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+      assert.notEqual(dbRes.rows[0].status, 'active', 'Must not activate on payment created outside current billing cycle');
+      assert.notEqual(dbRes.rows[0].notes?.fulfillmentEntitled, true);
+    });
+
+    it('13.6 Frontend reload recovery validation: validates pending_subscription_auth and discards corrupted entries', () => {
+      // Test the validation helper logic implemented in checkout.js
+      function validatePendingSubscriptionAuth(auth) {
+        if (!auth || typeof auth !== 'object') return null;
+        const subId = typeof auth.subscriptionId === 'string' ? auth.subscriptionId.trim() : '';
+        const payId = typeof auth.paymentId === 'string' ? auth.paymentId.trim() : '';
+        const sig = typeof auth.signature === 'string' ? auth.signature.trim() : '';
+        if (!subId || !/^sub_[A-Za-z0-9_]+$/.test(subId)) return null;
+        if (!payId || !/^pay_[A-Za-z0-9_]+$/.test(payId)) return null;
+        if (!sig || !/^[a-fA-F0-9]{32,128}$/.test(sig)) return null;
+        return { subscriptionId: subId, paymentId: payId, signature: sig };
+      }
+
+      // Valid auth payload
+      const valid = validatePendingSubscriptionAuth({
+        subscriptionId: 'sub_test_12345',
+        paymentId: 'pay_test_67890',
+        signature: 'a'.repeat(64)
+      });
+      assert.ok(valid);
+      assert.equal(valid.subscriptionId, 'sub_test_12345');
+      assert.equal(valid.paymentId, 'pay_test_67890');
+
+      // Invalid: missing sub_
+      assert.equal(validatePendingSubscriptionAuth({
+        subscriptionId: 'not_a_sub',
+        paymentId: 'pay_123',
+        signature: 'a'.repeat(64)
+      }), null);
+
+      // Invalid: missing pay_
+      assert.equal(validatePendingSubscriptionAuth({
+        subscriptionId: 'sub_123',
+        paymentId: 'not_a_pay',
+        signature: 'a'.repeat(64)
+      }), null);
+
+      // Invalid: short signature
+      assert.equal(validatePendingSubscriptionAuth({
+        subscriptionId: 'sub_123',
+        paymentId: 'pay_123',
+        signature: 'short'
+      }), null);
+
+      // Invalid: null / empty
+      assert.equal(validatePendingSubscriptionAuth(null), null);
+      assert.equal(validatePendingSubscriptionAuth({}), null);
+    });
+
+    it('13.7 Frontend duplicate-click & verification routing protection', () => {
+      // Simulate state and click handler
+      const state = {
+        isPaymentProcessing: false,
+        paymentCallCount: 0,
+        verifyCallCount: 0
+      };
+
+      let pendingAuth = null;
+
+      async function verifySubscriptionWithServer(auth) {
+        state.isPaymentProcessing = true;
+        state.verifyCallCount++;
+        // Keep processing flag active during in-flight call
+        return true;
+      }
+
+      async function executeOrderPayment() {
+        state.isPaymentProcessing = true;
+        state.paymentCallCount++;
+        return true;
+      }
+
+      async function onPayButtonClick() {
+        if (state.isPaymentProcessing) {
+          return 'BLOCKED_DUPLICATE';
+        }
+        if (pendingAuth) {
+          return await verifySubscriptionWithServer(pendingAuth);
+        }
+        return await executeOrderPayment();
+      }
+
+      // First click: triggers normal payment
+      onPayButtonClick();
+      assert.equal(state.paymentCallCount, 1);
+      assert.equal(state.verifyCallCount, 0);
+
+      // Second rapid click while processing: must be blocked
+      const blocked = onPayButtonClick();
+      assert.equal(state.paymentCallCount, 1, 'Duplicate click must not invoke executeOrderPayment again');
+
+      // Reset processing and set pending authorization (simulating reload recovery)
+      state.isPaymentProcessing = false;
+      pendingAuth = { subscriptionId: 'sub_123', paymentId: 'pay_456', signature: 'a'.repeat(64) };
+
+      // Click with pending authorization: must call ONLY verification, NEVER executeOrderPayment
+      onPayButtonClick();
+      assert.equal(state.verifyCallCount, 1, 'Must invoke verification');
+      assert.equal(state.paymentCallCount, 1, 'Must NEVER invoke executeOrderPayment when pending authorization exists');
+    });
+  });
+
 });

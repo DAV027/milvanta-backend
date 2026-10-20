@@ -1846,7 +1846,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     current_end: gatewaySub?.current_end,
     cost_per_day_paise: subRow?.cost_per_day_paise,
     total_amount_paise: subRow?.total_amount_paise || expectedPlanAmount,
-    paidCount: gatewaySub?.paid_count || 1,
+    paidCount: isCapturedBillingCyclePayment ? (Number(gatewaySub?.paid_count) || 1) : (Number(existingNotes.paidCount) || 0),
     months: gatewaySub?.notes?.months || existingNotes.months || 1
   });
 
@@ -1955,7 +1955,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       lastPaymentId: paymentId,
       gatewayStatus: gatewaySub?.status || 'active',
       billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
-      paidCount: gatewaySub?.paid_count || 1,
+      paidCount: isCapturedBillingCyclePayment ? (Number(gatewaySub?.paid_count) || 1) : (Number(existingNotes.paidCount) || 0),
       paidThroughDate: paidThroughYMD,
       fulfillmentEntitled: true,
       authType: 'recurring_charge',
@@ -2074,15 +2074,40 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
   }
 
   const finalNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+  const effectivePaidThrough = finalNotes.paidThroughDate || (isCapturedBillingCyclePayment ? paidThroughYMD : null);
+  const hasValidPaidThrough = Boolean(effectivePaidThrough && effectivePaidThrough >= todayYMD);
+
+  // Require verified captured billing-cycle evidence and a valid paid-through date
+  // NEVER infer fulfillmentEntitled from status = 'active' alone!
+  const hasVerifiedPaymentEvidence = Boolean(
+    (finalNotes.lastPaymentId || (isCapturedBillingCyclePayment && paymentId)) &&
+    (finalNotes.fulfillmentEntitled === true || isCapturedBillingCyclePayment) &&
+    hasValidPaidThrough
+  );
+
+  const authoritativeFulfillmentEntitled = Boolean(hasVerifiedPaymentEvidence);
+
+  // NEVER default unknown paidCount to 1! If no verified payment, paidCount is 0.
+  let authoritativePaidCount = 0;
+  if (finalNotes.paidCount !== undefined && Number.isInteger(Number(finalNotes.paidCount))) {
+    authoritativePaidCount = Number(finalNotes.paidCount);
+  } else if (hasVerifiedPaymentEvidence && gatewaySub?.paid_count !== undefined && Number.isInteger(Number(gatewaySub.paid_count))) {
+    authoritativePaidCount = Number(gatewaySub.paid_count);
+  } else if (hasVerifiedPaymentEvidence) {
+    authoritativePaidCount = 1;
+  } else {
+    authoritativePaidCount = 0;
+  }
+
   return reply.code(200).send({
     verified: true,
     subscriptionId: subId,
     paymentId,
     status: subRow.status,
     mandateStatus: finalNotes.mandateStatus || (gatewaySub?.status === 'authenticated' ? 'authenticated' : 'authenticated'),
-    fulfillmentEntitled: Boolean(finalNotes.fulfillmentEntitled ?? (subRow.status === 'active')),
-    paidCount: finalNotes.paidCount !== undefined ? finalNotes.paidCount : (gatewaySub?.paid_count || 1),
-    paidThroughDate: finalNotes.paidThroughDate || paidThroughYMD,
+    fulfillmentEntitled: authoritativeFulfillmentEntitled,
+    paidCount: authoritativePaidCount,
+    paidThroughDate: authoritativeFulfillmentEntitled ? (finalNotes.paidThroughDate || paidThroughYMD) : null,
     startDate,
     nextDelivery: subRow.next_delivery,
     message: isNewlyActivated ? 'Subscription verified and activated' : 'Subscription already active'
@@ -2236,7 +2261,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         current_end: gatewaySub?.current_end,
         cost_per_day_paise: subRow.cost_per_day_paise,
         total_amount_paise: subRow.total_amount_paise || expectedPlanAmount,
-        paidCount: gatewaySub?.paid_count || 1,
+        paidCount: isCapturedBillingCyclePayment ? (Number(gatewaySub?.paid_count) || 1) : (Number(existingNotes.paidCount) || 0),
         months: gatewaySub?.notes?.months || existingNotes.months || 1
       });
 
@@ -2344,7 +2369,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
               lastPaymentId: paymentId,
               gatewayStatus: gatewaySub?.status || 'active',
               billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
-              paidCount: gatewaySub?.paid_count || 1,
+              paidCount: isCapturedBillingCyclePayment ? (Number(gatewaySub?.paid_count) || 1) : (Number(existingNotes.paidCount) || 0),
               paidThroughDate: paidThroughYMD,
               fulfillmentEntitled: true,
               authType: 'recurring_charge',
@@ -3587,6 +3612,34 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   const eventId = request.headers['x-razorpay-event-id'];
   if (typeof eventId !== 'string' || !eventId) return reply.code(400).send({ error: 'missing_event_id' });
 
+  // Pre-fetch payment evidence OUTSIDE the database transaction with bounded timeout
+  // to avoid holding an open PostgreSQL transaction during external network calls
+  let preloadedPayments = null;
+  const eventName = request.body?.event;
+  const subEntity = request.body?.payload?.subscription?.entity;
+  const rawPaymentEntity = request.body?.payload?.payment?.entity;
+  const rawInvoiceEntity = request.body?.payload?.invoice?.entity;
+
+  if (
+    ['subscription.activated', 'subscription.charged'].includes(eventName) &&
+    subEntity?.id &&
+    !rawPaymentEntity?.id &&
+    !rawInvoiceEntity?.id &&
+    Number.isInteger(subEntity.paid_count) &&
+    subEntity.paid_count > 0 &&
+    razorpay
+  ) {
+    try {
+      preloadedPayments = await Promise.race([
+        razorpay.subscriptions.fetchPayments(subEntity.id),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Razorpay fetchPayments timeout')), 4000))
+      ]);
+    } catch (err) {
+      request.log.warn({ err: err?.message, subId: subEntity.id }, '[Webhook] Preload subscription payments timed out or failed');
+      preloadedPayments = null;
+    }
+  }
+
   let client;
   try {
     client = await pool.connect();
@@ -3640,28 +3693,61 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           );
         } else if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
           // Confirm payment evidence before activating fulfillment
-          const paymentEntity = request.body?.payload?.payment?.entity;
-          const invoiceEntity = request.body?.payload?.invoice?.entity;
+          const paymentEntity = rawPaymentEntity;
+          const invoiceEntity = rawInvoiceEntity;
           const rawPaidCount = subEntity.paid_count;
           const hasPositivePaidCount = Number.isInteger(rawPaidCount) && rawPaidCount > 0;
 
           // Defensible captured billing-cycle evidence requirement:
-          // If paymentEntity is attached: it MUST be captured.
-          // If invoiceEntity is attached: it MUST be paid.
-          // If payment/invoice attached but not captured/paid, payment evidence fails.
-          // If no payment/invoice attached, paid_count alone is insufficient if verifiable.
+          // Must match subscription ID, be captured/paid, and belong to current billing cycle.
           let hasPaymentEvidence = false;
-          if (paymentEntity?.id) {
-            hasPaymentEvidence = paymentEntity.status === 'captured';
-          } else if (invoiceEntity?.id) {
-            hasPaymentEvidence = invoiceEntity.status === 'paid';
-          } else if (hasPositivePaidCount && razorpay) {
-            try {
-              const subPayments = await razorpay.subscriptions.fetchPayments(subEntity.id);
-              const items = subPayments?.items || [];
-              hasPaymentEvidence = items.some(p => p.status === 'captured');
-            } catch {
-              hasPaymentEvidence = false;
+          let confirmedPaymentId = null;
+
+          if (rawPaymentEntity?.id && typeof rawPaymentEntity.id === 'string' && rawPaymentEntity.id.startsWith('pay_')) {
+            const isCaptured = rawPaymentEntity.status === 'captured';
+            const subMatches = !rawPaymentEntity.subscription_id || rawPaymentEntity.subscription_id === subEntity.id;
+            let cycleMatches = true;
+            if (subEntity.current_start && Number.isFinite(Number(subEntity.current_start)) && rawPaymentEntity.created_at) {
+              const cycleStartThreshold = Number(subEntity.current_start) - 86400;
+              cycleMatches = Number(rawPaymentEntity.created_at) >= cycleStartThreshold;
+              if (subEntity.current_end && Number.isFinite(Number(subEntity.current_end))) {
+                const cycleEndThreshold = Number(subEntity.current_end) + 86400;
+                cycleMatches = cycleMatches && Number(rawPaymentEntity.created_at) <= cycleEndThreshold;
+              }
+            }
+            if (isCaptured && subMatches && cycleMatches) {
+              hasPaymentEvidence = true;
+              confirmedPaymentId = rawPaymentEntity.id;
+            }
+          } else if (rawInvoiceEntity?.id && typeof rawInvoiceEntity.id === 'string' && rawInvoiceEntity.id.startsWith('inv_')) {
+            const isPaid = rawInvoiceEntity.status === 'paid';
+            const subMatches = !rawInvoiceEntity.subscription_id || rawInvoiceEntity.subscription_id === subEntity.id;
+            let cycleMatches = true;
+            if (subEntity.current_start && Number.isFinite(Number(subEntity.current_start)) && rawInvoiceEntity.billing_start) {
+              const cycleStartThreshold = Number(subEntity.current_start) - 86400;
+              cycleMatches = Number(rawInvoiceEntity.billing_start) >= cycleStartThreshold;
+            }
+            if (isPaid && subMatches && cycleMatches) {
+              hasPaymentEvidence = true;
+              confirmedPaymentId = rawInvoiceEntity.payment_id || null;
+            }
+          } else if (preloadedPayments?.items && Array.isArray(preloadedPayments.items)) {
+            const matchingItem = preloadedPayments.items.find(p => {
+              if (p.status !== 'captured') return false;
+              if (p.subscription_id && p.subscription_id !== subEntity.id) return false;
+              if (subEntity.current_start && Number.isFinite(Number(subEntity.current_start)) && p.created_at) {
+                const cycleStartThreshold = Number(subEntity.current_start) - 86400;
+                if (Number(p.created_at) < cycleStartThreshold) return false;
+                if (subEntity.current_end && Number.isFinite(Number(subEntity.current_end))) {
+                  const cycleEndThreshold = Number(subEntity.current_end) + 86400;
+                  if (Number(p.created_at) > cycleEndThreshold) return false;
+                }
+              }
+              return true;
+            });
+            if (matchingItem) {
+              hasPaymentEvidence = true;
+              confirmedPaymentId = matchingItem.id;
             }
           }
 
@@ -3744,7 +3830,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 subEntity.status || 'active',
                 actualPaidCount,
                 paidThroughYMD,
-                paymentEntity?.status === 'captured' ? paymentEntity.id : null
+                confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null)
               ]
             );
           }
@@ -3821,7 +3907,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                   current_end: subEntity.current_end,
                   cost_per_day_paise: sub.cost_per_day_paise,
                   total_amount_paise: sub.total_amount_paise,
-                  paidCount: subEntity.paid_count || notes.paidCount || 1,
+                  paidCount: Number(subEntity.paid_count) || Number(notes.paidCount) || (isPaid ? 1 : 0),
                   months: notes.months || 1
                 })
               : null;
