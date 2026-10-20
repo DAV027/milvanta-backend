@@ -2067,50 +2067,72 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
 
 // Explicit endpoint to trigger or resend subscription confirmation emails (authenticated)
 app.post('/api/v1/subscriptions/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
-  const { subscriptionId, orderNumber } = request.body || {};
-  const paymentId = request.body?.paymentId || '';
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
 
-  // Validate customer ownership
-  if (pool) {
-    if (subscriptionId) {
-      const { rows } = await pool.query(
-        "SELECT id, customer_id FROM customer_subscriptions WHERE (id::text = $1 OR razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)",
-        [String(subscriptionId)]
-      );
-      if (rows.length && Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
-        return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this subscription.' });
-      }
-    }
-    if (orderNumber) {
-      const { rows } = await pool.query(
-        'SELECT id, customer_id FROM customer_orders WHERE order_number = $1',
-        [String(orderNumber)]
-      );
-      if (rows.length && Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin) {
-        return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
-      }
-    }
+  const { subscriptionId } = request.body || {};
+  if (!subscriptionId) {
+    return reply.code(400).send({
+      error: 'subscription_id_required',
+      message: 'An existing subscription ID is required to send confirmation.'
+    });
   }
 
-  // Enforce customer's verified identity for destination email to prevent spam relay
-  const safeCustomer = {
-    name: request.customer.full_name,
-    email: request.customer.email,
-    phone: request.customer.phone
-  };
+  // 1. Authoritative DB lookup: Must be an existing subscription belonging to the authenticated customer
+  const isNumeric = typeof subscriptionId === 'number' || (/^\d+$/.test(String(subscriptionId).trim()) && !String(subscriptionId).includes('-'));
+  const { rows } = await pool.query(
+    isNumeric
+      ? `SELECT cs.*, c.full_name, c.email, c.phone 
+         FROM customer_subscriptions cs 
+         JOIN customers c ON c.id = cs.customer_id 
+         WHERE cs.id = $1`
+      : `SELECT cs.*, c.full_name, c.email, c.phone 
+         FROM customer_subscriptions cs 
+         JOIN customers c ON c.id = cs.customer_id 
+         WHERE cs.id::text = $1 OR cs.razorpay_subscription_id = $1 OR cs.notes->>'subscriptionId' = $1 OR cs.notes->>'razorpay_subscription_id' = $1`,
+    [String(subscriptionId)]
+  );
 
-  const safePayload = {
-    ...request.body,
-    customer: safeCustomer,
-    customerEmail: request.customer.email,
-    customerName: request.customer.full_name
-  };
+  if (!rows.length) {
+    return reply.code(404).send({
+      error: 'subscription_not_found',
+      message: 'Subscription record does not exist.'
+    });
+  }
 
-  const result = await sendSubscriptionConfirmationEmails(pool, safePayload, {
+  const sub = rows[0];
+
+  // 2. Reject unauthorized customer access
+  if (Number(sub.customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+    return reply.code(403).send({
+      error: 'forbidden',
+      message: 'You do not have permission to trigger confirmation for this subscription.'
+    });
+  }
+
+  // 3. Require authoritative verified payment or mandate state
+  const isMandateAuth = Boolean(
+    sub.notes?.authType === 'refundable_authorization' ||
+    sub.notes?.isRefundableAuth ||
+    sub.auth_type === 'refundable_authorization' ||
+    (sub.razorpay_subscription_id && sub.status === 'active')
+  );
+  const paymentId = request.body?.paymentId || sub.notes?.paymentId || sub.razorpay_subscription_id || '';
+  const isAuthorized = sub.status === 'active' || (sub.status === 'paused' && sub.notes?.paymentId) || (isMandateAuth && sub.status !== 'cancelled');
+
+  if (!isAuthorized) {
+    return reply.code(422).send({
+      error: 'subscription_not_verified',
+      message: 'Subscription does not have an authoritative verified payment or active mandate state.'
+    });
+  }
+
+  // 4. Send confirmation using ONLY authoritative database data, never untrusted frontend cart data
+  const result = await sendSubscriptionConfirmationEmails(pool, sub, {
     paymentId,
-    customerEmail: request.customer.email,
-    customerName: request.customer.full_name
+    customerEmail: sub.email || request.customer.email,
+    customerName: sub.full_name || request.customer.full_name
   });
+
   return reply.send(result);
 });
 

@@ -1381,13 +1381,35 @@
 
     try {
       const data = await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/calendar?year=${year}&month=${month}`);
-      if (data && Array.isArray(data.days)) {
-        calDays = data.days;
-        calSubInfo = data;
-        state.calendarData = data;
+      if (!data || !Array.isArray(data.days)) {
+        throw new Error('Invalid calendar response received from server.');
       }
+      calDays = data.days;
+      calSubInfo = data;
+      state.calendarData = data;
     } catch (err) {
       console.warn('Calendar backend fetch failed:', err.message);
+      state.calendarData = null;
+      grid.innerHTML = `
+        <div class="calendar-error-card" style="grid-column: 1 / -1; padding: 28px 16px; text-align: center; background: #fff1f2; border: 1.5px dashed #fca5a5; border-radius: 12px; margin: 8px 0;">
+          <div style="font-size: 1.6rem; margin-bottom: 6px;">⚠️</div>
+          <strong style="color: #9f1239; font-size: 0.95rem; display: block; margin-bottom: 4px;">Unable to Load Authoritative Delivery Calendar</strong>
+          <p style="color: #be123c; font-size: 0.82rem; margin: 0 auto 14px; max-width: 440px; line-height: 1.4;">
+            ${escapeHtml(err.message || 'Server connection failed. Could not verify scheduled morning drops with the dairy hub.')}
+          </p>
+          <button type="button" id="btnRetryLoadCalendar" style="background: #0284c7; color: #fff; border: none; padding: 8px 18px; border-radius: 8px; font-weight: 700; font-size: 0.82rem; cursor: pointer;">
+            🔄 Retry Loading Calendar
+          </button>
+        </div>
+      `;
+      if (statsBar) {
+        statsBar.innerHTML = `<span style="color:#e11d48; font-size:0.82rem; font-weight:600;">⚠️ Delivery calendar offline. Click retry above to reload.</span>`;
+      }
+      $('#calSelectedDayCard')?.classList.add('hidden');
+      $('#btnRetryLoadCalendar')?.addEventListener('click', () => {
+        renderMonthlyDeliveryCalendar(year, month);
+      });
+      return;
     }
 
     const firstDayIndex = new Date(year, month, 1).getDay();

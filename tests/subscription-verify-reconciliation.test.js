@@ -27,6 +27,7 @@ const schemaName = setup.schemaName;
 const { app, razorpay } = await import('../src/server.js');
 const { generateDailyDeliveries } = await import('../src/services/deliveryEngine.js');
 const { getSubscriptionCalendar } = await import('../src/services/subscriptionService.js');
+const { sendSubscriptionConfirmationEmails } = await import('../src/email.js');
 
 describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconciliation Suite', () => {
   let customerAId;
@@ -1732,6 +1733,328 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
         razorpay.subscriptions.fetch = originalFetchSub;
         razorpay.payments.fetch = originalFetchPay;
       }
+    });
+  });
+
+  describe('8. Subscription Confirmation Email Reliability & Secure Endpoint Patch', () => {
+    let verifiedSubAId;
+    let cancelledSubAId;
+    let verifiedSubBId;
+
+    before(async () => {
+      const resA = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, quantity, frequency, time_slot,
+           cost_per_day_paise, total_amount_paise, status, next_delivery, notes
+         ) VALUES (
+           $1, 'Cow Milk (500 ml)', '500 ml', 'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+           5500, 165000, 'active', '2026-10-21',
+           $2::jsonb
+         ) RETURNING id`,
+        [customerAId, JSON.stringify({ paymentId: 'pay_auth_test_1001', planType: 'month' })]
+      );
+      verifiedSubAId = resA.rows[0].id;
+
+      const resCancel = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, quantity, frequency, time_slot,
+           cost_per_day_paise, total_amount_paise, status, next_delivery, notes
+         ) VALUES (
+           $1, 'Cow Milk (500 ml)', '500 ml', 'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+           5500, 165000, 'cancelled', '2026-10-21',
+           $2::jsonb
+         ) RETURNING id`,
+        [customerAId, JSON.stringify({ paymentId: 'pay_cancelled_1002' })]
+      );
+      cancelledSubAId = resCancel.rows[0].id;
+
+      const resB = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, quantity, frequency, time_slot,
+           cost_per_day_paise, total_amount_paise, status, next_delivery, notes
+         ) VALUES (
+           $1, 'Buffalo Milk (1 Litre)', '1 Litre', 'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+           12500, 375000, 'active', '2026-10-21',
+           $2::jsonb
+         ) RETURNING id`,
+        [customerBId, JSON.stringify({ paymentId: 'pay_auth_test_2001', planType: 'month' })]
+      );
+      verifiedSubBId = resB.rows[0].id;
+    });
+
+    it('rejects /api/v1/subscriptions/send-confirmation with missing subscriptionId (400)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/subscriptions/send-confirmation',
+        headers: { Authorization: `Bearer ${tokenA}` },
+        payload: { paymentId: 'pay_dummy_123' }
+      });
+      assert.equal(res.statusCode, 400);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'subscription_id_required');
+    });
+
+    it('rejects /api/v1/subscriptions/send-confirmation with non-existent subscriptionId (404)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/subscriptions/send-confirmation',
+        headers: { Authorization: `Bearer ${tokenA}` },
+        payload: { subscriptionId: 999999, paymentId: 'pay_dummy_123' }
+      });
+      assert.equal(res.statusCode, 404);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'subscription_not_found');
+    });
+
+    it('rejects /api/v1/subscriptions/send-confirmation with another customer subscriptionId (403)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/subscriptions/send-confirmation',
+        headers: { Authorization: `Bearer ${tokenA}` },
+        payload: { subscriptionId: verifiedSubBId, paymentId: 'pay_auth_test_2001' }
+      });
+      assert.equal(res.statusCode, 403);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'forbidden');
+    });
+
+    it('rejects /api/v1/subscriptions/send-confirmation with unverified or cancelled subscription (422)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/subscriptions/send-confirmation',
+        headers: { Authorization: `Bearer ${tokenA}` },
+        payload: { subscriptionId: cancelledSubAId, paymentId: 'pay_cancelled_1002' }
+      });
+      assert.equal(res.statusCode, 422);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'subscription_not_verified');
+    });
+
+    it('sends confirmation for verified subscription using strictly DB data, ignoring client cart tampering (200)', async () => {
+      const originalFetch = globalThis.fetch;
+      const originalApiKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 're_test_valid_key';
+
+      const dispatchedPayloads = [];
+      globalThis.fetch = async (url, opts) => {
+        if (typeof url === 'string' && url.includes('resend')) {
+          const body = JSON.parse(opts.body);
+          dispatchedPayloads.push(body);
+          return {
+            ok: true,
+            json: async () => ({ id: `re_msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` })
+          };
+        }
+        return originalFetch(url, opts);
+      };
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/send-confirmation',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            subscriptionId: verifiedSubAId,
+            paymentId: 'pay_auth_test_1001',
+            cart: [{ name: 'Tampered Hacker Milk', price: 1, quantity: '100 Litres' }],
+            customPrice: 100
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.success, true);
+        assert.equal(data.providerAccepted, true);
+        assert.equal(data.deliveryStatus, 'accepted_by_provider');
+
+        const custEmail = dispatchedPayloads.find(p => p.to.includes(testEmailA));
+        assert.ok(custEmail);
+        assert.match(custEmail.html, /Cow Milk/);
+        assert.doesNotMatch(custEmail.html, /Tampered Hacker Milk/);
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (originalApiKey) process.env.RESEND_API_KEY = originalApiKey;
+        else delete process.env.RESEND_API_KEY;
+      }
+    });
+
+    it('tracks customer and admin email delivery attempts separately', async () => {
+      const originalFetch = globalThis.fetch;
+      const originalApiKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 're_test_valid_key';
+
+      globalThis.fetch = async (url, opts) => {
+        if (typeof url === 'string' && url.includes('resend')) {
+          const body = JSON.parse(opts.body);
+          if (body.to.includes(testEmailA)) {
+            return { ok: true, json: async () => ({ id: 're_cust_success_1' }) };
+          }
+          return { ok: false, status: 500, json: async () => ({ message: 'Admin inbox full' }) };
+        }
+        return originalFetch(url, opts);
+      };
+
+      const testPayId = `pay_separate_track_${Date.now()}`;
+      try {
+        const result = await sendSubscriptionConfirmationEmails(pool, verifiedSubAId, {
+          paymentId: testPayId,
+          customerEmail: testEmailA
+        });
+
+        assert.equal(result.success, false);
+        assert.equal(result.results.customerEmail.status, 'accepted');
+        assert.equal(result.results.customerEmail.id, 're_cust_success_1');
+        assert.equal(result.results.adminEmail.status, 'failed');
+
+        const { rows } = await pool.query('SELECT notes FROM customer_subscriptions WHERE id = $1', [verifiedSubAId]);
+        const record = rows[0].notes.emailConfirmations[testPayId];
+        assert.ok(record);
+        assert.equal(record.customer.status, 'accepted');
+        assert.equal(record.customer.messageId, 're_cust_success_1');
+        assert.equal(record.admin.status, 'failed');
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (originalApiKey) process.env.RESEND_API_KEY = originalApiKey;
+        else delete process.env.RESEND_API_KEY;
+      }
+    });
+
+    it('never marks a failed or skipped email as successfully sent', async () => {
+      const originalApiKey = process.env.RESEND_API_KEY;
+      delete process.env.RESEND_API_KEY;
+      delete process.env.SMTP_HOST;
+
+      const testPayId = `pay_skipped_${Date.now()}`;
+      const result = await sendSubscriptionConfirmationEmails(pool, verifiedSubAId, {
+        paymentId: testPayId,
+        customerEmail: testEmailA
+      });
+
+      assert.equal(result.success, false);
+      assert.equal(result.providerAccepted, false);
+      assert.equal(result.results.customerEmail.success, false);
+      assert.equal(result.results.customerEmail.status, 'skipped');
+      assert.equal(result.results.adminEmail.success, false);
+      assert.equal(result.results.adminEmail.status, 'skipped');
+
+      if (originalApiKey) process.env.RESEND_API_KEY = originalApiKey;
+    });
+
+    it('retries only recipients that have not had successful provider acceptance', async () => {
+      const originalFetch = globalThis.fetch;
+      const originalApiKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 're_test_valid_key';
+
+      const testPayId = `pay_retry_partial_${Date.now()}`;
+
+      // First run: customer succeeds, admin fails
+      globalThis.fetch = async (url, opts) => {
+        if (typeof url === 'string' && url.includes('resend')) {
+          const body = JSON.parse(opts.body);
+          if (body.to.includes(testEmailA)) {
+            return { ok: true, json: async () => ({ id: 're_cust_first_attempt' }) };
+          }
+          return { ok: false, status: 503, json: async () => ({ message: 'Service unavailable' }) };
+        }
+        return originalFetch(url, opts);
+      };
+
+      try {
+        const firstRun = await sendSubscriptionConfirmationEmails(pool, verifiedSubAId, {
+          paymentId: testPayId,
+          customerEmail: testEmailA
+        });
+        assert.equal(firstRun.success, false);
+        assert.equal(firstRun.results.customerEmail.status, 'accepted');
+        assert.equal(firstRun.results.adminEmail.status, 'failed');
+
+        // Retry: admin now working. Customer should be skipped.
+        let customerCalledAgain = false;
+        let adminCalled = false;
+
+        globalThis.fetch = async (url, opts) => {
+          if (typeof url === 'string' && url.includes('resend')) {
+            const body = JSON.parse(opts.body);
+            if (body.to.includes(testEmailA)) {
+              customerCalledAgain = true;
+              return { ok: true, json: async () => ({ id: 're_cust_duplicate' }) };
+            }
+            adminCalled = true;
+            return { ok: true, json: async () => ({ id: 're_admin_retry_success' }) };
+          }
+          return originalFetch(url, opts);
+        };
+
+        const retryRun = await sendSubscriptionConfirmationEmails(pool, verifiedSubAId, {
+          paymentId: testPayId,
+          customerEmail: testEmailA
+        });
+
+        assert.equal(customerCalledAgain, false, 'Customer email was already accepted and should NOT be called again on retry');
+        assert.equal(adminCalled, true, 'Admin email previously failed and MUST be retried');
+        assert.equal(retryRun.success, true);
+        assert.equal(retryRun.results.customerEmail.status, 'accepted');
+        assert.equal(retryRun.results.customerEmail.alreadySent, true);
+        assert.equal(retryRun.results.adminEmail.status, 'accepted');
+        assert.equal(retryRun.results.adminEmail.id, 're_admin_retry_success');
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (originalApiKey) process.env.RESEND_API_KEY = originalApiKey;
+        else delete process.env.RESEND_API_KEY;
+      }
+    });
+
+    it('prevents concurrent requests from sending duplicate emails using database-backed atomic idempotency', async () => {
+      const originalFetch = globalThis.fetch;
+      const originalApiKey = process.env.RESEND_API_KEY;
+      process.env.RESEND_API_KEY = 're_test_valid_key';
+
+      let callCount = 0;
+      globalThis.fetch = async (url, opts) => {
+        if (typeof url === 'string' && url.includes('resend')) {
+          callCount++;
+          await new Promise(r => setTimeout(r, 60));
+          return { ok: true, json: async () => ({ id: `re_concurrent_${Date.now()}` }) };
+        }
+        return originalFetch(url, opts);
+      };
+
+      const testPayId = `pay_concurrent_dispatch_${Date.now()}`;
+      try {
+        const [run1, run2] = await Promise.all([
+          sendSubscriptionConfirmationEmails(pool, verifiedSubAId, { paymentId: testPayId, customerEmail: testEmailA }),
+          sendSubscriptionConfirmationEmails(pool, verifiedSubAId, { paymentId: testPayId, customerEmail: testEmailA })
+        ]);
+
+        assert.ok(run1.success);
+        assert.ok(run2.success);
+        assert.ok(run1.concurrent || run2.concurrent || run1.duplicate || run2.duplicate);
+        assert.ok(callCount <= 2, `Expected at most 2 email provider calls, but got ${callCount}`);
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (originalApiKey) process.env.RESEND_API_KEY = originalApiKey;
+        else delete process.env.RESEND_API_KEY;
+      }
+    });
+
+    it('handles calendar API errors: returns 404 for non-existent subscription and rejects invalid subscription IDs with 400', async () => {
+      const res404 = await app.inject({
+        method: 'GET',
+        url: '/api/v1/subscriptions/999999/calendar?year=2026&month=9',
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+      assert.equal(res404.statusCode, 404);
+      const data404 = JSON.parse(res404.payload);
+      assert.equal(data404.error, 'subscription_not_found');
+
+      const res400 = await app.inject({
+        method: 'GET',
+        url: '/api/v1/subscriptions/invalid_id/calendar?year=2026&month=9',
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+      assert.equal(res400.statusCode, 400);
+      const data400 = JSON.parse(res400.payload);
+      assert.equal(data400.error, 'invalid_subscription_id');
     });
   });
 });

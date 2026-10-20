@@ -1229,29 +1229,6 @@
             });
           } catch {}
 
-          // If cart contains custom days or subscription plan, trigger subscription confirmation email
-          const hasSubPlan = state.cart.some((i) => i.isCustomDaysPlan || i.isSubscriptionPlan || i.variant?.isCustomDaysPlan || i.variant?.isSubscriptionPlan);
-          if (hasSubPlan) {
-            try {
-              await api('/api/v1/subscriptions/send-confirmation', {
-                method: 'POST',
-                body: JSON.stringify({
-                  orderNumber: order.orderNumber,
-                  paymentId: response?.razorpay_payment_id || '',
-                  cart: state.cart,
-                  address: state.addressDraft,
-                  customer: {
-                    name: state.addressDraft.name,
-                    email: state.addressDraft.email,
-                    phone: state.addressDraft.phone
-                  }
-                })
-              });
-            } catch (subEmErr) {
-              console.warn('Custom days subscription email trigger notice:', subEmErr);
-            }
-          }
-
           // Activate any Custom Days plan (or subscription items) in profile subscriptions & PostgreSQL!
           const { deliveryFee, total, subtotal } = getOrderFinancials();
           await activateSubscriptionsFromCart(state.cart, {
