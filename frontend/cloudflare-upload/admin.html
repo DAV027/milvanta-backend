@@ -876,15 +876,13 @@
       async function apiRequest(path, options = {}) {
         const headers = {
           'Content-Type': 'application/json',
-          'Pragma': 'no-cache',
-          'Cache-Control': 'no-cache',
           ...(options.headers || {})
         };
         if (currentToken) {
           headers['Authorization'] = 'Bearer ' + currentToken;
         }
 
-        const res = await fetch(API_BASE + path, { ...options, headers });
+        const res = await fetch(API_BASE + path, { cache: 'no-store', ...options, headers });
         if (res.status === 401 || res.status === 403) {
           if (res.status === 403) {
             handleAccessDenied();
@@ -1547,10 +1545,9 @@
       async function triggerExport(urlPath, defaultFilename) {
         try {
           const res = await fetch(API_BASE + urlPath, {
+            cache: 'no-store',
             headers: {
-              'Authorization': 'Bearer ' + currentToken,
-              'Pragma': 'no-cache',
-              'Cache-Control': 'no-cache'
+              'Authorization': 'Bearer ' + currentToken
             }
           });
           if (!res.ok) throw new Error('Export request failed: ' + res.status);
