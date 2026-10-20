@@ -41,7 +41,9 @@ import {
   cancelSubscription,
   getSubscriptionCalendar,
   calculateNextDeliveryDate,
-  isDeliveryCutoffPassed
+  isDeliveryCutoffPassed,
+  derivePaidThroughDate,
+  formatDateYMD
 } from './services/subscriptionService.js';
 import {
   generateDailyDeliveries,
@@ -1573,6 +1575,19 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     });
   }
 
+  // Distinguish verified captured billing-cycle payment from mandate-only authorization
+  const isCapturedBillingCyclePayment = Boolean(
+    isFullPlanCharge &&
+    gatewayPayment?.status === 'captured' &&
+    ['active', 'completed'].includes(gatewaySub?.status) &&
+    (gatewaySub?.paid_count !== undefined ? Number(gatewaySub.paid_count) >= 1 : true)
+  );
+
+  const isMandateOnlyAuth = Boolean(
+    !isCapturedBillingCyclePayment &&
+    (isRefundableAuth || gatewaySub?.status === 'authenticated' || Number(gatewaySub?.paid_count || 0) === 0)
+  );
+
   // 5. Gateway customer ownership and contradiction checks (Requirement 2 & 3)
   const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id || gatewayPayment?.notes?.customerId || gatewayPayment?.notes?.customer_id;
   const gatewayPhone = gatewaySub?.notes?.customerPhone || gatewaySub?.notes?.phone;
@@ -1700,6 +1715,11 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
           subRow = recheck.rows[0];
           isNewlyActivated = false;
         } else {
+          const insertStatus = isCapturedBillingCyclePayment ? 'active' : 'pending_authorization';
+          const insertNextDelivery = isCapturedBillingCyclePayment
+            ? initialNextDelivery
+            : 'Pending Billing Cycle Payment';
+
           const insertRes = await client.query(
             `INSERT INTO customer_subscriptions (
                customer_id, product_name, frequency, time_slot, quantity, quantity_num,
@@ -1707,8 +1727,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
                total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
              ) VALUES (
                $1, $2, 'Daily (Every Morning)', '6:00 AM – 7:00 AM', $3, $4,
-               $5, 'active', $6, 'month', $7,
-               $8, $9, $10, $11
+               $5, $6, $7, 'month', $8,
+               $9, $10, $11, $12
              ) RETURNING id, customer_id, status, product_name, quantity, quantity_num,
                          frequency, time_slot, cost_per_day_paise, plan_type, duration_label,
                          total_amount_paise, notes, next_delivery, razorpay_subscription_id, created_at`,
@@ -1718,7 +1738,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
               sizeStr,
               parseLitresFromSize(sizeStr),
               dailyRatePaise,
-              initialNextDelivery,
+              insertStatus,
+              insertNextDelivery,
               durationLabel,
               totalAmountPaise,
               subId,
@@ -1728,8 +1749,13 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
                 subscriptionId: subId,
                 razorpay_subscription_id: subId,
                 paymentId,
-                authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+                authType: isMandateOnlyAuth ? 'mandate_only' : 'recurring_charge',
                 authAmountPaise: gatewayPayment.amount,
+                mandateStatus: isMandateOnlyAuth ? 'authenticated' : (gatewaySub?.status || 'authenticated'),
+                mandateAuthorized: true,
+                mandatePaymentId: paymentId,
+                paidCount: isCapturedBillingCyclePayment ? (gatewaySub?.paid_count || 1) : 0,
+                fulfillmentEntitled: isCapturedBillingCyclePayment,
                 start_at: gatewaySub?.start_at || null,
                 startDate: gatewayStartAtYMD || null,
                 reconciledAt: new Date().toISOString()
@@ -1737,7 +1763,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
             ]
           );
           subRow = insertRes.rows[0];
-          isNewlyActivated = true;
+          isNewlyActivated = isCapturedBillingCyclePayment;
         }
         await client.query('COMMIT');
       } catch (err) {
@@ -1749,19 +1775,42 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
   }
 
-  // 7. Check local subscription state
-  // If local status is 'expired' but gateway confirms captured payment and subscription completed/active,
-  // this is a premature expiry caused by Razorpay's subscription.completed webhook race condition on 1-month plans.
-  // Reconcile it safely to active fulfillment through the paid-through date!
-  const isPrematureCompletedExpiry = subRow && subRow.status === 'expired' &&
-    gatewayPayment?.status === 'captured' &&
-    (gatewaySub?.status === 'completed' || gatewaySub?.status === 'active' || isFullPlanCharge);
+  // 7. Check local subscription state & paid-through entitlement
+  const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
+    ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
+    : null;
+  const existingNotes = typeof subRow?.notes === 'object' && subRow?.notes !== null ? subRow.notes : {};
+  const effectiveStartDate = gatewayStartAtYMD || existingNotes.startDate || (subRow?.created_at ? formatDateYMD(new Date(subRow.created_at)) : null);
+
+  const paidThroughYMD = derivePaidThroughDate({
+    startDate: effectiveStartDate,
+    paidThroughDate: existingNotes.paidThroughDate,
+    current_end: gatewaySub?.current_end,
+    cost_per_day_paise: subRow?.cost_per_day_paise,
+    total_amount_paise: subRow?.total_amount_paise || expectedPlanAmount,
+    paidCount: gatewaySub?.paid_count || 1,
+    months: gatewaySub?.notes?.months || existingNotes.months || 1
+  });
+
+  const todayYMD = new Date().toISOString().slice(0, 10);
+  const isEntitlementCurrent = Boolean(paidThroughYMD && paidThroughYMD >= todayYMD);
+
+  // Premature completed expiry occurs ONLY if Razorpay marked completed on total_count = 1
+  // AND full cycle payment was captured AND the paid entitlement has not elapsed.
+  const isPrematureCompletedExpiry = Boolean(
+    subRow &&
+    subRow.status === 'expired' &&
+    isCapturedBillingCyclePayment &&
+    isEntitlementCurrent
+  );
 
   if (subRow && (['cancelled', 'paused'].includes(subRow.status) || (subRow.status === 'expired' && !isPrematureCompletedExpiry))) {
     return reply.code(409).send({
       verified: false,
-      error: 'subscription_state_conflict',
-      message: `Subscription is currently in '${subRow.status}' status and cannot be reactivated via verification.`,
+      error: subRow.status === 'expired' ? 'subscription_expired' : 'subscription_state_conflict',
+      message: subRow.status === 'expired'
+        ? 'Subscription paid entitlement period has already elapsed and cannot be reactivated.'
+        : `Subscription is currently in '${subRow.status}' status and cannot be reactivated via verification.`,
       status: subRow.status
     });
   }
@@ -1790,19 +1839,57 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       }
     }
 
-    // Move pending_authorization (or reconcile premature expiry) to active idempotently
-    const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
-      ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
-      : null;
+    if (isMandateOnlyAuth) {
+      // Mandate-only authorization: do NOT activate fulfillment!
+      // Persist authenticated mandate state separately in notes.
+      const updatedNotes = {
+        ...existingNotes,
+        subscriptionId: subId,
+        razorpay_subscription_id: subId,
+        mandateStatus: 'authenticated',
+        mandateAuthorized: true,
+        mandateAuthorizedAt: new Date().toISOString(),
+        mandatePaymentId: paymentId,
+        mandateAuthAmountPaise: gatewayPayment.amount,
+        authType: 'mandate_only',
+        gatewayStatus: gatewaySub?.status || 'authenticated',
+        paidCount: 0,
+        fulfillmentEntitled: false,
+        start_at: gatewaySub?.start_at || existingNotes.start_at || null,
+        startDate: gatewayStartAtYMD || existingNotes.startDate || null,
+        verifiedAt: new Date().toISOString()
+      };
+
+      await pool.query(
+        `UPDATE customer_subscriptions
+         SET razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1),
+             notes = $2::jsonb,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [subId, JSON.stringify(updatedNotes), subRow.id]
+      );
+
+      subRow.notes = updatedNotes;
+      const startDate = await deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub);
+
+      return {
+        verified: true,
+        subscriptionId: subId,
+        paymentId,
+        status: subRow.status, // stays 'pending_authorization'
+        mandateStatus: 'authenticated',
+        fulfillmentEntitled: false,
+        startDate,
+        nextDelivery: subRow.next_delivery || 'Pending Billing Cycle Payment',
+        message: 'Mandate authenticated successfully. Awaiting captured billing-cycle payment to activate deliveries.'
+      };
+    }
+
+    // Verified captured billing-cycle payment: activate fulfillment!
     const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
       ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
       : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
 
-    const paidThroughYMD = gatewaySub?.current_end && Number.isFinite(gatewaySub.current_end)
-      ? new Date(gatewaySub.current_end * 1000).toISOString().slice(0, 10)
-      : null;
-
-    const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
     const updatedNotes = {
       ...existingNotes,
       subscriptionId: subId,
@@ -1811,8 +1898,9 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       gatewayStatus: gatewaySub?.status || 'active',
       billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
       paidCount: gatewaySub?.paid_count || 1,
-      paidThroughDate: paidThroughYMD || existingNotes.paidThroughDate || null,
-      authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+      paidThroughDate: paidThroughYMD,
+      fulfillmentEntitled: true,
+      authType: 'recurring_charge',
       authAmountPaise: gatewayPayment.amount,
       start_at: gatewaySub?.start_at || existingNotes.start_at || null,
       startDate: gatewayStartAtYMD || existingNotes.startDate || null,
@@ -2031,13 +2119,47 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_not_found`, 302);
       }
 
-      const isPrematureCompletedExpiry = subRow && subRow.status === 'expired' &&
+      const isCapturedBillingCyclePayment = Boolean(
+        isFullPlanCharge &&
         gatewayPayment?.status === 'captured' &&
-        (gatewaySub?.status === 'completed' || gatewaySub?.status === 'active' || isFullPlanCharge);
+        ['active', 'completed'].includes(gatewaySub?.status) &&
+        (gatewaySub?.paid_count !== undefined ? Number(gatewaySub.paid_count) >= 1 : true)
+      );
+
+      const isMandateOnlyAuth = Boolean(
+        !isCapturedBillingCyclePayment &&
+        (isRefundableAuth || gatewaySub?.status === 'authenticated' || Number(gatewaySub?.paid_count || 0) === 0)
+      );
+
+      const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
+        ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
+        : null;
+      const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+      const effectiveStartDate = gatewayStartAtYMD || existingNotes.startDate || (subRow.created_at ? formatDateYMD(new Date(subRow.created_at)) : null);
+
+      const paidThroughYMD = derivePaidThroughDate({
+        startDate: effectiveStartDate,
+        paidThroughDate: existingNotes.paidThroughDate,
+        current_end: gatewaySub?.current_end,
+        cost_per_day_paise: subRow.cost_per_day_paise,
+        total_amount_paise: subRow.total_amount_paise || expectedPlanAmount,
+        paidCount: gatewaySub?.paid_count || 1,
+        months: gatewaySub?.notes?.months || existingNotes.months || 1
+      });
+
+      const todayYMD = new Date().toISOString().slice(0, 10);
+      const isEntitlementCurrent = Boolean(paidThroughYMD && paidThroughYMD >= todayYMD);
+
+      const isPrematureCompletedExpiry = Boolean(
+        subRow &&
+        subRow.status === 'expired' &&
+        isCapturedBillingCyclePayment &&
+        isEntitlementCurrent
+      );
 
       // Prevent resurrecting cancelled, paused or truly expired subscriptions
       if (['cancelled', 'paused'].includes(subRow.status) || (subRow.status === 'expired' && !isPrematureCompletedExpiry)) {
-        return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_state_conflict`, 302);
+        return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=${subRow.status === 'expired' ? 'subscription_expired' : 'subscription_state_conflict'}`, 302);
       }
 
       // Verify customer ownership if gateway metadata provides customerId
@@ -2046,19 +2168,39 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_forbidden`, 302);
       }
 
+      // If mandate-only authorization: persist mandate state separately without activating fulfillment
+      if (isMandateOnlyAuth) {
+        await pool.query(
+          `UPDATE customer_subscriptions 
+           SET notes = jsonb_set(
+                 jsonb_set(
+                   jsonb_set(
+                     jsonb_set(
+                       COALESCE(notes, '{}'::jsonb),
+                       '{mandateStatus}',
+                       '"authenticated"'
+                     ),
+                     '{mandatePaymentId}',
+                     to_jsonb($1::text)
+                   ),
+                   '{gatewayStatus}',
+                   to_jsonb($2::text)
+                 ),
+                 '{fulfillmentEntitled}',
+                 'false'::jsonb
+               ),
+               updated_at = NOW() 
+           WHERE id = $3`,
+          [paymentId, gatewaySub?.status || 'authenticated', subRow.id]
+        );
+        return reply.redirect(`${safeReturnUrl}${separator}subscription=mandate_authenticated&payment_id=${encodeURIComponent(paymentId)}`, 302);
+      }
+
       // Activate if pending_authorization or reconcile premature expiry
       if (subRow.status === 'pending_authorization' || isPrematureCompletedExpiry) {
-        const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
-        const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
-          ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
-          : null;
         const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
           : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
-
-        const paidThroughYMD = gatewaySub?.current_end && Number.isFinite(gatewaySub.current_end)
-          ? new Date(gatewaySub.current_end * 1000).toISOString().slice(0, 10)
-          : null;
 
         const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
@@ -2080,8 +2222,9 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
               gatewayStatus: gatewaySub?.status || 'active',
               billingStatus: gatewaySub?.status === 'completed' ? 'completed' : 'active',
               paidCount: gatewaySub?.paid_count || 1,
-              paidThroughDate: paidThroughYMD || existingNotes.paidThroughDate || null,
-              authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+              paidThroughDate: paidThroughYMD,
+              fulfillmentEntitled: true,
+              authType: 'recurring_charge',
               authAmountPaise: gatewayPayment.amount,
               start_at: gatewaySub?.start_at || existingNotes.start_at || null,
               startDate: gatewayStartAtYMD || existingNotes.startDate || null,
@@ -3001,33 +3144,96 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             [subEntity.id]
           );
         } else if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
-          // Recurring cycle paid / payment captured: active for fulfillment!
-          const paidThroughYMD = subEntity.current_end && Number.isFinite(subEntity.current_end)
-            ? new Date(subEntity.current_end * 1000).toISOString().slice(0, 10)
-            : null;
+          // Confirm payment evidence before activating fulfillment
+          const paymentEntity = request.body?.payload?.payment?.entity;
+          const isPaymentCaptured = paymentEntity?.status === 'captured';
+          const rawPaidCount = subEntity.paid_count;
+          const hasPositivePaidCount = Number.isInteger(rawPaidCount) && rawPaidCount > 0;
+          const hasPaymentEvidence = hasPositivePaidCount || isPaymentCaptured;
 
-          await client.query(
-            `UPDATE customer_subscriptions 
-             SET status = 'active', 
-                 razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
-                 notes = jsonb_set(
-                   jsonb_set(
+          if (!hasPaymentEvidence) {
+            // Mandate activated on gateway or 0 paid_count: DO NOT default paid_count to 1!
+            // Record gateway status and 0 paidCount without activating fulfillment
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET notes = jsonb_set(
                      jsonb_set(
-                       COALESCE(notes, '{}'::jsonb),
-                       '{gatewayStatus}',
-                       to_jsonb($2::text)
+                       jsonb_set(
+                         COALESCE(notes, '{}'::jsonb),
+                         '{gatewayStatus}',
+                         to_jsonb($2::text)
+                       ),
+                       '{mandateStatus}',
+                       '"authenticated"'
                      ),
                      '{paidCount}',
-                     to_jsonb(COALESCE($3::integer, 1))
+                     '0'::jsonb
                    ),
-                   '{paidThroughDate}',
-                   COALESCE(to_jsonb($4::text), notes->'paidThroughDate', 'null'::jsonb)
-                 ),
-                 updated_at = NOW() 
-             WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
-               AND status NOT IN ('cancelled', 'paused')`,
-            [subEntity.id, subEntity.status || 'active', subEntity.paid_count || 1, paidThroughYMD]
-          );
+                   updated_at = NOW() 
+               WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)`,
+              [subEntity.id, subEntity.status || 'activated']
+            );
+          } else {
+            // Payment evidence confirmed: activate fulfillment!
+            const actualPaidCount = hasPositivePaidCount ? rawPaidCount : 1;
+
+            const { rows: currentRows } = await client.query(
+              `SELECT id, cost_per_day_paise, total_amount_paise, notes, created_at
+               FROM customer_subscriptions
+               WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)`,
+              [subEntity.id]
+            );
+            const currentSub = currentRows[0];
+            const currNotes = typeof currentSub?.notes === 'object' && currentSub?.notes !== null ? currentSub.notes : {};
+
+            const startDate = currNotes.startDate || (currentSub?.created_at ? formatDateYMD(new Date(currentSub.created_at)) : null);
+            const paidThroughYMD = derivePaidThroughDate({
+              startDate,
+              paidThroughDate: currNotes.paidThroughDate,
+              current_end: subEntity.current_end,
+              cost_per_day_paise: currentSub?.cost_per_day_paise,
+              total_amount_paise: currentSub?.total_amount_paise,
+              paidCount: actualPaidCount,
+              months: currNotes.months || 1
+            });
+
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET status = 'active', 
+                   razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
+                   notes = jsonb_set(
+                     jsonb_set(
+                       jsonb_set(
+                         jsonb_set(
+                           jsonb_set(
+                             COALESCE(notes, '{}'::jsonb),
+                             '{gatewayStatus}',
+                             to_jsonb($2::text)
+                           ),
+                           '{paidCount}',
+                           to_jsonb($3::integer)
+                         ),
+                         '{paidThroughDate}',
+                         COALESCE(to_jsonb($4::text), notes->'paidThroughDate', 'null'::jsonb)
+                       ),
+                       '{fulfillmentEntitled}',
+                       'true'::jsonb
+                     ),
+                     '{lastPaymentId}',
+                     COALESCE(to_jsonb($5::text), notes->'lastPaymentId', 'null'::jsonb)
+                   ),
+                   updated_at = NOW() 
+               WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
+                 AND status NOT IN ('cancelled', 'paused')`,
+              [
+                subEntity.id,
+                subEntity.status || 'active',
+                actualPaidCount,
+                paidThroughYMD,
+                paymentEntity?.id || null
+              ]
+            );
+          }
         } else if (['subscription.resumed'].includes(eventName)) {
           // Resume paused subscriptions, but never cancelled/expired
           await client.query(
@@ -3077,7 +3283,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           // after charging the first (and only) month.
           // The month is FULLY PAID through its paid-through date; deliveries MUST remain ACTIVE!
           const { rows: subRows } = await client.query(
-            `SELECT id, status, notes, total_amount_paise, created_at, next_delivery
+            `SELECT id, status, notes, cost_per_day_paise, total_amount_paise, created_at, next_delivery
              FROM customer_subscriptions
              WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
             [subEntity.id]
@@ -3087,12 +3293,19 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
             const isPaid = (subEntity.paid_count && subEntity.paid_count > 0) || Boolean(notes.lastPaymentId || notes.paymentId);
 
-            const paidThroughDate = subEntity.current_end && Number.isFinite(subEntity.current_end)
-              ? new Date(subEntity.current_end * 1000).toISOString().slice(0, 10)
-              : (notes.paidThroughDate || notes.endDate || null);
+            const startDate = notes.startDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+            const paidThroughDate = derivePaidThroughDate({
+              startDate,
+              paidThroughDate: notes.paidThroughDate,
+              current_end: subEntity.current_end,
+              cost_per_day_paise: sub.cost_per_day_paise,
+              total_amount_paise: sub.total_amount_paise,
+              paidCount: subEntity.paid_count || notes.paidCount || 1,
+              months: notes.months || 1
+            });
 
             const nowYMD = new Date().toISOString().slice(0, 10);
-            const isStillWithinPaidPeriod = paidThroughDate ? paidThroughDate >= nowYMD : true;
+            const isStillWithinPaidPeriod = Boolean(paidThroughDate && paidThroughDate >= nowYMD);
 
             if (isPaid && isStillWithinPaidPeriod && sub.status !== 'cancelled' && sub.status !== 'paused') {
               // Fulfillment entitlement remains ACTIVE through paid-through period, while billingStatus is marked completed

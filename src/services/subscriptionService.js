@@ -46,6 +46,72 @@ export function formatDateYMD(d) {
 }
 
 /**
+ * Authoritative Paid-Through Date Derivation
+ * Derives end date from explicit note, gateway current_end, or trusted schedule & verified payment.
+ * Returns YYYY-MM-DD or null if entitlement cannot be authoritatively established.
+ */
+export function derivePaidThroughDate({
+  startDate = null,
+  paidThroughDate = null,
+  current_end = null,
+  cost_per_day_paise = null,
+  total_amount_paise = null,
+  paidCount = 1,
+  months = null
+} = {}) {
+  // 1. Explicit valid YYYY-MM-DD string
+  if (typeof paidThroughDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paidThroughDate.trim())) {
+    return paidThroughDate.trim();
+  }
+
+  // 2. Gateway current_end epoch timestamp
+  if (current_end && Number.isFinite(Number(current_end)) && Number(current_end) > 0) {
+    try {
+      const d = new Date(Number(current_end) * 1000);
+      if (!Number.isNaN(d.getTime())) {
+        return d.toISOString().slice(0, 10);
+      }
+    } catch {}
+  }
+
+  // 3. Derive from verified payment and trusted subscription schedule
+  if (!startDate || typeof startDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDate.trim())) {
+    return null;
+  }
+
+  const effectivePaidCount = Math.max(1, Number(paidCount) || 1);
+  const costPerDay = Number(cost_per_day_paise) || 0;
+  const totalPaise = Number(total_amount_paise) || 0;
+
+  if (costPerDay > 0 && totalPaise > 0) {
+    const daysPerCycle = Math.floor(totalPaise / costPerDay);
+    const totalPaidDays = daysPerCycle * effectivePaidCount;
+    if (totalPaidDays > 0) {
+      const startD = new Date(`${startDate.trim()}T00:00:00Z`);
+      if (!Number.isNaN(startD.getTime())) {
+        const endD = new Date(startD);
+        endD.setUTCDate(endD.getUTCDate() + totalPaidDays - 1);
+        return endD.toISOString().slice(0, 10);
+      }
+    }
+  }
+
+  const numMonths = Number(months);
+  if (Number.isFinite(numMonths) && numMonths > 0) {
+    const totalMonths = numMonths * effectivePaidCount;
+    const startD = new Date(`${startDate.trim()}T00:00:00Z`);
+    if (!Number.isNaN(startD.getTime())) {
+      const endD = new Date(startD);
+      endD.setUTCMonth(endD.getUTCMonth() + totalMonths);
+      endD.setUTCDate(endD.getUTCDate() - 1);
+      return endD.toISOString().slice(0, 10);
+    }
+  }
+
+  return null;
+}
+
+/**
  * Check if the 8:00 PM cutoff has passed for a target delivery date
  */
 export function isDeliveryCutoffPassed(targetDateStr) {
@@ -104,13 +170,35 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
   const earliest = getEarliestEditableDeliveryDate();
 
   let subStartDate = null;
+  let subPaidThroughEndDate = null;
   try {
-    const { rows: subRows } = await pool.query('SELECT notes, next_delivery FROM customer_subscriptions WHERE id = $1', [subscriptionId]);
-    const subNotes = typeof subRows[0]?.notes === 'object' && subRows[0]?.notes !== null ? subRows[0].notes : {};
+    const { rows: subRows } = await pool.query(
+      'SELECT notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at FROM customer_subscriptions WHERE id = $1',
+      [subscriptionId]
+    );
+    const subRecord = subRows[0];
+    const subNotes = typeof subRecord?.notes === 'object' && subRecord?.notes !== null ? subRecord.notes : {};
     subStartDate = subNotes.startDate || subNotes.start_date ||
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
         ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
         : null);
+
+    const hasPayment = Boolean(
+      subNotes.lastPaymentId ||
+      subNotes.paymentId ||
+      (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
+    );
+    if (hasPayment) {
+      subPaidThroughEndDate = derivePaidThroughDate({
+        startDate: subStartDate || (subRecord?.created_at ? formatDateYMD(new Date(subRecord.created_at)) : null),
+        paidThroughDate: subNotes.paidThroughDate,
+        current_end: subNotes.current_end,
+        cost_per_day_paise: subRecord?.cost_per_day_paise,
+        total_amount_paise: subRecord?.total_amount_paise,
+        paidCount: subNotes.paidCount,
+        months: subNotes.months
+      });
+    }
   } catch {}
 
   // Look ahead up to 90 days to find the next active date
@@ -125,6 +213,11 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
 
     // If subscription has a future start date, do not schedule delivery before start date
     if (subStartDate && candidateYMD < subStartDate) {
+      continue;
+    }
+
+    // Do not schedule delivery beyond authenticated paid-through period
+    if (subPaidThroughEndDate && candidateYMD > subPaidThroughEndDate) {
       continue;
     }
 
@@ -149,7 +242,7 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
     return `${candidateYMD}, 6:00 AM – 7:00 AM`;
   }
 
-  return 'On Hold (Paused)';
+  return subPaidThroughEndDate ? 'Subscription Period Ended' : 'On Hold (Paused)';
 }
 
 /**
@@ -694,6 +787,16 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
       : null);
 
+  const subPaidThroughEndDate = derivePaidThroughDate({
+    startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
+    paidThroughDate: subNotes.paidThroughDate,
+    current_end: subNotes.current_end,
+    cost_per_day_paise: sub.cost_per_day_paise,
+    total_amount_paise: sub.total_amount_paise,
+    paidCount: subNotes.paidCount,
+    months: subNotes.months
+  });
+
   const days = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -703,6 +806,9 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
     if (subStartDate && dateStr < subStartDate) {
       status = 'not_started';
       detail = `Subscription begins on ${subStartDate}`;
+    } else if (subPaidThroughEndDate && dateStr > subPaidThroughEndDate) {
+      status = 'ended';
+      detail = `Paid entitlement ended on ${subPaidThroughEndDate}`;
     } else if (orderMap.has(dateStr)) {
       const ord = orderMap.get(dateStr);
       status = ord.status;
