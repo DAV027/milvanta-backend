@@ -1588,6 +1588,23 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     (isRefundableAuth || gatewaySub?.status === 'authenticated' || Number(gatewaySub?.paid_count || 0) === 0)
   );
 
+  // Reject ambiguous or authorized-but-not-captured full-price transactions without activating deliveries
+  if (isFullPlanCharge && gatewayPayment?.status !== 'captured') {
+    return reply.code(409).send({
+      verified: false,
+      error: 'payment_not_captured',
+      message: 'Subscription full plan charge is authorized but not captured by gateway. Fulfillment cannot be activated.'
+    });
+  }
+
+  if (!isCapturedBillingCyclePayment && !isMandateOnlyAuth) {
+    return reply.code(409).send({
+      verified: false,
+      error: 'ambiguous_payment_state',
+      message: 'Payment state is neither an authoritative captured billing cycle charge nor a valid mandate authorization.'
+    });
+  }
+
   // 5. Gateway customer ownership and contradiction checks (Requirement 2 & 3)
   const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id || gatewayPayment?.notes?.customerId || gatewayPayment?.notes?.customer_id;
   const gatewayPhone = gatewaySub?.notes?.customerPhone || gatewaySub?.notes?.phone;
@@ -2131,6 +2148,15 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
         (isRefundableAuth || gatewaySub?.status === 'authenticated' || Number(gatewaySub?.paid_count || 0) === 0)
       );
 
+      // Reject ambiguous or authorized-but-not-captured full-price transactions without activating deliveries
+      if (isFullPlanCharge && gatewayPayment?.status !== 'captured') {
+        return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=payment_not_captured`, 302);
+      }
+
+      if (!isCapturedBillingCyclePayment && !isMandateOnlyAuth) {
+        return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=ambiguous_payment_state`, 302);
+      }
+
       const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
         ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
         : null;
@@ -2307,8 +2333,10 @@ app.post('/api/v1/subscriptions/send-confirmation', { preHandler: app.authentica
     sub.auth_type === 'refundable_authorization' ||
     (sub.razorpay_subscription_id && sub.status === 'active')
   );
-  const paymentId = request.body?.paymentId || sub.notes?.paymentId || sub.razorpay_subscription_id || '';
-  const isAuthorized = sub.status === 'active' || (sub.status === 'paused' && sub.notes?.paymentId) || (isMandateAuth && sub.status !== 'cancelled');
+  const serverNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+  // Derive payment email idempotency key strictly from server-side verified records
+  const serverPaymentId = serverNotes.lastPaymentId || serverNotes.paymentId || serverNotes.mandatePaymentId || sub.razorpay_subscription_id;
+  const isAuthorized = sub.status === 'active' || (sub.status === 'paused' && serverNotes.paymentId) || (isMandateAuth && sub.status !== 'cancelled');
 
   if (!isAuthorized) {
     return reply.code(422).send({
@@ -2319,7 +2347,7 @@ app.post('/api/v1/subscriptions/send-confirmation', { preHandler: app.authentica
 
   // 4. Send confirmation using ONLY authoritative database data, never untrusted frontend cart data
   const result = await sendSubscriptionConfirmationEmails(pool, sub, {
-    paymentId,
+    paymentId: serverPaymentId || sub.razorpay_subscription_id || '',
     customerEmail: sub.email || request.customer.email,
     customerName: sub.full_name || request.customer.full_name
   });
@@ -3291,18 +3319,26 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           if (subRows.length > 0) {
             const sub = subRows[0];
             const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-            const isPaid = (subEntity.paid_count && subEntity.paid_count > 0) || Boolean(notes.lastPaymentId || notes.paymentId);
+            const isMandateOnly = notes.authType === 'mandate_only' || notes.fulfillmentEntitled === false;
+            const hasCapturedCyclePayment = Boolean(
+              (subEntity.paid_count && Number(subEntity.paid_count) > 0) ||
+              (notes.paidCount && Number(notes.paidCount) > 0) ||
+              (notes.fulfillmentEntitled === true && notes.authType !== 'mandate_only' && (notes.lastPaymentId || notes.paymentId))
+            );
+            const isPaid = hasCapturedCyclePayment && !isMandateOnly;
 
             const startDate = notes.startDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
-            const paidThroughDate = derivePaidThroughDate({
-              startDate,
-              paidThroughDate: notes.paidThroughDate,
-              current_end: subEntity.current_end,
-              cost_per_day_paise: sub.cost_per_day_paise,
-              total_amount_paise: sub.total_amount_paise,
-              paidCount: subEntity.paid_count || notes.paidCount || 1,
-              months: notes.months || 1
-            });
+            const paidThroughDate = isPaid
+              ? derivePaidThroughDate({
+                  startDate,
+                  paidThroughDate: notes.paidThroughDate,
+                  current_end: subEntity.current_end,
+                  cost_per_day_paise: sub.cost_per_day_paise,
+                  total_amount_paise: sub.total_amount_paise,
+                  paidCount: subEntity.paid_count || notes.paidCount || 1,
+                  months: notes.months || 1
+                })
+              : null;
 
             const nowYMD = new Date().toISOString().slice(0, 10);
             const isStillWithinPaidPeriod = Boolean(paidThroughDate && paidThroughDate >= nowYMD);

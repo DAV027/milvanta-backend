@@ -46,6 +46,48 @@ export function formatDateYMD(d) {
 }
 
 /**
+ * Safely add calendar months to a YYYY-MM-DD start date and return the inclusive paid-through end date.
+ * Handles month-end dates (e.g. Jan 31 -> Feb 28, Mar 31 -> Apr 30, Aug 31 -> Sep 30) without rollover.
+ */
+export function addCalendarMonths(startDateStr, numMonths = 1) {
+  if (!startDateStr || typeof startDateStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(startDateStr.trim())) {
+    return null;
+  }
+  const n = Number(numMonths);
+  if (!Number.isFinite(n) || n < 1) return null;
+
+  const [startYear, startMonth, startDay] = startDateStr.trim().split('-').map(Number);
+  const maxDayInStartMonth = new Date(Date.UTC(startYear, startMonth, 0)).getUTCDate();
+  const isMonthEnd = (startDay === maxDayInStartMonth);
+
+  if (isMonthEnd) {
+    const totalTargetMonth = startMonth + n;
+    const targetYear = startYear + Math.floor((totalTargetMonth - 1) / 12);
+    const targetMonth = ((totalTargetMonth - 1) % 12) + 1;
+    const targetDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+    return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+
+  if (startDay === 1) {
+    const totalTargetMonth = startMonth + n - 1;
+    const targetYear = startYear + Math.floor((totalTargetMonth - 1) / 12);
+    const targetMonth = ((totalTargetMonth - 1) % 12) + 1;
+    const targetDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+    return `${targetYear}-${String(targetMonth).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+
+  const totalTargetMonth = startMonth + n;
+  const targetYear = startYear + Math.floor((totalTargetMonth - 1) / 12);
+  const targetMonth = ((totalTargetMonth - 1) % 12) + 1;
+  const maxDaysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const nextCycleStartDay = Math.min(startDay, maxDaysInTargetMonth);
+
+  const nextCycleDate = new Date(Date.UTC(targetYear, targetMonth - 1, nextCycleStartDay));
+  nextCycleDate.setUTCDate(nextCycleDate.getUTCDate() - 1);
+  return nextCycleDate.toISOString().slice(0, 10);
+}
+
+/**
  * Authoritative Paid-Through Date Derivation
  * Derives end date from explicit note, gateway current_end, or trusted schedule & verified payment.
  * Returns YYYY-MM-DD or null if entitlement cannot be authoritatively established.
@@ -59,6 +101,11 @@ export function derivePaidThroughDate({
   paidCount = 1,
   months = null
 } = {}) {
+  // If paidCount is explicitly 0 or negative, there is no paid entitlement
+  if (paidCount !== undefined && paidCount !== null && Number(paidCount) <= 0) {
+    return null;
+  }
+
   // 1. Explicit valid YYYY-MM-DD string
   if (typeof paidThroughDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(paidThroughDate.trim())) {
     return paidThroughDate.trim();
@@ -79,13 +126,24 @@ export function derivePaidThroughDate({
     return null;
   }
 
-  const effectivePaidCount = Math.max(1, Number(paidCount) || 1);
+  const effectivePaidCycles = Number(paidCount) || 1;
+  if (effectivePaidCycles < 1) return null;
+
+  // Multi-month subscription calculation:
+  // total_amount_paise represents the full contract total, not necessarily one monthly charge.
+  // Entitlement is strictly based on the number of paid cycles (paidCount), NOT the entire contract duration.
+  const contractMonths = Number(months);
+  if (Number.isFinite(contractMonths) && contractMonths > 0) {
+    const paidMonths = Math.min(effectivePaidCycles, contractMonths);
+    return addCalendarMonths(startDate, paidMonths);
+  }
+
+  // Fallback when months is not explicitly supplied:
   const costPerDay = Number(cost_per_day_paise) || 0;
   const totalPaise = Number(total_amount_paise) || 0;
-
   if (costPerDay > 0 && totalPaise > 0) {
-    const daysPerCycle = Math.floor(totalPaise / costPerDay);
-    const totalPaidDays = daysPerCycle * effectivePaidCount;
+    const daysPerCycle = Math.min(Math.floor(totalPaise / costPerDay), 30);
+    const totalPaidDays = daysPerCycle * effectivePaidCycles;
     if (totalPaidDays > 0) {
       const startD = new Date(`${startDate.trim()}T00:00:00Z`);
       if (!Number.isNaN(startD.getTime())) {
@@ -96,24 +154,9 @@ export function derivePaidThroughDate({
     }
   }
 
-  const numMonths = Number(months);
-  if (Number.isFinite(numMonths) && numMonths > 0) {
-    const totalMonths = numMonths * effectivePaidCount;
-    const startD = new Date(`${startDate.trim()}T00:00:00Z`);
-    if (!Number.isNaN(startD.getTime())) {
-      const endD = new Date(startD);
-      endD.setUTCMonth(endD.getUTCMonth() + totalMonths);
-      endD.setUTCDate(endD.getUTCDate() - 1);
-      return endD.toISOString().slice(0, 10);
-    }
-  }
-
   return null;
 }
 
-/**
- * Check if the 8:00 PM cutoff has passed for a target delivery date
- */
 export function isDeliveryCutoffPassed(targetDateStr) {
   const istNow = getNowInIST();
   const todayYMD = formatDateYMD(istNow);
@@ -183,10 +226,18 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
         ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
         : null);
 
+    if (subRecord?.status === 'pending_authorization' || subNotes.fulfillmentEntitled === false) {
+      return subNotes.mandateAuthorized
+        ? 'Mandate Authorized — Awaiting Billing Payment'
+        : 'Pending Billing Cycle Payment';
+    }
+
     const hasPayment = Boolean(
-      subNotes.lastPaymentId ||
-      subNotes.paymentId ||
-      (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
+      subNotes.fulfillmentEntitled === true && (
+        subNotes.lastPaymentId ||
+        subNotes.paymentId ||
+        (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
+      )
     );
     if (hasPayment) {
       subPaidThroughEndDate = derivePaidThroughDate({
@@ -803,12 +854,27 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
     let status = 'scheduled';
     let detail = 'Scheduled Delivery (6:00 AM – 7:00 AM)';
 
-    if (subStartDate && dateStr < subStartDate) {
+    if (sub.status === 'pending_authorization' || subNotes.fulfillmentEntitled === false) {
+      if (orderMap.has(dateStr)) {
+        const ord = orderMap.get(dateStr);
+        status = ord.status;
+        detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : ord.status;
+      } else if (dateStr < todayYMD) {
+        status = 'past';
+        detail = 'Past date';
+      } else {
+        status = 'pending_payment';
+        detail = subNotes.mandateAuthorized ? 'Mandate authorized — awaiting billing payment' : 'Awaiting payment';
+      }
+    } else if (subStartDate && dateStr < subStartDate) {
       status = 'not_started';
       detail = `Subscription begins on ${subStartDate}`;
     } else if (subPaidThroughEndDate && dateStr > subPaidThroughEndDate) {
       status = 'ended';
       detail = `Paid entitlement ended on ${subPaidThroughEndDate}`;
+    } else if (!subPaidThroughEndDate && dateStr >= todayYMD && !orderMap.has(dateStr)) {
+      status = 'pending_payment';
+      detail = 'Awaiting payment confirmation';
     } else if (orderMap.has(dateStr)) {
       const ord = orderMap.get(dateStr);
       status = ord.status;
