@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * Milvanta Safe Operator-Controlled Admin Activation Script
  * 
@@ -54,9 +54,9 @@ async function main() {
 
     const { rows: updated } = await pool.query(
       `UPDATE customers
-       SET is_admin = TRUE, updated_at = NOW()
+       SET is_admin = TRUE
        WHERE id = $1
-       RETURNING id, full_name, email, phone, is_admin, updated_at`,
+       RETURNING id, full_name, email, phone, is_admin`,
       [customer.id]
     );
 
@@ -79,3 +79,5 @@ async function main() {
 }
 
 main();
+
+
