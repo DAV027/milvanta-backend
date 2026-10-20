@@ -1221,6 +1221,13 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const calculatedTotalAmountPaise = totalDays * dailyRatePaise;
   const amountPerMonthPaise = Math.round(calculatedTotalAmountPaise / months);
 
+  // Compute future start date and Razorpay start_at timestamp if offset > 0
+  const now = new Date();
+  const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
+  const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
+  const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
+  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
+
   // 4. Idempotency check: Reuse existing pending subscription if one was already created recently
   const existingPending = await pool.query(
     `SELECT id, razorpay_subscription_id, razorpay_plan_id, total_amount_paise 
@@ -1242,6 +1249,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       totalAmount: Number(oldSub.total_amount_paise || calculatedTotalAmountPaise),
       dailyRate: dailyRatePaise / 100,
       totalDays,
+      startDate: offset > 0 ? futureStartDateYMD : null,
+      startOffset: offset,
       planId: oldSub.razorpay_plan_id
     };
   }
@@ -1260,8 +1269,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       }
     });
 
-    // 6. Create subscription in Razorpay linked to customer
-    const rzpSub = await razorpay.subscriptions.create({
+    // 6. Create subscription in Razorpay linked to customer with start_at configured
+    const subParams = {
       plan_id: plan.id,
       total_count: months,
       quantity: 1,
@@ -1274,10 +1283,17 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         size: normalizedSize,
         months: String(months),
         days: String(totalDays),
+        startOffset: String(offset),
+        startDate: offset > 0 ? futureStartDateYMD : '',
         dailyRate: String(dailyRatePaise / 100),
         totalAmountPaise: String(calculatedTotalAmountPaise)
       }
-    });
+    };
+    if (startAtTimestamp) {
+      subParams.start_at = startAtTimestamp;
+    }
+
+    const rzpSub = await razorpay.subscriptions.create(subParams);
 
     // 7. Store local subscription in pending_authorization state
     await pool.query(
@@ -1287,8 +1303,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         plan_type, duration_label, total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
       ) VALUES (
         $1, $2, $3, $4, 'Daily (Every Morning)', '6:00 AM – 7:00 AM',
-        $5, $6, $7, 'pending_authorization', 'Tomorrow, 6:00 AM',
-        'month', $8, $9, $10, $11, $12
+        $5, $6, $7, 'pending_authorization', $8,
+        'month', $9, $10, $11, $12, $13
       )`,
       [
         request.customer.id,
@@ -1298,6 +1314,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         normalizedSize,
         parseLitresFromSize(normalizedSize),
         dailyRatePaise,
+        initialNextDelivery,
         `${months} Month Continuous Plan (${totalDays} Days)`,
         calculatedTotalAmountPaise,
         rzpSub.id,
@@ -1306,6 +1323,9 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           subscriptionId: rzpSub.id,
           months,
           days: totalDays,
+          startOffset: offset,
+          startDate: offset > 0 ? futureStartDateYMD : null,
+          start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise
         })
@@ -1321,6 +1341,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       totalAmount: calculatedTotalAmountPaise,
       dailyRate: dailyRatePaise / 100,
       totalDays,
+      startDate: offset > 0 ? futureStartDateYMD : null,
+      startOffset: offset,
       planId: plan.id
     };
   } catch (err) {
@@ -1344,15 +1366,7 @@ async function deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub
     } catch {}
   }
 
-  // 2. Explicit startDate in subscription notes
-  const notes = typeof subRow?.notes === 'object' && subRow?.notes !== null
-    ? subRow.notes
-    : (typeof gatewaySub?.notes === 'object' && gatewaySub?.notes !== null ? gatewaySub.notes : {});
-  if (notes.startDate || notes.start_date) {
-    return String(notes.startDate || notes.start_date).trim();
-  }
-
-  // 3. Authoritative gateway start timestamp
+  // 2. Authoritative gateway start timestamp (Razorpay subscription start_at configuration)
   if (gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)) {
     try {
       return new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10);
@@ -1364,9 +1378,30 @@ async function deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub
     } catch {}
   }
 
+  // 3. Explicit startDate or start_at in subscription notes
+  const notes = typeof subRow?.notes === 'object' && subRow?.notes !== null
+    ? subRow.notes
+    : (typeof gatewaySub?.notes === 'object' && gatewaySub?.notes !== null ? gatewaySub.notes : {});
+  if (notes.startDate || notes.start_date) {
+    return String(notes.startDate || notes.start_date).trim();
+  }
+  if (notes.start_at && Number.isFinite(Number(notes.start_at))) {
+    try {
+      return new Date(Number(notes.start_at) * 1000).toISOString().slice(0, 10);
+    } catch {}
+  }
+
   // 4. Stored next_delivery string if present
   if (subRow?.next_delivery && typeof subRow.next_delivery === 'string' && subRow.next_delivery.trim()) {
-    return subRow.next_delivery.replace(/,\s*6:00\s*AM/i, '').trim();
+    const raw = subRow.next_delivery.replace(/,\s*6:00\s*AM.*$/i, '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return raw;
+    }
+    if (raw.toLowerCase() === 'tomorrow') {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      return tomorrow.toISOString().slice(0, 10);
+    }
   }
 
   // 5. Accurate pending representation
@@ -1489,11 +1524,30 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       message: 'Authoritative subscription plan amount could not be verified with gateway.'
     });
   }
-  if (gatewayPayment.amount !== expectedPlanAmount) {
+
+  // Authoritative validation of subscription payment / authorization transaction:
+  // A. Recurring cycle charge: amount matches full plan cycle charge
+  const isFullPlanCharge = gatewayPayment.amount === expectedPlanAmount;
+
+  // B. Mandate authentication transaction: legitimate nominal or refundable authorization amount
+  //    used by Razorpay/banks (e.g. UPI Autopay / e-mandate registration: ₹1 - ₹5, or refundable auth up to ₹500)
+  const isRefundableAuth = Boolean(
+    isSubAuthorized &&
+    isPaymentAuthorized &&
+    (
+      gatewaySub?.status === 'authenticated' ||
+      gatewayPayment?.notes?.auth_type === 'refundable' ||
+      gatewayPayment?.notes?.auth_type === 'mandate_auth' ||
+      gatewaySub?.notes?.auth_type === 'refundable' ||
+      (!gatewayPayment?.invoice_id && (gatewaySub?.paid_count === 0 || !gatewaySub?.paid_count) && gatewayPayment.amount <= 50000)
+    )
+  );
+
+  if (!isFullPlanCharge && !isRefundableAuth) {
     return reply.code(400).send({
       verified: false,
       error: 'subscription_amount_mismatch',
-      message: `Payment amount (₹${(gatewayPayment.amount / 100).toFixed(0)}) does not match gateway subscription plan amount (₹${(expectedPlanAmount / 100).toFixed(0)}).`
+      message: `Payment amount (₹${(gatewayPayment.amount / 100).toFixed(0)}) does not match gateway subscription plan amount (₹${(expectedPlanAmount / 100).toFixed(0)}) and is not a valid mandate authorization transaction.`
     });
   }
 
@@ -1613,6 +1667,13 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
           [subId]
         );
 
+        const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
+          ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
+          : null;
+        const initialNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
+          ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
+          : 'Tomorrow, 6:00 AM';
+
         if (recheck.rows.length > 0) {
           subRow = recheck.rows[0];
           isNewlyActivated = false;
@@ -1624,8 +1685,8 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
                total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
              ) VALUES (
                $1, $2, 'Daily (Every Morning)', '6:00 AM – 7:00 AM', $3, $4,
-               $5, 'active', 'Tomorrow, 6:00 AM', 'month', $6,
-               $7, $8, $9, $10
+               $5, 'active', $6, 'month', $7,
+               $8, $9, $10, $11
              ) RETURNING id, customer_id, status, product_name, quantity, quantity_num,
                          frequency, time_slot, cost_per_day_paise, plan_type, duration_label,
                          total_amount_paise, notes, next_delivery, razorpay_subscription_id, created_at`,
@@ -1635,6 +1696,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
               sizeStr,
               parseLitresFromSize(sizeStr),
               dailyRatePaise,
+              initialNextDelivery,
               durationLabel,
               totalAmountPaise,
               subId,
@@ -1644,6 +1706,10 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
                 subscriptionId: subId,
                 razorpay_subscription_id: subId,
                 paymentId,
+                authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+                authAmountPaise: gatewayPayment.amount,
+                start_at: gatewaySub?.start_at || null,
+                startDate: gatewayStartAtYMD || null,
                 reconciledAt: new Date().toISOString()
               })
             ]
@@ -1696,12 +1762,23 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
 
     // Move pending_authorization to active idempotently using atomic conditional update
+    const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
+      ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
+      : null;
+    const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
+      ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
+      : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+
     const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
     const updatedNotes = {
       ...existingNotes,
       subscriptionId: subId,
       razorpay_subscription_id: subId,
       lastPaymentId: paymentId,
+      authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+      authAmountPaise: gatewayPayment.amount,
+      start_at: gatewaySub?.start_at || existingNotes.start_at || null,
+      startDate: gatewayStartAtYMD || existingNotes.startDate || null,
       verifiedAt: new Date().toISOString()
     };
 
@@ -1709,20 +1786,42 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
       `UPDATE customer_subscriptions
        SET status = 'active',
            razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1),
-           notes = $2::jsonb,
+           next_delivery = $2,
+           notes = $3::jsonb,
            updated_at = NOW()
-       WHERE id = $3 AND status = 'pending_authorization'
+       WHERE id = $4 AND status = 'pending_authorization'
        RETURNING id`,
-      [subId, JSON.stringify(updatedNotes), subRow.id]
+      [subId, futureNextDelivery, JSON.stringify(updatedNotes), subRow.id]
     );
 
     if (updateRes.rows.length > 0) {
       subRow.status = 'active';
+      subRow.next_delivery = futureNextDelivery;
       isNewlyActivated = true;
     } else {
-      // Concurrently updated by another request/worker
-      subRow.status = 'active';
+      // Concurrently updated by another request/worker: reread actual database state
+      const freshRes = await pool.query(
+        `SELECT cs.id, cs.customer_id, cs.status, cs.product_name, cs.quantity, cs.quantity_num,
+                cs.cost_per_day_paise, cs.total_amount_paise, cs.frequency, cs.time_slot,
+                cs.notes, cs.next_delivery, cs.razorpay_subscription_id, cs.razorpay_plan_id, cs.created_at
+         FROM customer_subscriptions cs
+         WHERE cs.id = $1`,
+        [subRow.id]
+      );
+      if (freshRes.rows.length > 0) {
+        subRow = freshRes.rows[0];
+      }
       isNewlyActivated = false;
+
+      // Never report active if the record was concurrently paused, cancelled or expired
+      if (['cancelled', 'paused', 'expired'].includes(subRow.status)) {
+        return reply.code(409).send({
+          verified: false,
+          error: 'subscription_state_conflict',
+          message: `Subscription is currently in '${subRow.status}' status and cannot be verified as active.`,
+          status: subRow.status
+        });
+      }
     }
   }
 
@@ -1762,6 +1861,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     paymentId,
     status: subRow.status,
     startDate,
+    nextDelivery: subRow.next_delivery,
     message: isNewlyActivated ? 'Subscription verified and activated' : 'Subscription already active'
   };
 });
@@ -1839,7 +1939,21 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
 
   // Verify plan amount using Razorpay's actual plan data
   const expectedPlanAmount = await resolveGatewayPlanAmount(razorpay, gatewaySub);
-  if (expectedPlanAmount === null || gatewayPayment.amount !== expectedPlanAmount) {
+  const isFullPlanCharge = expectedPlanAmount !== null && gatewayPayment.amount === expectedPlanAmount;
+  const isRefundableAuth = Boolean(
+    expectedPlanAmount !== null &&
+    isSubAuthorized &&
+    isPaymentAuthorized &&
+    (
+      gatewaySub?.status === 'authenticated' ||
+      gatewayPayment?.notes?.auth_type === 'refundable' ||
+      gatewayPayment?.notes?.auth_type === 'mandate_auth' ||
+      gatewaySub?.notes?.auth_type === 'refundable' ||
+      (!gatewayPayment?.invoice_id && (gatewaySub?.paid_count === 0 || !gatewaySub?.paid_count) && gatewayPayment.amount <= 50000)
+    )
+  );
+
+  if (!isFullPlanCharge && !isRefundableAuth) {
     return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_amount_mismatch`, 302);
   }
 
@@ -1847,7 +1961,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
   if (pool) {
     try {
       const { rows } = await pool.query(
-        `SELECT id, customer_id, status, notes
+        `SELECT id, customer_id, status, notes, next_delivery
          FROM customer_subscriptions
          WHERE razorpay_subscription_id = $1 
             OR notes->>'subscriptionId' = $1 
@@ -1875,21 +1989,34 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
       // Activate ONLY if pending_authorization using atomic conditional update for concurrency
       if (subRow.status === 'pending_authorization') {
         const existingNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
+        const gatewayStartAtYMD = gatewaySub?.start_at && Number.isFinite(gatewaySub.start_at)
+          ? new Date(gatewaySub.start_at * 1000).toISOString().slice(0, 10)
+          : null;
+        const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
+          ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
+          : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+
         const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
            SET status = 'active', 
                razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
-               notes = $2::jsonb,
+               next_delivery = $2,
+               notes = $3::jsonb,
                updated_at = NOW() 
-           WHERE id = $3 AND status = 'pending_authorization'
+           WHERE id = $4 AND status = 'pending_authorization'
            RETURNING id`,
           [
             subId,
+            futureNextDelivery,
             JSON.stringify({
               ...existingNotes,
               subscriptionId: subId,
               razorpay_subscription_id: subId,
               lastPaymentId: paymentId,
+              authType: isRefundableAuth && !isFullPlanCharge ? 'refundable_authorization' : 'recurring_charge',
+              authAmountPaise: gatewayPayment.amount,
+              start_at: gatewaySub?.start_at || existingNotes.start_at || null,
+              startDate: gatewayStartAtYMD || existingNotes.startDate || null,
               activatedVia: 'callback',
               verifiedAt: new Date().toISOString()
             }),
@@ -1900,6 +2027,12 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
           sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
             app.log.error({ err }, '[Email] Failed to send subscription confirmation email on callback');
           });
+        } else {
+          // Concurrently updated by another request/worker: reread actual database state
+          const freshRes = await pool.query('SELECT status FROM customer_subscriptions WHERE id = $1', [subRow.id]);
+          if (freshRes.rows.length > 0 && ['cancelled', 'paused', 'expired'].includes(freshRes.rows[0].status)) {
+            return reply.redirect(`${safeReturnUrl}${separator}subscription=failed&error=subscription_state_conflict`, 302);
+          }
         }
       }
     } catch (dbErr) {

@@ -25,6 +25,8 @@ const pool = setup.pool;
 const schemaName = setup.schemaName;
 
 const { app, razorpay } = await import('../src/server.js');
+const { generateDailyDeliveries } = await import('../src/services/deliveryEngine.js');
+const { getSubscriptionCalendar } = await import('../src/services/subscriptionService.js');
 
 describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconciliation Suite', () => {
   let customerAId;
@@ -1300,6 +1302,432 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
         // Confirm database status is now active
         const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
         assert.equal(check.rows[0].status, 'active');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 7. Verification Race Conditions, Mandate Lifecycle & Future Start Dates
+  // =========================================================================
+  describe('7. Verification Race Conditions, Mandate Lifecycle & Future Start Dates', () => {
+    it('handles verify race condition: returns 409 subscription_state_conflict when concurrently cancelled', async () => {
+      const subId = `sub_race_canc_${Date.now()}`;
+      const payId = `pay_race_canc_${Date.now()}`;
+      const planId = `plan_race_canc_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Schedule', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, size: '1 Litre', customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      // Concurrently before update runs, simulate another worker setting status to 'cancelled'
+      await pool.query("UPDATE customer_subscriptions SET status = 'cancelled' WHERE razorpay_subscription_id = $1", [subId]);
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 409);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_state_conflict');
+        assert.equal(data.status, 'cancelled');
+
+        // Confirm database status remains cancelled
+        const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(check.rows[0].status, 'cancelled');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('handles verify race condition: returns 409 subscription_state_conflict when concurrently paused', async () => {
+      const subId = `sub_race_pause_${Date.now()}`;
+      const payId = `pay_race_pause_${Date.now()}`;
+      const planId = `plan_race_pause_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Schedule', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, size: '1 Litre', customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      // Concurrently set status to 'paused'
+      await pool.query("UPDATE customer_subscriptions SET status = 'paused' WHERE razorpay_subscription_id = $1", [subId]);
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 409);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_state_conflict');
+        assert.equal(data.status, 'paused');
+
+        // Confirm database status remains paused
+        const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(check.rows[0].status, 'paused');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('handles callback race condition: redirects with subscription_state_conflict when concurrently paused', async () => {
+      const subId = `sub_cb_race_${Date.now()}`;
+      const payId = `pay_cb_race_${Date.now()}`;
+      const planId = `plan_cb_race_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Schedule', 'month', '1 Month Continuous Plan',
+           315000, $2, $3
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId, customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      // Concurrently set status to 'paused'
+      await pool.query("UPDATE customer_subscriptions SET status = 'paused' WHERE razorpay_subscription_id = $1", [subId]);
+
+      try {
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/callback?razorpay_subscription_id=${subId}&razorpay_payment_id=${payId}&razorpay_signature=${sig}`
+        });
+
+        assert.equal(res.statusCode, 302);
+        assert.match(res.headers.location, /error=subscription_state_conflict/);
+
+        // Confirm database status remains paused
+        const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(check.rows[0].status, 'paused');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 2: accepts legitimate refundable mandate authorization transaction and enables fulfillment', async () => {
+      const subId = `sub_mandate_auth_${Date.now()}`;
+      const payId = `pay_mandate_auth_${Date.now()}`;
+      const planId = `plan_mandate_auth_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Schedule', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, size: '1 Litre', customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      // Gateway subscription status: 'authenticated', paid_count: 0
+      // Gateway payment amount: 200 paise (₹2 refundable auth)
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'authenticated',
+        paid_count: 0,
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 200
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.status, 'active');
+
+        // Confirm database status is now active
+        const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(check.rows[0].status, 'active');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 2: blocks fulfillment if gateway subscription is halted or payment is not authorized', async () => {
+      const subId = `sub_halted_${Date.now()}`;
+      const payId = `pay_halted_${Date.now()}`;
+      const planId = `plan_halted_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Schedule', 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4
+         )`,
+        [customerAId, subId, planId, JSON.stringify({ subscriptionId: subId, size: '1 Litre', customerId: String(customerAId) })]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      // Halted gateway subscription
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'halted',
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre' }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 409);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_payment_state_not_captured');
+
+        // Confirm database status remains pending_authorization
+        const check = await pool.query('SELECT status FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(check.rows[0].status, 'pending_authorization');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('Requirement 3: supports future startOffset and start_at, aligning next_delivery and delivery generation', async () => {
+      // Create subscription with future start date in notes
+      const subId = `sub_future_start_${Date.now()}`;
+      const payId = `pay_future_start_${Date.now()}`;
+      const planId = `plan_future_start_${Date.now()}`;
+
+      // Start date: 1st of next month
+      const now = new Date();
+      const futureDate = new Date(now.getFullYear(), now.getMonth() + 1, 1, 6, 0, 0);
+      const futureDateYMD = `${futureDate.getFullYear()}-${String(futureDate.getMonth() + 1).padStart(2, '0')}-01`;
+      const futureStartAtEpoch = Math.floor(futureDate.getTime() / 1000);
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, razorpay_plan_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', $5, 'month', '1 Month Continuous Plan',
+           315000, $2, $3, $4
+         )`,
+        [
+          customerAId,
+          subId,
+          planId,
+          JSON.stringify({
+            subscriptionId: subId,
+            size: '1 Litre',
+            customerId: String(customerAId),
+            startDate: futureDateYMD,
+            start_at: futureStartAtEpoch,
+            startOffset: 1
+          }),
+          `${futureDateYMD}, 6:00 AM – 7:00 AM`
+        ]
+      );
+
+      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const sig = crypto.createHmac('sha256', secret).update(`${payId}|${subId}`).digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+
+      razorpay.subscriptions.fetch = async () => ({
+        id: subId,
+        status: 'active',
+        start_at: futureStartAtEpoch,
+        plan_id: planId,
+        plan: { item: { amount: 315000, currency: 'INR' } },
+        notes: { customerId: String(customerAId), size: '1 Litre', startDate: futureDateYMD, start_at: String(futureStartAtEpoch) }
+      });
+      razorpay.payments.fetch = async () => ({
+        id: payId,
+        status: 'captured',
+        subscription_id: subId,
+        currency: 'INR',
+        amount: 315000
+      });
+
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: { razorpay_subscription_id: subId, razorpay_payment_id: payId, razorpay_signature: sig }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.status, 'active');
+        assert.equal(data.startDate, futureDateYMD);
+        assert.match(data.nextDelivery, new RegExp(`^${futureDateYMD}`));
+
+        // 1. Confirm database row has next_delivery aligned to future date
+        const subDb = await pool.query('SELECT id, status, next_delivery FROM customer_subscriptions WHERE razorpay_subscription_id = $1', [subId]);
+        assert.equal(subDb.rows[0].status, 'active');
+        assert.match(subDb.rows[0].next_delivery, new RegExp(`^${futureDateYMD}`));
+
+        // 2. Run generateDailyDeliveries for today; must skip this future-dated subscription
+        const todayYMD = now.toISOString().slice(0, 10);
+        await generateDailyDeliveries(pool, todayYMD);
+        const delOrders = await pool.query(
+          'SELECT id FROM subscription_delivery_orders WHERE subscription_id = $1 AND delivery_date = $2',
+          [subDb.rows[0].id, todayYMD]
+        );
+        assert.equal(delOrders.rows.length, 0, 'No delivery order should be generated prior to subscription start date');
+
+        // 3. Check getSubscriptionCalendar for current month (which is before futureDate)
+        const cal = await getSubscriptionCalendar(pool, {
+          subscriptionId: subDb.rows[0].id,
+          customerId: customerAId,
+          month: now.getMonth() + 1,
+          year: now.getFullYear()
+        });
+
+        // Days before futureDateYMD should have status 'not_started'
+        const day1 = cal.days.find(d => d.date < futureDateYMD);
+        if (day1) {
+          assert.equal(day1.status, 'not_started');
+          assert.match(day1.detail, new RegExp(`Subscription begins on ${futureDateYMD}`));
+        }
       } finally {
         razorpay.subscriptions.fetch = originalFetchSub;
         razorpay.payments.fetch = originalFetchPay;

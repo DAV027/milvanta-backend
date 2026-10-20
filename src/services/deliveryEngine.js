@@ -46,6 +46,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
     // 1. Fetch all currently active subscriptions
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
+              cs.notes, cs.next_delivery,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -54,6 +55,17 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
     );
 
     for (const sub of activeSubs) {
+      // 1b. Check if subscription start date is in the future
+      const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+      const subStartDate = subNotes.startDate || subNotes.start_date ||
+        (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+          ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+          : null);
+      if (subStartDate && targetDate < subStartDate) {
+        skippedCount++;
+        continue;
+      }
+
       // 2. Check if skipped for target date
       const { rows: skipped } = await client.query(
         'SELECT id FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',

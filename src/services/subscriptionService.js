@@ -103,8 +103,18 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
   const istNow = getNowInIST();
   const earliest = getEarliestEditableDeliveryDate();
 
-  // Look ahead up to 60 days to find the next active date
-  for (let i = 0; i < 60; i++) {
+  let subStartDate = null;
+  try {
+    const { rows: subRows } = await pool.query('SELECT notes, next_delivery FROM customer_subscriptions WHERE id = $1', [subscriptionId]);
+    const subNotes = typeof subRows[0]?.notes === 'object' && subRows[0]?.notes !== null ? subRows[0].notes : {};
+    subStartDate = subNotes.startDate || subNotes.start_date ||
+      (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+        ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+        : null);
+  } catch {}
+
+  // Look ahead up to 90 days to find the next active date
+  for (let i = 0; i < 90; i++) {
     const candidate = new Date(istNow);
     if (istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
       candidate.setDate(candidate.getDate() + 2 + i);
@@ -112,6 +122,11 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
       candidate.setDate(candidate.getDate() + 1 + i);
     }
     const candidateYMD = formatDateYMD(candidate);
+
+    // If subscription has a future start date, do not schedule delivery before start date
+    if (subStartDate && candidateYMD < subStartDate) {
+      continue;
+    }
 
     // 1. Check if skipped
     const { rows: skipped } = await pool.query(
@@ -673,13 +688,22 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
   const istNow = getNowInIST();
   const todayYMD = formatDateYMD(istNow);
 
+  const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+  const subStartDate = subNotes.startDate || subNotes.start_date ||
+    (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+      ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+      : null);
+
   const days = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     let status = 'scheduled';
     let detail = 'Scheduled Delivery (6:00 AM – 7:00 AM)';
 
-    if (orderMap.has(dateStr)) {
+    if (subStartDate && dateStr < subStartDate) {
+      status = 'not_started';
+      detail = `Subscription begins on ${subStartDate}`;
+    } else if (orderMap.has(dateStr)) {
       const ord = orderMap.get(dateStr);
       status = ord.status;
       detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : ord.status;
