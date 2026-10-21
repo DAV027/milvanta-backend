@@ -51,9 +51,9 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       assert.strictEqual(scriptJsPrimary, scriptJsCloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261021-3)', () => {
-      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261021-3'));
-      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261021-3'));
+    it('profile.html has incremented cache-busting version strings (?v=20261021-4)', () => {
+      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261021-4'));
+      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261021-4'));
     });
 
     it('milvanta-cloudflare-upload.zip exists and is non-empty', () => {
@@ -164,7 +164,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
     });
 
     it('switchTab renders tomorrow strip and monthly calendar when tabId is calendar', () => {
-      assert.ok(profileJsPrimary.includes("} else if (tabId === 'calendar') {\n      renderTomorrowStrip();\n      renderMonthlyDeliveryCalendar();\n    }"));
+      assert.ok(profileJsPrimary.replace(/\r\n/g, '\n').includes("} else if (tabId === 'calendar') {\n      renderTomorrowStrip();\n      renderMonthlyDeliveryCalendar();\n    }"));
     });
 
     it('subscription card template renders View Calendar pill with data-view-cal="${sub.id}"', () => {
