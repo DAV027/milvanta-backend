@@ -2954,6 +2954,11 @@ document.addEventListener('DOMContentLoaded', () => {
     closeUserDropdown();
     window.location.href = 'profile.html?tab=subscription';
   });
+  $('#userMenuCalendar')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    closeUserDropdown();
+    window.location.href = 'profile.html?tab=calendar';
+  });
   $('#userMenuAdmin')?.addEventListener('click', () => {
     closeUserDropdown();
     openAdminOrders();
