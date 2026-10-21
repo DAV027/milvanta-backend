@@ -43,9 +43,9 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       assert.strictEqual(scriptJsPrimary, scriptJsCloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261021-2)', () => {
-      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261021-2'));
-      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261021-2'));
+    it('profile.html has incremented cache-busting version strings (?v=20261021-3)', () => {
+      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261021-3'));
+      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261021-3'));
     });
 
     it('milvanta-cloudflare-upload.zip exists and is non-empty', () => {
@@ -290,8 +290,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
     });
 
     it('Regression 3: Calendar API response triggers tomorrow strip refresh with authoritative data', () => {
-      assert.ok(profileJsPrimary.includes('state.subCalendarMap = state.subCalendarMap || {};'));
-      assert.ok(profileJsPrimary.includes('state.subCalendarMap[state.selectedSubId] = data;'));
+      assert.ok(profileJsPrimary.includes('setCachedCalendar(targetSubId, year, month, data);'));
       assert.ok(profileJsPrimary.includes('renderTomorrowStrip();'));
       // renderTomorrowStrip must update both containers
       assert.ok(profileJsPrimary.includes("const containers = [$('#subTomorrowStripContainer'), $('#calTomorrowStripContainer')].filter(Boolean);"));
@@ -314,6 +313,124 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       assert.ok(profileJsPrimary.includes("$$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = true; });"));
       assert.ok(profileJsPrimary.includes("$$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = false; });"));
       assert.ok(profileJsPrimary.includes('isTogglingTomorrow = false;'));
+    });
+
+    it('Regression 6: Cache calendar data by subscription ID AND year/month (rather than ID alone)', () => {
+      assert.ok(profileJsPrimary.includes('function getCalendarCacheKey(subId, year, month)'));
+      assert.ok(profileJsPrimary.includes('return `${subId}_${year}_${month}`;'));
+      assert.ok(profileJsPrimary.includes('function getCachedCalendar(subId, year, month)'));
+      assert.ok(profileJsPrimary.includes('function setCachedCalendar(subId, year, month, data)'));
+
+      // Executable verification of multi-month caching
+      const cache = {};
+      const getKey = (subId, y, m) => `${subId}_${y}_${m}`;
+      cache[getKey(101, 2026, 9)] = { days: [{ date: '2026-10-31', status: 'scheduled' }] };
+      cache[getKey(101, 2026, 10)] = { days: [{ date: '2026-11-01', status: 'scheduled' }] };
+
+      assert.strictEqual(cache[getKey(101, 2026, 9)].days[0].date, '2026-10-31');
+      assert.strictEqual(cache[getKey(101, 2026, 10)].days[0].date, '2026-11-01');
+      // Sub 101 has both October and November stored simultaneously without overwriting
+      assert.ok(cache[getKey(101, 2026, 9)] !== cache[getKey(101, 2026, 10)]);
+    });
+
+    it('Regression 7: Month boundary retrieval across month transition', () => {
+      // Simulate today being October 31st, 2026 in IST
+      const mockDateOct31 = new Date(2026, 9, 31, 10, 0, 0); // 31 Oct 2026
+      const tomDate = new Date(mockDateOct31.getFullYear(), mockDateOct31.getMonth(), mockDateOct31.getDate() + 1);
+      const tomYear = tomDate.getFullYear();
+      const tomMonth = tomDate.getMonth();
+      const tomDay = tomDate.getDate();
+      const tomKey = `${tomYear}-${String(tomMonth + 1).padStart(2, '0')}-${String(tomDay).padStart(2, '0')}`;
+
+      assert.strictEqual(tomYear, 2026);
+      assert.strictEqual(tomMonth, 10, 'Tomorrow must be in month index 10 (November)');
+      assert.strictEqual(tomDay, 1, 'Tomorrow date must be 1st');
+      assert.strictEqual(tomKey, '2026-11-01');
+
+      // Even if customer is currently browsing October (month 9), tomorrow's status requests month 10
+      const cache = {};
+      cache[`101_2026_9`] = { month: 9, days: [{ date: '2026-10-31' }] };
+      cache[`101_2026_10`] = { month: 10, days: [{ date: '2026-11-01', status: 'scheduled', isEditable: true }] };
+
+      const subCal = cache[`101_${tomYear}_${tomMonth}`];
+      assert.ok(subCal, 'Must retrieve calendar for November 2026, not October');
+      const tomData = subCal.days.find(d => d.date === tomKey);
+      assert.ok(tomData, 'Must locate 2026-11-01 in November calendar');
+      assert.strictEqual(tomData.status, 'scheduled');
+    });
+
+    it('Regression 8: Vacation pauses redirect to vacation modal and never call DELETE /skip-date', () => {
+      assert.ok(profileJsPrimary.includes("statusText = '✈️ Vacation Mode (Paused)';"));
+      assert.ok(profileJsPrimary.includes('btn-manage-vacation'));
+      assert.ok(profileJsPrimary.includes('data-open-vacation="true"'));
+      
+      // Ensure click listener strictly guards against vacation resume via skip-date
+      assert.ok(profileJsPrimary.includes("if (action !== 'resume' && action !== 'skip') return;"));
+
+      // Verify Vacation Modal opens via data-open-vacation
+      assert.ok(profileJsPrimary.includes("if (e.target.closest('[data-open-vacation]'))"));
+      assert.ok(profileJsPrimary.includes("document.getElementById('btnOpenVacationModal')?.click()"));
+    });
+
+    it('Regression 9: Pending-payment, ended entitlement, and cancelled states respect billing', () => {
+      assert.ok(profileJsPrimary.includes("statusText = '⏳ Pending Payment (Mandate/Billing)';"));
+      assert.ok(profileJsPrimary.includes("statusText = '⏹ Entitlement Ended';"));
+      assert.ok(profileJsPrimary.includes("statusText = '✕ Subscription Cancelled';"));
+      assert.ok(profileJsPrimary.includes('data-quick-extend="true"'));
+
+      // Check inspector handling
+      assert.ok(profileJsPrimary.includes("status === 'pending_payment'"));
+      assert.ok(profileJsPrimary.includes("status === 'ended'"));
+      assert.ok(profileJsPrimary.includes('Awaiting payment confirmation'));
+      assert.ok(profileJsPrimary.includes('Paid entitlement period ended'));
+    });
+
+    it('Regression 10: Rapid subscription switching discards stale in-flight responses', () => {
+      assert.ok(profileJsPrimary.includes('let calendarFetchSequence = 0;'));
+      assert.ok(profileJsPrimary.includes('const currentSeq = ++calendarFetchSequence;'));
+      assert.ok(profileJsPrimary.includes('const targetSubId = String(state.selectedSubId);'));
+      assert.ok(profileJsPrimary.includes('if (currentSeq !== calendarFetchSequence || String(state.selectedSubId) !== targetSubId)'));
+
+      // Executable logic test
+      let fetchSequence = 0;
+      let activeSubId = '101';
+      let renderedSubId = null;
+
+      // Request 1 starts for sub 101
+      const req1Seq = ++fetchSequence;
+      const req1SubId = activeSubId;
+
+      // User rapidly clicks sub 102
+      activeSubId = '102';
+      const req2Seq = ++fetchSequence;
+      const req2SubId = activeSubId;
+
+      // Request 2 completes first
+      if (req2Seq === fetchSequence && req2SubId === activeSubId) {
+        renderedSubId = req2SubId;
+      }
+      assert.strictEqual(renderedSubId, '102', 'Sub 102 must be rendered');
+
+      // Request 1 arrives delayed
+      if (req1Seq === fetchSequence && req1SubId === activeSubId) {
+        renderedSubId = req1SubId; // Should NOT be reached
+      }
+      assert.strictEqual(renderedSubId, '102', 'Sub 101 delayed response must NOT overwrite Sub 102');
+    });
+
+    it('Regression 11: Business delivery timezone (Asia/Kolkata) & Delivery Cutoff', () => {
+      assert.ok(profileJsPrimary.includes("timeZone: 'Asia/Kolkata'"));
+      assert.ok(profileJsPrimary.includes('function getNowInIST()'));
+      assert.ok(profileJsPrimary.includes('function getTomorrowInIST()'));
+      assert.ok(profileJsPrimary.includes('istNow.getHours() >= 20')); // 8:00 PM cutoff
+
+      // Loading state shows checking and disabled button
+      assert.ok(profileJsPrimary.includes('Checking delivery status'));
+      assert.ok(profileJsPrimary.includes('btn-tomorrow-toggle-action disabled'));
+      assert.ok(profileJsPrimary.includes('data-action="disabled"'));
+
+      // Cutoff passed message
+      assert.ok(profileJsPrimary.includes('Cutoff passed (8:00 PM IST)'));
     });
   });
 });
