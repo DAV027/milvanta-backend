@@ -1266,74 +1266,78 @@
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const formattedDate = `${dayNames[tomorrow.getDay()]}, ${tomDate} ${monthNames[tomMonth]} ${tomYear}`;
 
-    let isTomSkipped = false;
-    if (state.calendarData && Array.isArray(state.calendarData.days)) {
-      const tomDayData = state.calendarData.days.find((d) => d.date === tomKey);
-      if (tomDayData && (tomDayData.status === 'skipped' || tomDayData.status === 'vacation' || tomDayData.status === 'paused')) {
-        isTomSkipped = true;
+    state.subCalendarMap = state.subCalendarMap || {};
+
+    const stripHtml = activeSubs.map((sub) => {
+      let isTomSkipped = false;
+      let statusDetail = '✓ Scheduled (6:00 AM – 7:00 AM)';
+      
+      const subCal = state.subCalendarMap[sub.id];
+      if (subCal && Array.isArray(subCal.days)) {
+        const tomDayData = subCal.days.find((d) => d.date === tomKey);
+        if (tomDayData) {
+          if (tomDayData.status === 'skipped' || tomDayData.status === 'paused') {
+            isTomSkipped = true;
+            statusDetail = '⏸ Paused (Will not deliver tomorrow)';
+          } else if (tomDayData.status === 'vacation') {
+            isTomSkipped = true;
+            statusDetail = '✈️ Vacation Mode (Paused)';
+          } else if (tomDayData.status === 'delivered') {
+            statusDetail = '✓ Delivered';
+          }
+        }
       }
-    }
 
-    const subSummary = activeSubs.map((s) => `${s.quantity || '1 Litre'} ${s.product}`).join(' + ');
+      const itemDesc = `${escapeHtml(sub.quantity || '1 Litre')} ${escapeHtml(sub.product || 'Milk')}`;
 
-    const stripHtml = `
-      <div class="sub-tomorrow-strip ${isTomSkipped ? 'is-paused' : 'is-scheduled'}">
-        <div class="sub-tomorrow-main">
-          <div class="sub-tomorrow-lead">
-            <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
-            <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
-            <span class="sub-tomorrow-date">${formattedDate}</span>
+      return `
+        <div class="sub-tomorrow-strip ${isTomSkipped ? 'is-paused' : 'is-scheduled'}" data-tomorrow-sub="${sub.id}">
+          <div class="sub-tomorrow-main">
+            <div class="sub-tomorrow-lead">
+              <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+              <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+              <span class="sub-tomorrow-date">${formattedDate}</span>
+            </div>
+            <div class="sub-tomorrow-meta">
+              <span class="sub-tomorrow-status-tag ${isTomSkipped ? 'paused' : 'scheduled'}">
+                ${statusDetail}
+              </span>
+              <span class="sub-tomorrow-items-text">${itemDesc}</span>
+            </div>
           </div>
-          <div class="sub-tomorrow-meta">
-            <span class="sub-tomorrow-status-tag ${isTomSkipped ? 'paused' : 'scheduled'}">
-              ${isTomSkipped ? '⏸ Paused (Will not deliver tomorrow)' : '✓ Scheduled (6:00 AM – 7:00 AM)'}
-            </span>
-            <span class="sub-tomorrow-items-text">${escapeHtml(subSummary)}</span>
+          <div class="sub-tomorrow-cta">
+            <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="${isTomSkipped ? 'resume' : 'skip'}">
+              ${isTomSkipped ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
+            </button>
           </div>
         </div>
-        <div class="sub-tomorrow-cta">
-          <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" data-toggle-tomorrow="true" data-tom-key="${tomKey}">
-            ${isTomSkipped ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
-          </button>
-        </div>
-      </div>
-    `;
+      `;
+    }).join('');
 
     containers.forEach((c) => {
       c.innerHTML = stripHtml;
     });
 
-    containers.forEach((c) => {
-      const btn = c.querySelector('[data-toggle-tomorrow]');
-      if (btn) {
-        btn.addEventListener('click', async () => {
-          $$('[data-toggle-tomorrow]').forEach(b => b.disabled = true);
-          const targetSubs = state.subscriptions.filter(s => s.status === 'active');
-          try {
-            if (isTomSkipped) {
-              for (const sub of targetSubs) {
-                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
-              }
-              showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
-            } else {
-              for (const sub of targetSubs) {
-                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
-                  method: 'POST',
-                  body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
-                });
-              }
-              showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
-            }
-            await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+    // Check if any active subscription lacks cached calendar data for tomorrow
+    const missingSubs = activeSubs.filter(s => !state.subCalendarMap[s.id]);
+    if (missingSubs.length > 0) {
+      state.fetchingCalendarFor = state.fetchingCalendarFor || new Set();
+      missingSubs.forEach(async (s) => {
+        if (state.fetchingCalendarFor.has(s.id)) return;
+        state.fetchingCalendarFor.add(s.id);
+        try {
+          const cal = await apiRequest(`/api/v1/subscriptions/${s.id}/calendar?year=${tomYear}&month=${tomMonth}`);
+          if (cal && Array.isArray(cal.days)) {
+            state.subCalendarMap[s.id] = cal;
             renderTomorrowStrip();
-          } catch (err) {
-            showToast(err.message || 'Failed to update tomorrow delivery status.');
-          } finally {
-            $$('[data-toggle-tomorrow]').forEach(b => b.disabled = false);
           }
-        });
-      }
-    });
+        } catch {
+          // Keep fallback
+        } finally {
+          state.fetchingCalendarFor.delete(s.id);
+        }
+      });
+    }
   }
 
   // Comprehensive Authoritative One-Month Morning Delivery Calendar
@@ -1370,7 +1374,7 @@
           <h3 style="font-size: 1.25rem; color: #0a3d66; margin: 0 0 8px; font-weight: 700;">No active subscription to show calendar for</h3>
           <p style="font-size: 0.9rem; color: #64748b; margin: 0 auto 20px; max-width: 440px; line-height: 1.5;">Get farm-fresh milk delivered to your doorstep every morning with our flexible subscription plans.</p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-            <a href="products.html?category=milk" class="primary-cart" style="padding: 10px 24px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: #fff;">
+            <a href="index.html#products" class="primary-cart" style="padding: 10px 24px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: #fff;">
               <span>Browse Subscriptions</span>
               <span>→</span>
             </a>
@@ -1435,6 +1439,9 @@
       calDays = data.days;
       calSubInfo = data;
       state.calendarData = data;
+      state.subCalendarMap = state.subCalendarMap || {};
+      state.subCalendarMap[state.selectedSubId] = data;
+      renderTomorrowStrip();
     } catch (err) {
       console.warn('Calendar backend fetch failed:', err.message);
       state.calendarData = null;
@@ -1695,6 +1702,66 @@
   // 5. EVENT LISTENERS & USER ACTIONS
   // ==========================================
   function setupListeners() {
+    // Dedicated delegated listener for tomorrow drop toggle (avoids duplicate listeners and concurrent actions)
+    let isTogglingTomorrow = false;
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-toggle-tomorrow-sub]');
+      if (!btn) return;
+      e.preventDefault();
+
+      if (isTogglingTomorrow) return;
+      isTogglingTomorrow = true;
+
+      const subId = btn.dataset.toggleTomorrowSub;
+      const tomKey = btn.dataset.tomKey;
+      const action = btn.dataset.action;
+
+      const targetSub = state.subscriptions.find((s) => String(s.id) === String(subId));
+      if (!targetSub) {
+        isTogglingTomorrow = false;
+        return;
+      }
+
+      $$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = true; });
+
+      try {
+        if (action === 'resume') {
+          await apiRequest(`/api/v1/subscriptions/${subId}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
+          showToast(`▶ Tomorrow's delivery resumed for ${targetSub.product}!`);
+        } else {
+          await apiRequest(`/api/v1/subscriptions/${subId}/skip-date`, {
+            method: 'POST',
+            body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
+          });
+          showToast(`⏸ Tomorrow's delivery skipped for ${targetSub.product}. Rider will not deliver tomorrow.`);
+        }
+
+        if (state.subCalendarMap) {
+          delete state.subCalendarMap[subId];
+        }
+
+        const now = new Date();
+        const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        try {
+          const freshCal = await apiRequest(`/api/v1/subscriptions/${subId}/calendar?year=${tomorrow.getFullYear()}&month=${tomorrow.getMonth()}`);
+          if (freshCal && Array.isArray(freshCal.days)) {
+            state.subCalendarMap[subId] = freshCal;
+          }
+        } catch {}
+
+        if (String(state.selectedSubId) === String(subId)) {
+          await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        }
+
+        renderTomorrowStrip();
+      } catch (err) {
+        showToast(err.message || 'Action could not be completed.');
+      } finally {
+        isTogglingTomorrow = false;
+        $$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = false; });
+      }
+    });
+
     // Tab switching buttons
     $$('.profile-tab-btn').forEach((btn) => {
       btn.addEventListener('click', () => {

@@ -2884,6 +2884,16 @@ function closePolicyModal() {
 
 function checkSubscriptionReturn() {
   const urlParams = new URLSearchParams(window.location.search);
+  const catParam = urlParams.get('category');
+  if (catParam) {
+    if (catParam.toLowerCase() === 'milk' || catParam.toLowerCase() === 'fresh milk') {
+      state.selectedCategory = 'Fresh Milk';
+    } else {
+      state.selectedCategory = catParam;
+    }
+    renderCategories();
+    renderCatalog();
+  }
   if (urlParams.get('subscription') === 'success' || urlParams.get('sub_success') === '1' || urlParams.get('sub_success') === 'true') {
     const cleanUrl = window.location.pathname;
     window.history.replaceState({}, document.title, cleanUrl);
