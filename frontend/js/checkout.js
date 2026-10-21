@@ -1064,7 +1064,16 @@
     try {
       const statusRes = await api(`/api/v1/subscriptions/${encodeURIComponent(authPayload.subscriptionId)}/status`);
       if (statusRes && statusRes.success) {
-        if (statusRes.isPaid === true || statusRes.fulfillmentEntitled === true || statusRes.state === 'active_paid' || statusRes.status === 'active') {
+        // Tightened paid-success condition: require all 5 conditions
+        const isAuthoritativePaidSuccess = Boolean(
+          statusRes.state === 'active_paid' &&
+          statusRes.isPaid === true &&
+          statusRes.fulfillmentEntitled === true &&
+          statusRes.status === 'active' &&
+          statusRes.localSubscriptionId
+        );
+
+        if (isAuthoritativePaidSuccess) {
           try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
           const finalFinancials = getOrderFinancials();
           await activateSubscriptionsFromCart(state.cart, {
@@ -1095,12 +1104,62 @@
           state.isPaymentProcessing = false;
           return true;
         }
+
+        if (statusRes.state === 'pending_reconciliation' || !statusRes.localSubscriptionId) {
+          try {
+            sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+          } catch {}
+          if (errEl) {
+            errEl.style.color = '#0a3d66';
+            errEl.style.fontWeight = '600';
+            errEl.textContent = 'Subscription authorization received — syncing with store records. Click below to re-check status.';
+          }
+          if (payBtn) {
+            payBtn.disabled = false;
+            payBtn.textContent = 'Check Subscription Status 🔄';
+          }
+          state.isPaymentProcessing = false;
+          return false;
+        }
+
+        if (statusRes.state === 'active_unverified') {
+          try {
+            sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+          } catch {}
+          if (errEl) {
+            errEl.style.color = '#c0392b';
+            errEl.style.fontWeight = '600';
+            errEl.textContent = 'Subscription is awaiting verified billing cycle evidence. Click below to re-check status.';
+          }
+          if (payBtn) {
+            payBtn.disabled = false;
+            payBtn.textContent = 'Check Subscription Status 🔄';
+          }
+          state.isPaymentProcessing = false;
+          return false;
+        }
       }
     } catch (statusErr) {
-      console.warn('Status lookup notice, attempting verification:', statusErr);
+      console.warn('Status lookup notice:', statusErr);
     }
 
-    return await verifySubscriptionWithServer(authPayload);
+    // Never initiate payment or open Razorpay!
+    // Preserve pendingAuth and show re-check button
+    try {
+      sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+    } catch {}
+
+    if (errEl) {
+      errEl.style.color = '#c0392b';
+      errEl.style.fontWeight = '600';
+      errEl.textContent = `Subscription payment was authorized (${authPayload?.paymentId || 'N/A'}), but server verification is pending. Click below to check status without paying again.`;
+    }
+    if (payBtn) {
+      payBtn.disabled = false;
+      payBtn.textContent = 'Check Subscription Status 🔄';
+    }
+    state.isPaymentProcessing = false;
+    return false;
   }
 
   // Server-Authoritative Subscription Verification & Fulfillment Activation
@@ -1219,8 +1278,8 @@
 
     const pendingAuth = getPendingSubscriptionAuth();
     if (pendingAuth) {
-      // Clicking "Check Subscription Status" calls only verification, NEVER razorpay-checkout or Razorpay.open()
-      return await verifySubscriptionWithServer(pendingAuth);
+      // Clicking "Check Subscription Status" calls authenticated server status, NEVER razorpay-checkout or Razorpay.open()
+      return await checkSubscriptionStatusWithServer(pendingAuth);
     }
 
     return await executeOrderPayment();
