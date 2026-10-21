@@ -56,7 +56,7 @@
   async function apiRequest(path, options = {}) {
     const token = authToken || sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || '';
     const headers = {
-      'Content-Type': 'application/json',
+      ...(options.body !== undefined && options.body !== null ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {})
     };
     if (token) headers['Authorization'] = `Bearer ${token}`;

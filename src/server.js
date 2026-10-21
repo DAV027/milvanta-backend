@@ -71,8 +71,18 @@ const app = Fastify({ logger: process.env.NODE_ENV !== 'test', trustProxy: true,
 app.removeContentTypeParser('application/json');
 app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
   request.rawBody = body;
-  try { done(null, JSON.parse(body.toString('utf8'))); }
-  catch (error) { done(error); }
+  const rawStr = body ? body.toString('utf8') : '';
+  const trimmed = rawStr.trim();
+  if (!trimmed) {
+    return done(null, undefined);
+  }
+  try {
+    const parsed = JSON.parse(rawStr);
+    done(null, parsed);
+  } catch (error) {
+    error.statusCode = 400;
+    done(error);
+  }
 });
 
 app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'buffer' }, (request, body, done) => {
