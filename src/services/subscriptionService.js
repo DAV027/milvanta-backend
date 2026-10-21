@@ -452,15 +452,16 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
  * SKIP a single delivery date
  */
 export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipDate, reason = 'Customer skipped single date' }) {
-  if (!skipDate || !/^\d{4}-\d{2}-\d{2}$/.test(skipDate)) {
+  if (!skipDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(skipDate).trim())) {
     return { success: false, error: 'invalid_date_format', message: 'Date must be YYYY-MM-DD.' };
   }
+  const cleanSkipDate = String(skipDate).trim();
 
-  if (isDeliveryCutoffPassed(skipDate)) {
+  if (isDeliveryCutoffPassed(cleanSkipDate)) {
     return {
       success: false,
       error: 'cutoff_passed',
-      message: `Modifications for ${skipDate} closed at 8:00 PM IST. Earliest editable delivery date is ${getEarliestEditableDeliveryDate()}.`
+      message: `Modifications for ${cleanSkipDate} closed at 8:00 PM IST. Earliest editable delivery date is ${getEarliestEditableDeliveryDate()}.`
     };
   }
 
@@ -473,57 +474,100 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
       return { success: false, error: 'subscription_not_found', statusCode: 404 };
     }
 
-    // Insert into skipped dates
-    await client.query(
+    if (sub.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'cannot_modify_cancelled_subscription', message: 'Cannot skip dates on a cancelled subscription.', statusCode: 400 };
+    }
+
+    const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+    const subStartDate = subNotes.startDate || subNotes.start_date ||
+      (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+        ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+        : null);
+
+    if (subStartDate && cleanSkipDate < subStartDate) {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'before_start_date', message: `Cannot skip date before subscription start date (${subStartDate}).`, statusCode: 400 };
+    }
+
+    const subPaidThroughEndDate = derivePaidThroughDate({
+      startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
+      paidThroughDate: subNotes.paidThroughDate,
+      current_end: subNotes.current_end,
+      cost_per_day_paise: sub.cost_per_day_paise,
+      total_amount_paise: sub.total_amount_paise,
+      paidCount: subNotes.paidCount,
+      months: subNotes.months
+    });
+
+    if (subPaidThroughEndDate && cleanSkipDate > subPaidThroughEndDate) {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'beyond_entitlement', message: `Cannot skip date beyond paid entitlement period (${subPaidThroughEndDate}).`, statusCode: 400 };
+    }
+
+    // Insert into skipped dates with RETURNING id to detect actual insertion
+    const insertRes = await client.query(
       `INSERT INTO subscription_skipped_dates (subscription_id, customer_id, skip_date, reason)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (subscription_id, skip_date) DO NOTHING`,
-      [subscriptionId, customerId, skipDate, reason]
+       ON CONFLICT (subscription_id, skip_date) DO NOTHING
+       RETURNING id`,
+      [subscriptionId, customerId, cleanSkipDate, reason]
     );
 
-    // Cancel any scheduled order for that day
-    await client.query(
-      `UPDATE subscription_delivery_orders 
-       SET status = 'cancelled', failed_reason = 'Delivery date skipped by customer', updated_at = NOW()
-       WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'scheduled'`,
-      [subscriptionId, skipDate]
-    );
+    const wasInserted = (insertRes.rowCount || insertRes.rows?.length || 0) > 0;
+    let nextDelivery = sub.next_delivery;
 
-    // Record billing extension (prepaid) or credit (recurring mandate)
-    const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
-    const adjType = isPrepaid ? 'extension' : 'credit';
-    const adjNotes = isPrepaid
-      ? `Carried forward 1 day delivery for skipped date ${skipDate}`
-      : `Accrued 1 day billing credit for skipped date ${skipDate}`;
+    // Idempotent billing & cancellation: ONLY apply when a new skip row was actually inserted
+    if (wasInserted) {
+      // Cancel any scheduled order for that day
+      await client.query(
+        `UPDATE subscription_delivery_orders 
+         SET status = 'cancelled', failed_reason = 'Delivery date skipped by customer', updated_at = NOW()
+         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'scheduled'`,
+        [subscriptionId, cleanSkipDate]
+      );
 
-    await client.query(
-      `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-       VALUES ($1, $2, $3, 1, $4, $5)`,
-      [subscriptionId, customerId, adjType, sub.cost_per_day_paise || 10500, adjNotes]
-    );
+      // Record billing extension (prepaid) or credit (recurring mandate)
+      const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
+      const adjType = isPrepaid ? 'extension' : 'credit';
+      const adjNotes = isPrepaid
+        ? `Carried forward 1 day delivery for skipped date ${cleanSkipDate}`
+        : `Accrued 1 day billing credit for skipped date ${cleanSkipDate}`;
 
-    // Update next delivery date
-    const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
-    await client.query(
-      'UPDATE customer_subscriptions SET next_delivery = $2, updated_at = NOW() WHERE id = $1',
-      [subscriptionId, nextDelivery]
-    );
+      await client.query(
+        `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
+         VALUES ($1, $2, $3, 1, $4, $5)`,
+        [subscriptionId, customerId, adjType, sub.cost_per_day_paise || 10500, adjNotes]
+      );
 
-    // Record domain event
-    await client.query(
-      `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
-       VALUES ($1, $2, 'delivery_date_skipped', 'customer', $3::jsonb)`,
-      [subscriptionId, customerId, JSON.stringify({ skipDate, reason, nextDelivery })]
-    );
+      // Update next delivery date
+      nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+      await client.query(
+        'UPDATE customer_subscriptions SET next_delivery = $2, updated_at = NOW() WHERE id = $1',
+        [subscriptionId, nextDelivery]
+      );
+
+      // Record domain event
+      await client.query(
+        `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
+         VALUES ($1, $2, 'delivery_date_skipped', 'customer', $3::jsonb)`,
+        [subscriptionId, customerId, JSON.stringify({ skipDate: cleanSkipDate, reason, nextDelivery })]
+      );
+    } else if (!nextDelivery) {
+      nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+    }
 
     await client.query('COMMIT');
 
     return {
       success: true,
       subscriptionId,
-      skipDate,
+      skipDate: cleanSkipDate,
       nextDelivery,
-      message: `Delivery skipped for ${skipDate}. 1 day has been carried forward to your subscription.`
+      alreadySkipped: !wasInserted,
+      message: wasInserted
+        ? `Delivery skipped for ${cleanSkipDate}. 1 day has been carried forward to your subscription.`
+        : `Delivery for ${cleanSkipDate} was already skipped.`
     };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -537,11 +581,16 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
  * UN-SKIP a previously skipped delivery date
  */
 export async function unskipDeliveryDate(pool, { subscriptionId, customerId, skipDate }) {
-  if (isDeliveryCutoffPassed(skipDate)) {
+  if (!skipDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(skipDate).trim())) {
+    return { success: false, error: 'invalid_date_format', message: 'Date must be YYYY-MM-DD.' };
+  }
+  const cleanSkipDate = String(skipDate).trim();
+
+  if (isDeliveryCutoffPassed(cleanSkipDate)) {
     return {
       success: false,
       error: 'cutoff_passed',
-      message: `Cutoff passed for ${skipDate}. Cannot restore delivery for this date.`
+      message: `Cutoff passed for ${cleanSkipDate}. Cannot restore delivery for this date.`
     };
   }
 
@@ -554,48 +603,91 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       return { success: false, error: 'subscription_not_found', statusCode: 404 };
     }
 
-    await client.query(
-      'DELETE FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',
-      [subscriptionId, skipDate]
+    if (sub.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'cannot_modify_cancelled_subscription', message: 'Cannot unskip dates on a cancelled subscription.', statusCode: 400 };
+    }
+
+    const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+    const subStartDate = subNotes.startDate || subNotes.start_date ||
+      (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+        ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+        : null);
+
+    if (subStartDate && cleanSkipDate < subStartDate) {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'before_start_date', message: `Cannot unskip date before subscription start date (${subStartDate}).`, statusCode: 400 };
+    }
+
+    const subPaidThroughEndDate = derivePaidThroughDate({
+      startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
+      paidThroughDate: subNotes.paidThroughDate,
+      current_end: subNotes.current_end,
+      cost_per_day_paise: sub.cost_per_day_paise,
+      total_amount_paise: sub.total_amount_paise,
+      paidCount: subNotes.paidCount,
+      months: subNotes.months
+    });
+
+    if (subPaidThroughEndDate && cleanSkipDate > subPaidThroughEndDate) {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'beyond_entitlement', message: `Cannot unskip date beyond paid entitlement period (${subPaidThroughEndDate}).`, statusCode: 400 };
+    }
+
+    // Delete with RETURNING id to detect whether a skip row was actually removed
+    const deleteRes = await client.query(
+      'DELETE FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2 RETURNING id',
+      [subscriptionId, cleanSkipDate]
     );
 
-    // Restore any scheduled order that was cancelled specifically due to skipping this date
-    await client.query(
-      `UPDATE subscription_delivery_orders 
-       SET status = 'scheduled', failed_reason = NULL, updated_at = NOW()
-       WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'`,
-      [subscriptionId, skipDate]
-    );
+    const wasRemoved = (deleteRes.rowCount || deleteRes.rows?.length || 0) > 0;
+    let nextDelivery = sub.next_delivery;
 
-    // Revert 1 day extension/credit in billing adjustments
-    const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
-    const adjType = isPrepaid ? 'extension' : 'credit';
+    // Idempotent adjustment reversal & order restoration: ONLY execute when a skip row was actually removed
+    if (wasRemoved) {
+      // Restore any scheduled order that was cancelled specifically due to skipping this date
+      await client.query(
+        `UPDATE subscription_delivery_orders 
+         SET status = 'scheduled', failed_reason = NULL, updated_at = NOW()
+         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'`,
+        [subscriptionId, cleanSkipDate]
+      );
 
-    await client.query(
-      `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-       VALUES ($1, $2, $3, -1, $4, $5)`,
-      [subscriptionId, customerId, adjType, -(sub.cost_per_day_paise || 10500), `Reverted 1 day ${adjType} for unskipped date ${skipDate}`]
-    );
+      // Revert 1 day extension/credit in billing adjustments
+      const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
+      const adjType = isPrepaid ? 'extension' : 'credit';
 
-    const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
-    await client.query(
-      'UPDATE customer_subscriptions SET next_delivery = $2, updated_at = NOW() WHERE id = $1',
-      [subscriptionId, nextDelivery]
-    );
+      await client.query(
+        `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
+         VALUES ($1, $2, $3, -1, $4, $5)`,
+        [subscriptionId, customerId, adjType, -(sub.cost_per_day_paise || 10500), `Reverted 1 day ${adjType} for unskipped date ${cleanSkipDate}`]
+      );
 
-    await client.query(
-      `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
-       VALUES ($1, $2, 'delivery_date_unskipped', 'customer', $3::jsonb)`,
-      [subscriptionId, customerId, JSON.stringify({ skipDate, nextDelivery })]
-    );
+      nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+      await client.query(
+        'UPDATE customer_subscriptions SET next_delivery = $2, updated_at = NOW() WHERE id = $1',
+        [subscriptionId, nextDelivery]
+      );
+
+      await client.query(
+        `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
+         VALUES ($1, $2, 'delivery_date_unskipped', 'customer', $3::jsonb)`,
+        [subscriptionId, customerId, JSON.stringify({ skipDate: cleanSkipDate, nextDelivery })]
+      );
+    } else if (!nextDelivery) {
+      nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+    }
 
     await client.query('COMMIT');
     return {
       success: true,
       subscriptionId,
-      skipDate,
+      skipDate: cleanSkipDate,
       nextDelivery,
-      message: `Delivery restored for ${skipDate}.`
+      alreadyUnskipped: !wasRemoved,
+      message: wasRemoved
+        ? `Delivery restored for ${cleanSkipDate}.`
+        : `Delivery for ${cleanSkipDate} was not skipped.`
     };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -833,7 +925,10 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
   const { rows: pauses } = await pool.query(
     `SELECT pause_start_date::text, pause_end_date::text, reason
      FROM subscription_delivery_pauses
-     WHERE subscription_id = $1 AND pause_start_date <= $3 AND (pause_end_date IS NULL OR pause_end_date >= $2)`,
+     WHERE subscription_id = $1 
+       AND pause_start_date <= $3 
+       AND (pause_end_date IS NULL OR pause_end_date >= $2)
+       AND resumed_at IS NULL`,
     [subscriptionId, startDateStr, endDateStr]
   );
 
