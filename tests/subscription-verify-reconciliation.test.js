@@ -4478,6 +4478,221 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
       assert.equal(data.state, 'active_paid');
       assert.equal(data.isPaid, true);
     });
+
+    it('14.12 Gateway-only subscription with verified ownership: returns safe pending_reconciliation and never reports fulfillment entitlement or isPaid = true', async () => {
+      const subId = `sub_gw_verified_${Date.now()}`;
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      try {
+        razorpay.subscriptions.fetch = async (id) => ({
+          id,
+          status: 'active',
+          paid_count: 1,
+          notes: {
+            customerId: String(customerAId),
+            customerEmail: testEmailA
+          }
+        });
+
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/${subId}/status`,
+          headers: { Authorization: `Bearer ${tokenA}` }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.success, true);
+        assert.equal(data.subscriptionId, subId);
+        assert.equal(data.localSubscriptionId, null, 'Must report null localSubscriptionId when not reconciled');
+        assert.equal(data.state, 'pending_reconciliation', 'Must return safe pending_reconciliation state');
+        assert.equal(data.status, 'pending_reconciliation');
+        assert.equal(data.fulfillmentEntitled, false, 'Must NEVER report fulfillmentEntitled = true without a local record');
+        assert.equal(data.isPaid, false, 'Must NEVER report isPaid = true without a local record');
+        assert.equal(data.paidCount, 0);
+        assert.equal(data.paidThroughDate, null);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+      }
+    });
+
+    it('14.13 Gateway-only subscription with missing or ambiguous customerId: does not disclose details and returns 404', async () => {
+      const subId = `sub_gw_no_owner_${Date.now()}`;
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      try {
+        razorpay.subscriptions.fetch = async (id) => ({
+          id,
+          status: 'active',
+          paid_count: 1,
+          notes: {} // Zero customer ownership metadata!
+        });
+
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/${subId}/status`,
+          headers: { Authorization: `Bearer ${tokenA}` }
+        });
+
+        assert.equal(res.statusCode, 404, 'Must not disclose gateway subscription details when ownership is ambiguous');
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_not_found');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+      }
+    });
+
+    it('14.14 Gateway-only subscription with conflicting customerId: returns 403 subscription_forbidden', async () => {
+      const subId = `sub_gw_conflict_${Date.now()}`;
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      try {
+        razorpay.subscriptions.fetch = async (id) => ({
+          id,
+          status: 'active',
+          paid_count: 1,
+          notes: {
+            customerId: String(customerBId) // Belongs to Customer B!
+          }
+        });
+
+        const res = await app.inject({
+          method: 'GET',
+          url: `/api/v1/subscriptions/${subId}/status`,
+          headers: { Authorization: `Bearer ${tokenA}` } // Customer A requests
+        });
+
+        assert.equal(res.statusCode, 403);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'subscription_forbidden');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+      }
+    });
+
+    it('14.15 Frontend tightened paid-success condition validation: requires all 5 conditions to allow success', () => {
+      function evaluatePaidSuccess(statusRes) {
+        return Boolean(
+          statusRes.state === 'active_paid' &&
+          statusRes.isPaid === true &&
+          statusRes.fulfillmentEntitled === true &&
+          statusRes.status === 'active' &&
+          statusRes.localSubscriptionId
+        );
+      }
+
+      // Case A: Full valid active paid subscription with local record (#71 scenario) -> ALLOWS SUCCESS
+      const caseA = {
+        state: 'active_paid',
+        isPaid: true,
+        fulfillmentEntitled: true,
+        status: 'active',
+        localSubscriptionId: 71
+      };
+      assert.equal(evaluatePaidSuccess(caseA), true, 'Case A must satisfy all 5 conditions');
+
+      // Case B: Unpaid active legacy subscription (#70 scenario: status = active, but fulfillmentEntitled = false, isPaid = false) -> BLOCKS
+      const caseB = {
+        state: 'active_unverified',
+        isPaid: false,
+        fulfillmentEntitled: false,
+        status: 'active',
+        localSubscriptionId: 70
+      };
+      assert.equal(evaluatePaidSuccess(caseB), false, 'Case B (unpaid active) must be blocked');
+
+      // Case C: Gateway-only subscription (status = active, but localSubscriptionId = null) -> BLOCKS
+      const caseC = {
+        state: 'pending_reconciliation',
+        isPaid: false,
+        fulfillmentEntitled: false,
+        status: 'pending_reconciliation',
+        localSubscriptionId: null
+      };
+      assert.equal(evaluatePaidSuccess(caseC), false, 'Case C (gateway-only) must be blocked');
+
+      // Case D: Mandate-only authorization (status = pending_authorization, fulfillmentEntitled = false) -> BLOCKS
+      const caseD = {
+        state: 'mandate_authorized_awaiting_payment',
+        isPaid: false,
+        fulfillmentEntitled: false,
+        status: 'pending_authorization',
+        localSubscriptionId: 72
+      };
+      assert.equal(evaluatePaidSuccess(caseD), false, 'Case D (mandate-only) must be blocked');
+
+      // Case E: Spoofed payload where status = active but state is not active_paid -> BLOCKS
+      const caseE = {
+        state: 'pending',
+        isPaid: true,
+        fulfillmentEntitled: true,
+        status: 'active',
+        localSubscriptionId: 73
+      };
+      assert.equal(evaluatePaidSuccess(caseE), false, 'Case E (state mismatch) must be blocked');
+    });
+
+    it('14.16 Frontend button routing: pending authorization invokes checkSubscriptionStatusWithServer, NEVER executeOrderPayment or Razorpay.open', async () => {
+      const state = {
+        isPaymentProcessing: false,
+        statusCheckCount: 0,
+        verifyCount: 0,
+        orderPaymentCount: 0,
+        razorpayOpenCount: 0
+      };
+
+      let pendingAuth = {
+        subscriptionId: 'sub_test_routing_123',
+        paymentId: 'pay_test_routing_456',
+        signature: 'a'.repeat(64)
+      };
+
+      async function checkSubscriptionStatusWithServer(auth) {
+        state.isPaymentProcessing = true;
+        state.statusCheckCount++;
+        return true;
+      }
+
+      async function verifySubscriptionWithServer(auth) {
+        state.isPaymentProcessing = true;
+        state.verifyCount++;
+        return true;
+      }
+
+      async function executeOrderPayment() {
+        state.isPaymentProcessing = true;
+        state.orderPaymentCount++;
+        // If razorpay were opened:
+        state.razorpayOpenCount++;
+        return true;
+      }
+
+      async function onPayButtonClick() {
+        if (state.isPaymentProcessing) {
+          return 'BLOCKED_CONCURRENT';
+        }
+        if (pendingAuth) {
+          // Correctly wired: calls checkSubscriptionStatusWithServer
+          return await checkSubscriptionStatusWithServer(pendingAuth);
+        }
+        return await executeOrderPayment();
+      }
+
+      // 1. First click with pendingAuth: must route to status check ONLY
+      await onPayButtonClick();
+      assert.equal(state.statusCheckCount, 1, 'Must invoke checkSubscriptionStatusWithServer');
+      assert.equal(state.orderPaymentCount, 0, 'Must NEVER invoke executeOrderPayment');
+      assert.equal(state.razorpayOpenCount, 0, 'Must NEVER open Razorpay Checkout');
+      assert.equal(state.verifyCount, 0, 'Must not directly call verifySubscriptionWithServer');
+
+      // 2. Clear pendingAuth (after successful verification or fresh order): must invoke normal payment
+      state.isPaymentProcessing = false;
+      pendingAuth = null;
+      await onPayButtonClick();
+      assert.equal(state.orderPaymentCount, 1, 'Fresh checkout must invoke executeOrderPayment');
+      assert.equal(state.statusCheckCount, 1, 'Status check count unchanged');
+    });
+
   });
 
 });

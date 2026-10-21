@@ -2588,30 +2588,38 @@ async function handleSubscriptionStatus(request, reply) {
       try {
         const gatewaySub = await razorpay.subscriptions.fetch(rawId);
         const gatewayCustId = gatewaySub?.notes?.customerId || gatewaySub?.notes?.customer_id;
-        if (gatewayCustId && String(gatewayCustId) !== String(request.customer.id) && !request.isAdmin) {
+
+        // Positively verified customer ownership is REQUIRED for gateway-only queries
+        if (!gatewayCustId && !request.isAdmin) {
+          // Ownership missing or ambiguous: do not disclose subscription details
+          return reply.code(404).send({
+            error: 'subscription_not_found',
+            message: 'Subscription record does not exist.'
+          });
+        }
+
+        if (String(gatewayCustId) !== String(request.customer.id) && !request.isAdmin) {
           return reply.code(403).send({
             error: 'subscription_forbidden',
             message: 'Subscription belongs to another customer.'
           });
         }
-        const isAuth = ['active', 'authenticated', 'completed'].includes(gatewaySub.status);
-        const paidCount = Number(gatewaySub.paid_count) || 0;
+
+        // Ownership is positively proven, but local record is not yet reconciled
         return reply.code(200).send({
           success: true,
           subscriptionId: rawId,
           localSubscriptionId: null,
-          status: isAuth ? 'pending_reconciliation' : 'pending',
-          state: (gatewaySub.status === 'active' && paidCount > 0)
-            ? 'active_paid'
-            : (gatewaySub.status === 'authenticated' ? 'mandate_authorized_awaiting_payment' : 'pending'),
+          status: 'pending_reconciliation',
+          state: 'pending_reconciliation',
           fulfillmentEntitled: false,
-          isPaid: paidCount > 0,
-          paidCount,
+          isPaid: false,
+          paidCount: 0,
           paidThroughDate: null,
-          nextDelivery: 'Pending Sync',
-          mandateStatus: gatewaySub.status === 'authenticated' ? 'authenticated' : null,
+          nextDelivery: 'Pending Reconciliation',
+          mandateStatus: gatewaySub?.status === 'authenticated' ? 'authenticated' : null,
           profileUrl: '/profile.html?tab=subscription',
-          message: 'Subscription exists on gateway and is syncing with store records.'
+          message: 'Subscription authorization is syncing with store records. Awaiting secure reconciliation.'
         });
       } catch {
         return reply.code(404).send({
