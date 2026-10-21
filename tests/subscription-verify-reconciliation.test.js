@@ -3975,4 +3975,509 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
     });
   });
 
+
+  // =========================================================================
+  // 14. Authoritative Linkage, Status Endpoint & Polling Reconciliation
+  // =========================================================================
+  describe('14. Authoritative Linkage, Status Endpoint & Polling Reconciliation', () => {
+    it('14.1 POST /api/v1/subscriptions/verify: accepts missing payment.subscription_id with checkout signature and local DB record', async () => {
+      const subId = `sub_linkage_ok_${Date.now()}`;
+      const paymentId = `pay_linkage_ok_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      // Pre-seed local subscription record created during razorpay-checkout
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000, currency: 'INR' } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 315000,
+          currency: 'INR',
+          subscription_id: null // Standard Razorpay Payments Fetch behavior: omitted!
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.status, 'active');
+        assert.equal(data.fulfillmentEntitled, true);
+        assert.equal(data.paidCount, 1);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('14.2 POST /api/v1/subscriptions/verify: rejects conflicting payment.subscription_id with 400', async () => {
+      const subId = `sub_linkage_conflict_${Date.now()}`;
+      const paymentId = `pay_linkage_conflict_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000, currency: 'INR' } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 315000,
+          currency: 'INR',
+          subscription_id: 'sub_explicitly_different_999'
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'payment_subscription_mismatch');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+      }
+    });
+
+    it('14.3 POST /api/v1/subscriptions/verify: rejects conflicting payment invoice subscription_id with 400', async () => {
+      const subId = `sub_inv_conflict_${Date.now()}`;
+      const paymentId = `pay_inv_conflict_${Date.now()}`;
+      const invId = `inv_conflict_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      const originalFetchInv = razorpay.invoices ? razorpay.invoices.fetch : undefined;
+
+      if (!razorpay.invoices) razorpay.invoices = {};
+      razorpay.invoices.fetch = async (id) => ({
+        id,
+        subscription_id: 'sub_another_different_target' // invoice points to a different subscription!
+      });
+
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000, currency: 'INR' } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 315000,
+          currency: 'INR',
+          invoice_id: invId,
+          subscription_id: null
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 400);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.error, 'payment_subscription_mismatch');
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+        if (originalFetchInv) razorpay.invoices.fetch = originalFetchInv;
+        else delete razorpay.invoices.fetch;
+      }
+    });
+
+    it('14.4 POST /api/v1/subscriptions/verify: accepts invoice linkage when top-level payment.subscription_id is absent', async () => {
+      const subId = `sub_inv_ok_${Date.now()}`;
+      const paymentId = `pay_inv_ok_${Date.now()}`;
+      const invId = `inv_match_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      if (!razorpay.invoices) razorpay.invoices = {};
+      const originalFetchInv = razorpay.invoices.fetch;
+
+      razorpay.invoices.fetch = async (id) => ({
+        id,
+        subscription_id: subId
+      });
+
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000, currency: 'INR' } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 315000,
+          currency: 'INR',
+          invoice_id: invId,
+          subscription_id: null
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.fulfillmentEntitled, true);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+        if (originalFetchInv) razorpay.invoices.fetch = originalFetchInv;
+        else delete razorpay.invoices.fetch;
+      }
+    });
+
+    it('14.5 POST /api/v1/subscriptions/verify: accepts subscription payment list linkage when top-level is absent', async () => {
+      const subId = `sub_list_ok_${Date.now()}`;
+      const paymentId = `pay_list_ok_${Date.now()}`;
+      const validSig = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${paymentId}|${subId}`)
+        .digest('hex');
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      const originalFetchSub = razorpay.subscriptions.fetch;
+      const originalFetchPay = razorpay.payments.fetch;
+      const originalFetchPayments = razorpay.subscriptions.fetchPayments;
+
+      razorpay.subscriptions.fetchPayments = async (sId) => ({
+        items: [{ id: paymentId, status: 'captured', amount: 315000 }]
+      });
+
+      try {
+        razorpay.subscriptions.fetch = async () => ({
+          id: subId,
+          status: 'active',
+          paid_count: 1,
+          notes: { customerId: String(customerAId) },
+          plan: { item: { amount: 315000, currency: 'INR' } }
+        });
+        razorpay.payments.fetch = async () => ({
+          id: paymentId,
+          status: 'captured',
+          amount: 315000,
+          currency: 'INR',
+          subscription_id: null
+        });
+
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/subscriptions/verify',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            razorpay_subscription_id: subId,
+            razorpay_payment_id: paymentId,
+            razorpay_signature: validSig
+          }
+        });
+
+        assert.equal(res.statusCode, 200);
+        const data = JSON.parse(res.payload);
+        assert.equal(data.verified, true);
+        assert.equal(data.fulfillmentEntitled, true);
+      } finally {
+        razorpay.subscriptions.fetch = originalFetchSub;
+        razorpay.payments.fetch = originalFetchPay;
+        razorpay.subscriptions.fetchPayments = originalFetchPayments;
+      }
+    });
+
+    it('14.6 GET /api/v1/subscriptions/:id/status: returns active_paid for verified active subscription (#71 scenario)', async () => {
+      const subId = `sub_status_71_${Date.now()}`;
+      const paymentId = `pay_status_71_${Date.now()}`;
+
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Buffalo Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           12000, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           360000, $2, $3::jsonb
+         ) RETURNING id`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId,
+          paidCount: 1,
+          fulfillmentEntitled: true,
+          billingStatus: 'completed',
+          paidThroughDate: '2026-11-20',
+          lastPaymentId: paymentId
+        })]
+      );
+      const localId = insertRes.rows[0].id;
+
+      // Query status by Razorpay subscription ID
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/${subId}/status`,
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.success, true);
+      assert.equal(data.subscriptionId, subId);
+      assert.equal(data.localSubscriptionId, localId);
+      assert.equal(data.status, 'active');
+      assert.equal(data.state, 'active_paid');
+      assert.equal(data.fulfillmentEntitled, true);
+      assert.equal(data.isPaid, true);
+      assert.equal(data.paidCount, 1);
+      assert.equal(data.paidThroughDate, '2026-11-20');
+      assert.equal(data.lastPaymentId, paymentId);
+    });
+
+    it('14.7 GET /api/v1/subscriptions/:id/status: returns active_unverified for legacy subscription without verified payment (#70 scenario)', async () => {
+      const subId = `sub_status_70_${Date.now()}`;
+
+      const insertRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         ) RETURNING id`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId
+          // Notice: zero payment evidence! No lastPaymentId, no fulfillmentEntitled, no paidThroughDate
+        })]
+      );
+      const localId = insertRes.rows[0].id;
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/${subId}/status`,
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.success, true);
+      assert.equal(data.localSubscriptionId, localId);
+      assert.equal(data.status, 'active');
+      assert.equal(data.state, 'active_unverified');
+      assert.equal(data.fulfillmentEntitled, false, 'Legacy active subscription without payment evidence must never have fulfillmentEntitled');
+      assert.equal(data.isPaid, false, 'Legacy active subscription without payment evidence must never report isPaid = true');
+      assert.equal(data.paidCount, 0, 'Legacy active subscription must report paidCount = 0');
+      assert.equal(data.paidThroughDate, null);
+    });
+
+    it('14.8 GET /api/v1/subscriptions/:id/status: returns mandate_authorized_awaiting_payment for mandate-only subscription', async () => {
+      const subId = `sub_status_mandate_${Date.now()}`;
+      const mandatePayId = `pay_mandate_auth_${Date.now()}`;
+
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'pending_authorization', 'Pending Billing Cycle Payment', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId,
+          mandateStatus: 'authenticated',
+          mandateAuthorized: true,
+          mandatePaymentId: mandatePayId,
+          authType: 'mandate_only',
+          fulfillmentEntitled: false,
+          paidCount: 0
+        })]
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/${subId}/status`,
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.success, true);
+      assert.equal(data.status, 'pending_authorization');
+      assert.equal(data.state, 'mandate_authorized_awaiting_payment');
+      assert.equal(data.fulfillmentEntitled, false);
+      assert.equal(data.isPaid, false);
+      assert.equal(data.mandateStatus, 'authenticated');
+    });
+
+    it('14.9 GET /api/v1/subscriptions/:id/status: returns 403 subscription_forbidden for unauthorized customer', async () => {
+      const subId = `sub_status_forbidden_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId })]
+      );
+
+      // Customer B attempts to view Customer A's subscription status
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/${subId}/status`,
+        headers: { Authorization: `Bearer ${tokenB}` }
+      });
+
+      assert.equal(res.statusCode, 403);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'subscription_forbidden');
+    });
+
+    it('14.10 GET /api/v1/subscriptions/:id/status: returns 404 subscription_not_found for non-existent subscription', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/subscriptions/sub_nonexistent_99999999/status',
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+
+      assert.equal(res.statusCode, 404);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.error, 'subscription_not_found');
+    });
+
+    it('14.11 GET /api/v1/subscriptions/status/:id: alias route operates identically to :id/status', async () => {
+      const subId = `sub_status_alias_${Date.now()}`;
+      await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_name, frequency, time_slot, quantity, quantity_num,
+           cost_per_day_paise, status, next_delivery, plan_type, duration_label,
+           total_amount_paise, razorpay_subscription_id, notes
+         ) VALUES (
+           $1, 'Pure Fresh Cow Milk', 'Daily (Every Morning)', '6:00 AM – 7:00 AM', '1 Litre', 1,
+           10500, 'active', 'Tomorrow, 6:00 AM', 'month', '1 Month Continuous Plan',
+           315000, $2, $3::jsonb
+         )`,
+        [customerAId, subId, JSON.stringify({
+          subscriptionId: subId,
+          lastPaymentId: 'pay_alias_123',
+          fulfillmentEntitled: true,
+          paidThroughDate: '2026-11-20',
+          paidCount: 1
+        })]
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/status/${subId}`,
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.payload);
+      assert.equal(data.success, true);
+      assert.equal(data.state, 'active_paid');
+      assert.equal(data.isPaid, true);
+    });
+  });
+
 });

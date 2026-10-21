@@ -1046,6 +1046,63 @@
     });
   }
 
+  // Customer-Authenticated Read-Only Subscription Status Checker
+  async function checkSubscriptionStatusWithServer(authPayload) {
+    if (!authPayload) return false;
+    const payBtn = $('#payRazorpayBtn');
+    const errEl = $('#checkoutErrorMessage');
+
+    state.isPaymentProcessing = true;
+    if (payBtn) {
+      payBtn.disabled = true;
+      payBtn.textContent = 'Checking Subscription Status…';
+    }
+    if (errEl) {
+      errEl.textContent = '';
+    }
+
+    try {
+      const statusRes = await api(`/api/v1/subscriptions/${encodeURIComponent(authPayload.subscriptionId)}/status`);
+      if (statusRes && statusRes.success) {
+        if (statusRes.isPaid === true || statusRes.fulfillmentEntitled === true || statusRes.state === 'active_paid' || statusRes.status === 'active') {
+          try { sessionStorage.removeItem('pending_subscription_auth'); } catch {}
+          const finalFinancials = getOrderFinancials();
+          await activateSubscriptionsFromCart(state.cart, {
+            subscriptionId: authPayload.subscriptionId,
+            paymentId: authPayload.paymentId || statusRes.lastPaymentId || '',
+            deliveryFee: finalFinancials.deliveryFee,
+            totalPaid: finalFinancials.total,
+            subtotal: finalFinancials.subtotal
+          });
+          state.isPaymentProcessing = false;
+          showOrderSuccess(authPayload.paymentId || statusRes.lastPaymentId || '', true);
+          return true;
+        }
+
+        if (statusRes.state === 'mandate_authorized_awaiting_payment' || statusRes.status === 'pending_authorization') {
+          try {
+            sessionStorage.setItem('pending_subscription_auth', JSON.stringify(authPayload));
+          } catch {}
+          if (errEl) {
+            errEl.style.color = '#0a3d66';
+            errEl.style.fontWeight = '600';
+            errEl.textContent = 'Mandate authorized — awaiting first recurring billing payment.';
+          }
+          if (payBtn) {
+            payBtn.disabled = true;
+            payBtn.textContent = 'Mandate Authorized (Awaiting First Payment)';
+          }
+          state.isPaymentProcessing = false;
+          return true;
+        }
+      }
+    } catch (statusErr) {
+      console.warn('Status lookup notice, attempting verification:', statusErr);
+    }
+
+    return await verifySubscriptionWithServer(authPayload);
+  }
+
   // Server-Authoritative Subscription Verification & Fulfillment Activation
   async function verifySubscriptionWithServer(authPayload) {
     if (!authPayload) return false;
