@@ -559,6 +559,14 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       [subscriptionId, skipDate]
     );
 
+    // Restore any scheduled order that was cancelled specifically due to skipping this date
+    await client.query(
+      `UPDATE subscription_delivery_orders 
+       SET status = 'scheduled', failed_reason = NULL, updated_at = NOW()
+       WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'`,
+      [subscriptionId, skipDate]
+    );
+
     // Revert 1 day extension/credit in billing adjustments
     const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
     const adjType = isPrepaid ? 'extension' : 'credit';
@@ -875,13 +883,17 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
     } else if (!subPaidThroughEndDate && dateStr >= todayYMD && !orderMap.has(dateStr)) {
       status = 'pending_payment';
       detail = 'Awaiting payment confirmation';
-    } else if (orderMap.has(dateStr)) {
+    } else if (orderMap.has(dateStr) && (orderMap.get(dateStr).status === 'delivered' || orderMap.get(dateStr).status === 'failed')) {
       const ord = orderMap.get(dateStr);
       status = ord.status;
-      detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : ord.status;
+      detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : (ord.failed_reason || 'Delivery failed');
     } else if (skipMap.has(dateStr)) {
       status = 'skipped';
       detail = skipMap.get(dateStr) || 'Skipped by customer';
+    } else if (orderMap.has(dateStr) && (orderMap.get(dateStr).status !== 'cancelled' || orderMap.get(dateStr).failed_reason !== 'Delivery date skipped by customer')) {
+      const ord = orderMap.get(dateStr);
+      status = ord.status;
+      detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : (ord.failed_reason || ord.status);
     } else {
       const activePause = pauses.find(p => p.pause_start_date <= dateStr && (!p.pause_end_date || p.pause_end_date >= dateStr));
       if (activePause) {

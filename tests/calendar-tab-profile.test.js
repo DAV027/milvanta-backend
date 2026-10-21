@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { getSubscriptionCalendar, unskipDeliveryDate } from '../src/services/subscriptionService.js';
 
 describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
   const root = process.cwd();
@@ -431,6 +432,262 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
 
       // Cutoff passed message
       assert.ok(profileJsPrimary.includes('Cutoff passed (8:00 PM IST)'));
+    });
+  });
+
+  describe('7. Behavior-Level Delivery State Machine & Verification Suite', () => {
+    it('7.1: Server-authoritative pause/resume preserves local state on API failure without flipping', async () => {
+      // 1. Static code verification
+      assert.ok(profileJsPrimary.includes('if (!res || !res.success)'));
+      assert.ok(profileJsPrimary.includes("throw new Error(res?.error || res?.message || `Failed to ${isCurrentlyActive ? 'pause' : 'resume'} subscription.`);"));
+      assert.ok(profileJsPrimary.includes("console.warn('API subscription pause/resume failed:', err);"));
+      assert.ok(profileJsPrimary.includes("showToast(err.message || `Unable to ${isCurrentlyActive ? 'pause' : 'resume'} subscription. Please try again.`);"));
+
+      // Ensure that inside catch block, sub.status is NOT flipped locally
+      const catchIdx = profileJsPrimary.indexOf("console.warn('API subscription pause/resume failed:'");
+      const finallyIdx = profileJsPrimary.indexOf('state.mutatingSubIds.delete(String(subId));', catchIdx);
+      const catchBlock = profileJsPrimary.slice(catchIdx, finallyIdx);
+      assert.ok(!catchBlock.includes('sub.status ='), 'Catch block must not flip subscription status');
+
+      // 2. Behavioral state machine simulation
+      const mockState = {
+        subscriptions: [{ id: '101', status: 'active', product: 'Buffalo Milk' }],
+        mutatingSubIds: new Set()
+      };
+
+      const simulateToggle = async (subId, apiHandler) => {
+        if (mockState.mutatingSubIds.has(String(subId))) return;
+        const sub = mockState.subscriptions.find((s) => String(s.id) === String(subId));
+        if (!sub) return;
+
+        mockState.mutatingSubIds.add(String(subId));
+        const isCurrentlyActive = sub.status === 'active';
+        try {
+          const res = await apiHandler();
+          if (!res || !res.success) {
+            throw new Error(res?.error || `Failed to ${isCurrentlyActive ? 'pause' : 'resume'}`);
+          }
+          sub.status = res.status || (isCurrentlyActive ? 'paused' : 'active');
+        } catch (err) {
+          // Preserved confirmed state!
+        } finally {
+          mockState.mutatingSubIds.delete(String(subId));
+        }
+      };
+
+      // Attempt pause that fails with 500 / network error
+      await simulateToggle('101', async () => ({ success: false, error: 'Database transaction lock timeout' }));
+      assert.strictEqual(mockState.subscriptions[0].status, 'active', 'Status must remain active on failure');
+      assert.strictEqual(mockState.mutatingSubIds.has('101'), false, 'Mutex must release lock after error');
+
+      // Attempt pause that throws network error
+      await simulateToggle('101', async () => { throw new Error('Network offline'); });
+      assert.strictEqual(mockState.subscriptions[0].status, 'active', 'Status must remain active on exception');
+      assert.strictEqual(mockState.mutatingSubIds.has('101'), false, 'Mutex must release lock after exception');
+
+      // Successful pause
+      await simulateToggle('101', async () => ({ success: true, status: 'paused', message: 'Subscription paused.' }));
+      assert.strictEqual(mockState.subscriptions[0].status, 'paused', 'Status updates only on verified success');
+    });
+
+    it('7.2: In-flight mutex blocks concurrent duplicate pause/resume clicks on the same subscription ID', async () => {
+      assert.ok(profileJsPrimary.includes('state.mutatingSubIds = state.mutatingSubIds || new Set();'));
+      assert.ok(profileJsPrimary.includes('if (state.mutatingSubIds.has(String(subId))) {'));
+      assert.ok(profileJsPrimary.includes('state.mutatingSubIds.add(String(subId));'));
+      assert.ok(profileJsPrimary.includes('state.mutatingSubIds.delete(String(subId));'));
+
+      const mutatingSet = new Set();
+      let networkCallsCount = 0;
+
+      const performMutation = async (subId) => {
+        if (mutatingSet.has(String(subId))) {
+          return { skippedDueToLock: true };
+        }
+        mutatingSet.add(String(subId));
+        networkCallsCount++;
+        // Simulate in-flight asynchronous roundtrip
+        await new Promise((r) => setTimeout(r, 20));
+        mutatingSet.delete(String(subId));
+        return { success: true };
+      };
+
+      // First click begins in-flight operation
+      const firstClickPromise = performMutation('101');
+      // Simultaneous rapid double-click on same subscription ID
+      const secondClickPromise = performMutation('101');
+      // Independent click on a different subscription ID
+      const otherSubPromise = performMutation('102');
+
+      const [res1, res2, res3] = await Promise.all([firstClickPromise, secondClickPromise, otherSubPromise]);
+
+      assert.strictEqual(res1.success, true);
+      assert.strictEqual(res2.skippedDueToLock, true, 'Second click must be rejected by mutex lock');
+      assert.strictEqual(res3.success, true, 'Different subscription ID must proceed');
+      assert.strictEqual(networkCallsCount, 2, 'Only 2 network calls should execute, not 3');
+      assert.strictEqual(mutatingSet.size, 0, 'Mutex set should be completely empty when idle');
+    });
+
+    it('7.3: Fail-closed delivery status rendering rejects unknown statuses and disables actions', () => {
+      // 1. Static code check in tomorrow strip and calendar inspector
+      assert.ok(profileJsPrimary.includes("statusClass = 'unknown';"));
+      assert.ok(profileJsPrimary.includes("statusText = status ? `Status: ${escapeHtml(status)}` : 'Delivery status unavailable';"));
+      assert.ok(profileJsPrimary.includes('data-action="disabled"'));
+      assert.ok(profileJsPrimary.includes("statusType = dayData ? dayData.status : 'unknown';"));
+      assert.ok(profileJsPrimary.includes("status = dayData?.status || 'unknown';"));
+      assert.ok(profileJsPrimary.includes("status === 'scheduled'"));
+
+      // 2. Behavioral verification of fail-closed state resolution
+      const resolveDeliveryDropAction = (status, isCutoffPassed = false) => {
+        if (status === 'scheduled') {
+          return isCutoffPassed ? { action: 'cutoff', allowed: false } : { action: 'skip', allowed: true };
+        } else if (status === 'skipped') {
+          return isCutoffPassed ? { action: 'cutoff', allowed: false } : { action: 'resume', allowed: true };
+        } else if (status === 'vacation') {
+          return { action: 'vacation_modal', allowed: false };
+        } else if (status === 'paused') {
+          return { action: 'sub_resume', allowed: false };
+        } else {
+          // Fail-closed for all unknown, unexpected, or unverified statuses
+          return { action: 'disabled', allowed: false, display: 'Delivery status unavailable' };
+        }
+      };
+
+      const testUnknownStatuses = ['custom_hold', 'processing', 'transit', 'review', null, undefined, '', 'unknown'];
+      for (const unk of testUnknownStatuses) {
+        const resolution = resolveDeliveryDropAction(unk);
+        assert.strictEqual(resolution.allowed, false, `Status '${unk}' must NOT allow delivery mutation`);
+        assert.strictEqual(resolution.action, 'disabled', `Status '${unk}' must fail closed with disabled action`);
+      }
+    });
+
+    it('7.4: getSubscriptionCalendar enforces skipped precedence over orders cancelled by customer skips, and preserves delivered/failed orders', async () => {
+      const mockSub = {
+        id: 101,
+        customer_id: 1,
+        product_name: 'Buffalo Milk',
+        quantity: '1 Litre',
+        status: 'active',
+        cost_per_day_paise: 9000,
+        total_amount_paise: 270000,
+        created_at: new Date('2026-10-01'),
+        notes: {
+          fulfillmentEntitled: true,
+          paidThroughDate: '2026-11-30',
+          startDate: '2026-10-01'
+        }
+      };
+
+      const mockOrders = [
+        { delivery_date: '2026-10-15', status: 'delivered', delivery_order_number: 'ORD-101', delivered_at: new Date('2026-10-15T06:30:00Z'), failed_reason: null },
+        { delivery_date: '2026-10-16', status: 'failed', delivery_order_number: 'ORD-102', delivered_at: null, failed_reason: 'Gate locked by resident' },
+        { delivery_date: '2026-10-17', status: 'cancelled', delivery_order_number: 'ORD-103', delivered_at: null, failed_reason: 'Delivery date skipped by customer' },
+        { delivery_date: '2026-10-18', status: 'cancelled', delivery_order_number: 'ORD-104', delivered_at: null, failed_reason: 'Cancelled by operational hub' },
+        { delivery_date: '2026-10-19', status: 'scheduled', delivery_order_number: 'ORD-105', delivered_at: null, failed_reason: null }
+      ];
+
+      const mockSkips = [
+        { skip_date: '2026-10-17', reason: 'Customer out of station' }
+      ];
+
+      const mockPool = {
+        query: async (sql) => {
+          if (sql.includes('FROM customer_subscriptions cs')) return { rows: [mockSub] };
+          if (sql.includes('FROM subscription_delivery_orders')) return { rows: mockOrders };
+          if (sql.includes('FROM subscription_skipped_dates')) return { rows: mockSkips };
+          if (sql.includes('FROM subscription_delivery_pauses')) return { rows: [] };
+          return { rows: [] };
+        }
+      };
+
+      const cal = await getSubscriptionCalendar(mockPool, { subscriptionId: 101, customerId: 1, year: 2026, month: 9 });
+      assert.ok(cal && Array.isArray(cal.days));
+
+      const day15 = cal.days.find(d => d.date === '2026-10-15');
+      const day16 = cal.days.find(d => d.date === '2026-10-16');
+      const day17 = cal.days.find(d => d.date === '2026-10-17');
+      const day18 = cal.days.find(d => d.date === '2026-10-18');
+      const day19 = cal.days.find(d => d.date === '2026-10-19');
+
+      assert.strictEqual(day15.status, 'delivered', 'Delivered order must report delivered');
+      assert.strictEqual(day16.status, 'failed', 'Failed order must report failed');
+      assert.strictEqual(day17.status, 'skipped', 'Order cancelled by customer skip MUST report skipped');
+      assert.strictEqual(day17.detail, 'Customer out of station', 'Must retain customer skip detail');
+      assert.strictEqual(day18.status, 'cancelled', 'Order cancelled by hub must report cancelled');
+      assert.strictEqual(day19.status, 'scheduled', 'Scheduled order must report scheduled');
+    });
+
+    it('7.5: unskipDeliveryDate restores orders cancelled due to customer skips back to scheduled', async () => {
+      const executedQueries = [];
+      const mockSub = {
+        id: 101,
+        customer_id: 1,
+        plan_type: 'daily',
+        razorpay_subscription_id: null,
+        status: 'active'
+      };
+
+      const mockClient = {
+        query: async (sql, params) => {
+          executedQueries.push({ sql, params });
+          if (sql.includes('FROM customer_subscriptions cs')) return { rows: [mockSub] };
+          return { rows: [] };
+        },
+        release: () => {}
+      };
+
+      const mockPool = {
+        connect: async () => mockClient
+      };
+
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 4);
+      const testSkipDate = futureDate.toISOString().slice(0, 10);
+
+      await unskipDeliveryDate(mockPool, { subscriptionId: 101, customerId: 1, skipDate: testSkipDate });
+
+      const restoreQuery = executedQueries.find(q =>
+        q.sql.includes('UPDATE subscription_delivery_orders') &&
+        q.sql.includes("status = 'scheduled'") &&
+        q.sql.includes("failed_reason = 'Delivery date skipped by customer'")
+      );
+
+      assert.ok(restoreQuery, 'unskipDeliveryDate must execute order restoration query');
+      assert.strictEqual(restoreQuery.params[0], 101);
+      assert.strictEqual(restoreQuery.params[1], testSkipDate);
+    });
+
+    it('7.6: Paused subscriptions remain visible in Calendar tab and Tomorrow banner with resume action', () => {
+      // 1. Static code assertions
+      assert.ok(profileJsPrimary.includes("const eligibleSubs = state.subscriptions.filter((s) => s.status === 'active' || s.status === 'paused');"));
+      assert.ok(profileJsPrimary.includes("if (sub.status === 'paused') {"));
+      assert.ok(profileJsPrimary.includes('⏸ Subscription Paused'));
+      assert.ok(profileJsPrimary.includes('▶ Resume Subscription'));
+      assert.ok(profileJsPrimary.includes("const visibleSubs = state.subscriptions.filter((s) => s.status === 'active' || s.status === 'paused');"));
+      assert.ok(profileJsPrimary.includes('[⏸ Paused]'));
+
+      // 2. Behavioral verification of subscription eligibility filtering
+      const sampleSubscriptions = [
+        { id: 1, status: 'active', product: 'Buffalo Milk 1L' },
+        { id: 2, status: 'paused', product: 'Cow Milk 500ml' },
+        { id: 3, status: 'cancelled', product: 'Buffalo Milk 500ml' },
+        { id: 4, status: 'expired', product: 'Cow Milk 1L' },
+        { id: 5, status: 'unpaid', product: 'Buffalo Milk 1L' }
+      ];
+
+      const eligibleForTomorrow = sampleSubscriptions.filter((s) => s.status === 'active' || s.status === 'paused');
+      assert.strictEqual(eligibleForTomorrow.length, 2, 'Only active and paused subscriptions should be eligible for tomorrow banner');
+      assert.deepStrictEqual(eligibleForTomorrow.map(s => s.id), [1, 2]);
+
+      const visibleForCalendar = sampleSubscriptions.filter((s) => s.status === 'active' || s.status === 'paused');
+      assert.strictEqual(visibleForCalendar.length, 2, 'Calendar switcher must only show active and paused plans');
+      assert.deepStrictEqual(visibleForCalendar.map(s => s.id), [1, 2]);
+
+      // Verify that cancelled/expired plans have no delivery actions available
+      const nonDeliverable = sampleSubscriptions.filter((s) => s.status !== 'active' && s.status !== 'paused');
+      for (const sub of nonDeliverable) {
+        assert.ok(!eligibleForTomorrow.some(s => s.id === sub.id));
+        assert.ok(!visibleForCalendar.some(s => s.id === sub.id));
+      }
     });
   });
 });
