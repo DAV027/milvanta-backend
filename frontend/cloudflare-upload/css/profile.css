@@ -1216,6 +1216,23 @@
   font-weight: 700;
 }
 
+.sub-tomorrow-status-tag.checking {
+  color: #0284c7;
+  font-weight: 700;
+}
+
+.sub-tomorrow-status-tag.pending {
+  color: #d97706;
+  font-weight: 700;
+}
+
+.sub-tomorrow-status-tag.ended,
+.sub-tomorrow-status-tag.cancelled,
+.sub-tomorrow-status-tag.not-started {
+  color: #64748b;
+  font-weight: 700;
+}
+
 .sub-tomorrow-items-text {
   color: #475569;
   font-weight: 600;
@@ -1250,6 +1267,21 @@
 
 .btn-tomorrow-toggle-action.resume:hover {
   background: #047857;
+}
+
+.btn-tomorrow-toggle-action.disabled,
+.btn-tomorrow-toggle-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: #f1f5f9;
+  color: #94a3b8;
+  border: 1px solid #cbd5e1;
+}
+
+.sub-tomorrow-cutoff-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Visual 7-Day Morning Delivery Strip */

@@ -1241,6 +1241,116 @@
     }
   }
 
+  // Business Delivery Timezone: Asia/Kolkata (Hyderabad Hub)
+  function getNowInIST() {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: false
+      });
+      const parts = formatter.formatToParts(new Date());
+      const partMap = {};
+      parts.forEach((p) => { partMap[p.type] = p.value; });
+      const h = Number(partMap.hour === '24' ? 0 : partMap.hour);
+      return new Date(
+        Number(partMap.year),
+        Number(partMap.month) - 1,
+        Number(partMap.day),
+        h,
+        Number(partMap.minute),
+        Number(partMap.second)
+      );
+    } catch {
+      const now = new Date();
+      const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+      const utcMs = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+      return new Date(utcMs + istOffsetMs);
+    }
+  }
+
+  function getTomorrowInIST() {
+    const istNow = getNowInIST();
+    const tom = new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + 1);
+    const year = tom.getFullYear();
+    const month = tom.getMonth(); // 0-indexed
+    const day = tom.getDate();
+    const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    return {
+      date: tom,
+      year,
+      month,
+      day,
+      key,
+      istNow,
+      isCutoffPassed: istNow.getHours() >= 20 // 8:00 PM IST daily delivery cutoff
+    };
+  }
+
+  // Authoritative Calendar Cache: keyed by subscription ID AND year/month
+  function getCalendarCacheKey(subId, year, month) {
+    return `${subId}_${year}_${month}`;
+  }
+
+  function getCachedCalendar(subId, year, month) {
+    state.subCalendarMap = state.subCalendarMap || {};
+    return state.subCalendarMap[getCalendarCacheKey(subId, year, month)] || null;
+  }
+
+  function setCachedCalendar(subId, year, month, data) {
+    state.subCalendarMap = state.subCalendarMap || {};
+    state.subCalendarMap[getCalendarCacheKey(subId, year, month)] = data;
+  }
+
+  function clearCachedCalendar(subId) {
+    if (!state.subCalendarMap) return;
+    const prefix = `${subId}_`;
+    Object.keys(state.subCalendarMap).forEach((k) => {
+      if (k.startsWith(prefix) || k === String(subId)) {
+        delete state.subCalendarMap[k];
+      }
+    });
+  }
+
+  async function toggleSubscriptionStatus(subId, toggleBtn) {
+    const sub = state.subscriptions.find((s) => String(s.id) === String(subId));
+    if (!sub) return;
+
+    const isCurrentlyActive = sub.status === 'active';
+    const endpoint = isCurrentlyActive ? `/api/v1/subscriptions/${subId}/pause` : `/api/v1/subscriptions/${subId}/resume`;
+    try {
+      if (toggleBtn) toggleBtn.disabled = true;
+      const res = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify({}) });
+      if (res && res.success) {
+        sub.status = res.status;
+        if (res.nextDelivery) sub.nextDelivery = res.nextDelivery;
+        showToast(res.message || (isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!'));
+      } else {
+        sub.status = isCurrentlyActive ? 'paused' : 'active';
+        showToast(isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!');
+      }
+    } catch (err) {
+      console.warn('API subscription status update failed:', err);
+      sub.status = isCurrentlyActive ? 'paused' : 'active';
+    } finally {
+      if (toggleBtn) toggleBtn.disabled = false;
+    }
+    try {
+      localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+    } catch {}
+    clearCachedCalendar(subId);
+    renderSubscriptions();
+    renderTomorrowStrip();
+    if (state.activeTab === 'calendar') {
+      renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+    }
+  }
+
   // Tomorrow's Drop Quick-Skip Banner
   async function renderTomorrowStrip() {
     const containers = [$('#subTomorrowStripContainer'), $('#calTomorrowStripContainer')].filter(Boolean);
@@ -1252,94 +1362,254 @@
       return;
     }
 
-    const now = new Date();
-    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    const tomYear = tomorrow.getFullYear();
-    const tomMonth = tomorrow.getMonth();
-    const tomDate = tomorrow.getDate();
-    const tomKey = `${tomYear}-${String(tomMonth + 1).padStart(2, '0')}-${String(tomDate).padStart(2, '0')}`;
+    const tomInfo = getTomorrowInIST();
+    const { year: tomYear, month: tomMonth, day: tomDate, key: tomKey, istNow, date: tomorrowDate, isCutoffPassed } = tomInfo;
 
     const monthNames = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
     ];
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const formattedDate = `${dayNames[tomorrow.getDay()]}, ${tomDate} ${monthNames[tomMonth]} ${tomYear}`;
+    const formattedDate = `${dayNames[tomorrowDate.getDay()]}, ${tomDate} ${monthNames[tomMonth]} ${tomYear}`;
 
-    let isTomSkipped = false;
-    if (state.calendarData && Array.isArray(state.calendarData.days)) {
-      const tomDayData = state.calendarData.days.find((d) => d.date === tomKey);
-      if (tomDayData && (tomDayData.status === 'skipped' || tomDayData.status === 'vacation' || tomDayData.status === 'paused')) {
-        isTomSkipped = true;
+    const missingFetchList = [];
+
+    const stripHtml = activeSubs.map((sub) => {
+      const itemDesc = `${escapeHtml(sub.quantity || '1 Litre')} ${escapeHtml(sub.product || 'Milk')}`;
+
+      // Retrieve tomorrow's authoritative status from the correct calendar month
+      const subCal = getCachedCalendar(sub.id, tomYear, tomMonth);
+
+      // Loading or unavailable state: display "Checking delivery status" & disable buttons
+      if (!subCal || !Array.isArray(subCal.days)) {
+        missingFetchList.push(sub);
+        return `
+          <div class="sub-tomorrow-strip is-checking" data-tomorrow-sub="${sub.id}">
+            <div class="sub-tomorrow-main">
+              <div class="sub-tomorrow-lead">
+                <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+                <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+                <span class="sub-tomorrow-date">${formattedDate}</span>
+              </div>
+              <div class="sub-tomorrow-meta">
+                <span class="sub-tomorrow-status-tag checking">
+                  ⏳ Checking delivery status…
+                </span>
+                <span class="sub-tomorrow-items-text">${itemDesc}</span>
+              </div>
+            </div>
+            <div class="sub-tomorrow-cta">
+              <button type="button" class="btn-tomorrow-toggle-action disabled" disabled data-toggle-tomorrow-sub="${sub.id}" data-action="disabled" style="opacity: 0.6; cursor: not-allowed;">
+                Checking Status…
+              </button>
+            </div>
+          </div>
+        `;
       }
-    }
 
-    const subSummary = activeSubs.map((s) => `${s.quantity || '1 Litre'} ${s.product}`).join(' + ');
-
-    const stripHtml = `
-      <div class="sub-tomorrow-strip ${isTomSkipped ? 'is-paused' : 'is-scheduled'}">
-        <div class="sub-tomorrow-main">
-          <div class="sub-tomorrow-lead">
-            <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
-            <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
-            <span class="sub-tomorrow-date">${formattedDate}</span>
+      const tomDayData = subCal.days.find((d) => d.date === tomKey);
+      if (!tomDayData) {
+        return `
+          <div class="sub-tomorrow-strip is-checking" data-tomorrow-sub="${sub.id}">
+            <div class="sub-tomorrow-main">
+              <div class="sub-tomorrow-lead">
+                <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+                <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+                <span class="sub-tomorrow-date">${formattedDate}</span>
+              </div>
+              <div class="sub-tomorrow-meta">
+                <span class="sub-tomorrow-status-tag checking">
+                  Checking delivery status…
+                </span>
+                <span class="sub-tomorrow-items-text">${itemDesc}</span>
+              </div>
+            </div>
+            <div class="sub-tomorrow-cta">
+              <button type="button" class="btn-tomorrow-toggle-action disabled" disabled data-toggle-tomorrow-sub="${sub.id}" data-action="disabled" style="opacity: 0.6; cursor: not-allowed;">
+                Status Unavailable
+              </button>
+            </div>
           </div>
-          <div class="sub-tomorrow-meta">
-            <span class="sub-tomorrow-status-tag ${isTomSkipped ? 'paused' : 'scheduled'}">
-              ${isTomSkipped ? '⏸ Paused (Will not deliver tomorrow)' : '✓ Scheduled (6:00 AM – 7:00 AM)'}
+        `;
+      }
+
+      const status = tomDayData.status;
+      const isDayEditable = tomDayData.isEditable !== false && !isCutoffPassed;
+
+      let stripClass = 'is-scheduled';
+      let statusClass = 'scheduled';
+      let statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
+      let ctaHtml = '';
+
+      if (status === 'scheduled') {
+        stripClass = 'is-scheduled';
+        statusClass = 'scheduled';
+        statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
+        if (isDayEditable) {
+          ctaHtml = `
+            <button type="button" class="btn-tomorrow-toggle-action skip" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="skip">
+              ⏸ Skip Tomorrow Only
+            </button>
+          `;
+        } else {
+          ctaHtml = `
+            <span class="sub-tomorrow-cutoff-msg" style="font-size:0.82rem; color:#dc2626; font-weight:700;">
+              ⚠️ Cutoff passed (8:00 PM IST)
             </span>
-            <span class="sub-tomorrow-items-text">${escapeHtml(subSummary)}</span>
+          `;
+        }
+      } else if (status === 'skipped') {
+        stripClass = 'is-paused';
+        statusClass = 'paused';
+        statusText = '⏸ Paused (Will not deliver tomorrow)';
+        if (isDayEditable) {
+          ctaHtml = `
+            <button type="button" class="btn-tomorrow-toggle-action resume" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="resume">
+              ▶ Resume Tomorrow's Drop
+            </button>
+          `;
+        } else {
+          ctaHtml = `
+            <span class="sub-tomorrow-cutoff-msg" style="font-size:0.82rem; color:#dc2626; font-weight:700;">
+              ⚠️ Cutoff passed (8:00 PM IST)
+            </span>
+          `;
+        }
+      } else if (status === 'vacation') {
+        stripClass = 'is-paused';
+        statusClass = 'paused';
+        statusText = '✈️ Vacation Mode (Paused)';
+        ctaHtml = `
+          <button type="button" class="btn-tomorrow-toggle-action btn-manage-vacation" data-open-vacation="true" style="background:#fef2f2; color:#b91c1c; border:1.5px solid #fecaca; cursor:pointer;">
+            ✈️ Manage Vacation
+          </button>
+        `;
+      } else if (status === 'paused') {
+        stripClass = 'is-paused';
+        statusClass = 'paused';
+        statusText = '⏸ Subscription Paused';
+        ctaHtml = `
+          <button type="button" class="btn-tomorrow-toggle-action btn-sub-resume" data-toggle-sub="${sub.id}" style="background:#0284c7; color:#fff; border:none; cursor:pointer;">
+            ▶ Resume Subscription
+          </button>
+        `;
+      } else if (status === 'pending_payment') {
+        stripClass = 'is-paused';
+        statusClass = 'pending';
+        statusText = '⏳ Pending Payment (Mandate/Billing)';
+        ctaHtml = `
+          <span style="font-size:0.82rem; color:#d97706; font-weight:700;">
+            💳 Payment Required
+          </span>
+        `;
+      } else if (status === 'ended') {
+        stripClass = 'is-paused';
+        statusClass = 'ended';
+        statusText = '⏹ Entitlement Ended';
+        ctaHtml = `
+          <button type="button" class="btn-tomorrow-toggle-action" data-quick-extend="true" style="background:#0284c7; color:#fff; border:none; cursor:pointer;">
+            🔄 Renew Plan
+          </button>
+        `;
+      } else if (status === 'not_started') {
+        stripClass = 'is-paused';
+        statusClass = 'not-started';
+        statusText = `🗓 Starts Later (${escapeHtml(tomDayData.detail || 'Scheduled start')})`;
+        ctaHtml = `
+          <span style="font-size:0.82rem; color:#64748b; font-weight:600;">
+            Starts on Schedule
+          </span>
+        `;
+      } else if (status === 'cancelled') {
+        stripClass = 'is-paused';
+        statusClass = 'cancelled';
+        statusText = '✕ Subscription Cancelled';
+        ctaHtml = `
+          <span style="font-size:0.82rem; color:#64748b; font-weight:600;">
+            Cancelled
+          </span>
+        `;
+      } else if (status === 'delivered') {
+        stripClass = 'is-scheduled';
+        statusClass = 'scheduled';
+        statusText = '✓ Delivered';
+        ctaHtml = `
+          <span style="font-size:0.82rem; color:#15803d; font-weight:700;">
+            ✓ Delivered
+          </span>
+        `;
+      } else {
+        stripClass = 'is-scheduled';
+        statusClass = 'scheduled';
+        statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
+        if (isDayEditable) {
+          ctaHtml = `
+            <button type="button" class="btn-tomorrow-toggle-action skip" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="skip">
+              ⏸ Skip Tomorrow Only
+            </button>
+          `;
+        } else {
+          ctaHtml = `
+            <span class="sub-tomorrow-cutoff-msg" style="font-size:0.82rem; color:#dc2626; font-weight:700;">
+              ⚠️ Cutoff passed (8:00 PM IST)
+            </span>
+          `;
+        }
+      }
+
+      return `
+        <div class="sub-tomorrow-strip ${stripClass}" data-tomorrow-sub="${sub.id}">
+          <div class="sub-tomorrow-main">
+            <div class="sub-tomorrow-lead">
+              <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+              <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+              <span class="sub-tomorrow-date">${formattedDate}</span>
+            </div>
+            <div class="sub-tomorrow-meta">
+              <span class="sub-tomorrow-status-tag ${statusClass}">
+                ${statusText}
+              </span>
+              <span class="sub-tomorrow-items-text">${itemDesc}</span>
+            </div>
+          </div>
+          <div class="sub-tomorrow-cta">
+            ${ctaHtml}
           </div>
         </div>
-        <div class="sub-tomorrow-cta">
-          <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" data-toggle-tomorrow="true" data-tom-key="${tomKey}">
-            ${isTomSkipped ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
-          </button>
-        </div>
-      </div>
-    `;
+      `;
+    }).join('');
 
     containers.forEach((c) => {
       c.innerHTML = stripHtml;
     });
 
-    containers.forEach((c) => {
-      const btn = c.querySelector('[data-toggle-tomorrow]');
-      if (btn) {
-        btn.addEventListener('click', async () => {
-          $$('[data-toggle-tomorrow]').forEach(b => b.disabled = true);
-          const targetSubs = state.subscriptions.filter(s => s.status === 'active');
-          try {
-            if (isTomSkipped) {
-              for (const sub of targetSubs) {
-                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
-              }
-              showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
-            } else {
-              for (const sub of targetSubs) {
-                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
-                  method: 'POST',
-                  body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
-                });
-              }
-              showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
-            }
-            await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+    // Check if any active subscription lacks cached calendar data for tomorrow
+    if (missingFetchList.length > 0) {
+      state.fetchingCalendarFor = state.fetchingCalendarFor || new Set();
+      missingFetchList.forEach(async (s) => {
+        const fetchKey = getCalendarCacheKey(s.id, tomYear, tomMonth);
+        if (state.fetchingCalendarFor.has(fetchKey)) return;
+        state.fetchingCalendarFor.add(fetchKey);
+        try {
+          const cal = await apiRequest(`/api/v1/subscriptions/${s.id}/calendar?year=${tomYear}&month=${tomMonth}`);
+          if (cal && Array.isArray(cal.days)) {
+            setCachedCalendar(s.id, tomYear, tomMonth, cal);
             renderTomorrowStrip();
-          } catch (err) {
-            showToast(err.message || 'Failed to update tomorrow delivery status.');
-          } finally {
-            $$('[data-toggle-tomorrow]').forEach(b => b.disabled = false);
           }
-        });
-      }
-    });
+        } catch (err) {
+          console.warn(`Tomorrow strip calendar fetch notice for sub ${s.id}:`, err);
+        } finally {
+          state.fetchingCalendarFor.delete(fetchKey);
+        }
+      });
+    }
   }
 
   // Comprehensive Authoritative One-Month Morning Delivery Calendar
-  let currentCalYear = new Date().getFullYear();
-  let currentCalMonth = new Date().getMonth();
-  let selectedCalDate = new Date().getDate();
+  let currentCalYear = getNowInIST().getFullYear();
+  let currentCalMonth = getNowInIST().getMonth();
+  let selectedCalDate = getTomorrowInIST().day;
+  let calendarFetchSequence = 0;
 
   async function renderMonthlyDeliveryCalendar(year = currentCalYear, month = currentCalMonth) {
     currentCalYear = year;
@@ -1354,7 +1624,6 @@
       'January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December'
     ];
-    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     if (label) {
       label.textContent = `${monthNames[month]} ${year}`;
@@ -1370,7 +1639,7 @@
           <h3 style="font-size: 1.25rem; color: #0a3d66; margin: 0 0 8px; font-weight: 700;">No active subscription to show calendar for</h3>
           <p style="font-size: 0.9rem; color: #64748b; margin: 0 auto 20px; max-width: 440px; line-height: 1.5;">Get farm-fresh milk delivered to your doorstep every morning with our flexible subscription plans.</p>
           <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
-            <a href="products.html?category=milk" class="primary-cart" style="padding: 10px 24px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: #fff;">
+            <a href="index.html#products" class="primary-cart" style="padding: 10px 24px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: #fff;">
               <span>Browse Subscriptions</span>
               <span>→</span>
             </a>
@@ -1422,20 +1691,47 @@
       selectorEl.style.display = 'none';
     }
 
-    grid.innerHTML = `<div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: #64748b;">Loading authoritative delivery calendar…</div>`;
+    const targetSubId = String(state.selectedSubId);
+    const currentSeq = ++calendarFetchSequence;
 
-    let calDays = [];
-    let calSubInfo = null;
+    // Check cache first for instant render
+    const cachedData = getCachedCalendar(targetSubId, year, month);
+    if (cachedData && Array.isArray(cachedData.days)) {
+      state.calendarData = cachedData;
+      renderCalendarDaysGrid(grid, statsBar, year, month, cachedData.days, cachedData);
+    } else {
+      grid.innerHTML = `<div style="grid-column: 1 / -1; padding: 24px; text-align: center; color: #64748b;">Loading authoritative delivery calendar…</div>`;
+    }
 
     try {
-      const data = await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/calendar?year=${year}&month=${month}`);
+      const data = await apiRequest(`/api/v1/subscriptions/${targetSubId}/calendar?year=${year}&month=${month}`);
       if (!data || !Array.isArray(data.days)) {
         throw new Error('Invalid calendar response received from server.');
       }
-      calDays = data.days;
-      calSubInfo = data;
+
+      // Cache authoritative calendar by subscription ID AND year/month
+      setCachedCalendar(targetSubId, year, month, data);
+
+      // Prevent stale responses from overwriting another subscription's calendar (Requirement 8)
+      if (currentSeq !== calendarFetchSequence || String(state.selectedSubId) !== targetSubId) {
+        return;
+      }
+
       state.calendarData = data;
+      renderCalendarDaysGrid(grid, statsBar, year, month, data.days, data);
+
+      // If fetched month corresponds to tomorrow's month, synchronize tomorrow strip
+      const tomInfo = getTomorrowInIST();
+      if (year === tomInfo.year && month === tomInfo.month) {
+        renderTomorrowStrip();
+      }
     } catch (err) {
+      if (currentSeq !== calendarFetchSequence || String(state.selectedSubId) !== targetSubId) {
+        return;
+      }
+      if (cachedData && Array.isArray(cachedData.days)) {
+        return;
+      }
       console.warn('Calendar backend fetch failed:', err.message);
       state.calendarData = null;
       grid.innerHTML = `
@@ -1457,8 +1753,15 @@
       $('#btnRetryLoadCalendar')?.addEventListener('click', () => {
         renderMonthlyDeliveryCalendar(year, month);
       });
-      return;
     }
+  }
+
+  function renderCalendarDaysGrid(grid, statsBar, year, month, calDays, calSubInfo) {
+    const monthNames = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'
+    ];
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     const firstDayIndex = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -1505,8 +1808,12 @@
       } else if (statusType === 'paused') {
         pausedCount++;
         badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Paused</span>`;
+      } else if (statusType === 'pending_payment') {
+        badgeHtml = `<span class="month-cal-day-badge badge-none" style="background:#fef3c7; color:#92400e;">⏳ Pending</span>`;
+      } else if (statusType === 'ended') {
+        badgeHtml = `<span class="month-cal-day-badge badge-none">Ended</span>`;
       } else if (statusType === 'not_started') {
-        badgeHtml = `<span class="month-cal-day-badge badge-none">Not Started</span>`;
+        badgeHtml = `<span class="month-cal-day-badge badge-none">Starts Later</span>`;
       } else if (statusType === 'cancelled') {
         badgeHtml = `<span class="month-cal-day-badge badge-none">Cancelled</span>`;
       } else if (statusType === 'past') {
@@ -1608,13 +1915,19 @@
       }
     } else if (status === 'vacation') {
       statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✈️ Vacation Mode</span>`;
-      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Part of planned vacation pause</span>`;
+      actionBtn = `<button type="button" class="btn-sub-pill" data-open-vacation="true" style="padding:6px 14px; font-size:0.8rem; font-weight:600; cursor:pointer; background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; border-radius:8px;">✈️ Manage Vacation</button>`;
     } else if (status === 'delivered') {
       statusBadge = `<span style="background:#dcfce7; color:#15803d; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">✔ Delivered</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#15803d; font-weight:600;">${escapeHtml(dayData.detail || 'Delivered to doorstep')}</span>`;
     } else if (status === 'paused') {
       statusBadge = `<span style="background:#fee2e2; color:#991b1b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏸ Subscription Paused</span>`;
-      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Resume subscription to reactivate daily drops</span>`;
+      actionBtn = `<button type="button" class="btn-sub-pill" data-toggle-sub="${state.selectedSubId}" style="padding:6px 14px; font-size:0.8rem; font-weight:600; cursor:pointer; background:#0284c7; color:#fff; border:none; border-radius:8px;">▶ Resume Subscription</button>`;
+    } else if (status === 'pending_payment') {
+      statusBadge = `<span style="background:#fef3c7; color:#92400e; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">⏳ Pending Payment</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#92400e; font-weight:600;">${escapeHtml(dayData.detail || 'Awaiting payment confirmation')}</span>`;
+    } else if (status === 'ended') {
+      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Entitlement Ended</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">${escapeHtml(dayData.detail || 'Paid entitlement period ended')}</span>`;
     } else if (status === 'not_started') {
       statusBadge = `<span style="background:#f1f5f9; color:#475569; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Starts Later</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">${escapeHtml(dayData.detail || 'Before start date')}</span>`;
@@ -1663,13 +1976,14 @@
             method: 'DELETE'
           });
           showToast(`▶ Delivery resumed for ${formattedDate}!`);
-        } else {
+        } else if (status === 'scheduled') {
           await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/skip-date`, {
             method: 'POST',
             body: JSON.stringify({ skipDate: dateKey, reason: 'Customer single-day skip' })
           });
           showToast(`⏸ Delivery skipped for ${formattedDate}. You will not receive milk on this date.`);
         }
+        clearCachedCalendar(state.selectedSubId);
         await renderMonthlyDeliveryCalendar(year, month);
         renderTomorrowStrip();
       } catch (err) {
@@ -1695,6 +2009,77 @@
   // 5. EVENT LISTENERS & USER ACTIONS
   // ==========================================
   function setupListeners() {
+    // Dedicated delegated listener for tomorrow drop toggle (avoids duplicate listeners and concurrent actions)
+    let isTogglingTomorrow = false;
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-toggle-tomorrow-sub]');
+      if (!btn) return;
+      e.preventDefault();
+
+      if (isTogglingTomorrow) return;
+      if (btn.disabled) return;
+
+      const action = btn.dataset.action;
+      if (action !== 'resume' && action !== 'skip') return;
+
+      isTogglingTomorrow = true;
+
+      const subId = btn.dataset.toggleTomorrowSub;
+      const tomKey = btn.dataset.tomKey;
+
+      const targetSub = state.subscriptions.find((s) => String(s.id) === String(subId));
+      if (!targetSub) {
+        isTogglingTomorrow = false;
+        return;
+      }
+
+      $$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = true; });
+
+      try {
+        if (action === 'resume') {
+          await apiRequest(`/api/v1/subscriptions/${subId}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
+          showToast(`▶ Tomorrow's delivery resumed for ${targetSub.product}!`);
+        } else if (action === 'skip') {
+          await apiRequest(`/api/v1/subscriptions/${subId}/skip-date`, {
+            method: 'POST',
+            body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
+          });
+          showToast(`⏸ Tomorrow's delivery skipped for ${targetSub.product}. Rider will not deliver tomorrow.`);
+        }
+
+        clearCachedCalendar(subId);
+
+        const tomInfo = getTomorrowInIST();
+        try {
+          const freshCal = await apiRequest(`/api/v1/subscriptions/${subId}/calendar?year=${tomInfo.year}&month=${tomInfo.month}`);
+          if (freshCal && Array.isArray(freshCal.days)) {
+            setCachedCalendar(subId, tomInfo.year, tomInfo.month, freshCal);
+          }
+        } catch {}
+
+        if (String(state.selectedSubId) === String(subId)) {
+          await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+        }
+
+        renderTomorrowStrip();
+      } catch (err) {
+        showToast(err.message || 'Action could not be completed.');
+      } finally {
+        isTogglingTomorrow = false;
+        $$('[data-toggle-tomorrow-sub]').forEach((b) => { b.disabled = false; });
+      }
+    });
+
+    // Delegated click listener for subscription pause/resume when clicked outside grid
+    document.addEventListener('click', async (e) => {
+      const toggleBtn = e.target.closest('[data-toggle-sub]');
+      if (toggleBtn && !e.target.closest('#subscriptionsGridContainer')) {
+        e.preventDefault();
+        const id = toggleBtn.dataset.toggleSub;
+        await toggleSubscriptionStatus(id, toggleBtn);
+      }
+    });
+
     // Tab switching buttons
     $$('.profile-tab-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -2561,9 +2946,9 @@
     }
 
     function openModal() {
-      const now = new Date();
-      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-      const defaultEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 5);
+      const tomInfo = getTomorrowInIST();
+      const tomorrow = tomInfo.date;
+      const defaultEnd = new Date(tomorrow.getTime() + 4 * 24 * 3600 * 1000);
 
       if (startInput) startInput.value = formatYMD(tomorrow);
       if (endInput) endInput.value = formatYMD(defaultEnd);
@@ -2654,6 +3039,7 @@
       // Call server vacation API for each active subscription
       const activeSubs = state.subscriptions.filter(s => s.status === 'active');
       for (const sub of activeSubs) {
+        clearCachedCalendar(sub.id);
         try {
           await apiRequest(`/api/v1/subscriptions/${sub.id}/vacation`, {
             method: 'POST',
@@ -2684,6 +3070,7 @@
       const activeSubs = state.subscriptions.filter(s => s.status === 'active');
       if (confirm('Clear all paused dates and resume morning deliveries?')) {
         for (const sub of activeSubs) {
+          clearCachedCalendar(sub.id);
           try {
             await apiRequest(`/api/v1/subscriptions/${sub.id}/resume`, { method: 'POST', body: JSON.stringify({}) });
           } catch (err) {
@@ -3148,10 +3535,10 @@
     });
 
     $('#calTodayBtn')?.addEventListener('click', () => {
-      const today = new Date();
-      currentCalYear = today.getFullYear();
-      currentCalMonth = today.getMonth();
-      selectedCalDate = today.getDate();
+      const istNow = getNowInIST();
+      currentCalYear = istNow.getFullYear();
+      currentCalMonth = istNow.getMonth();
+      selectedCalDate = istNow.getDate();
       renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
     });
 
