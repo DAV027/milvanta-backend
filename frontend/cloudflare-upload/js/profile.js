@@ -117,7 +117,7 @@
 
   // Switch Tab
   function switchTab(tabId) {
-    if (!['profile', 'orders', 'addresses', 'subscription'].includes(tabId)) {
+    if (!['profile', 'orders', 'addresses', 'subscription', 'calendar'].includes(tabId)) {
       tabId = 'profile';
     }
     state.activeTab = tabId;
@@ -132,6 +132,11 @@
       }
     });
 
+    // Update Dropdown active states if present
+    $$('[data-tab-target]').forEach((item) => {
+      item.classList.toggle('active-nav-tab', item.dataset.tabTarget === tabId);
+    });
+
     // Update Panels
     $$('.tab-panel').forEach((panel) => {
       panel.classList.toggle('active', panel.id === `tabPanel-${tabId}`);
@@ -140,11 +145,19 @@
     // Update URL query string without reloading
     const url = new URL(window.location);
     url.searchParams.set('tab', tabId);
+    if (tabId === 'calendar' && state.selectedSubId) {
+      url.searchParams.set('sub', state.selectedSubId);
+    } else if (tabId !== 'calendar') {
+      url.searchParams.delete('sub');
+    }
     window.history.replaceState({}, '', url);
 
-    // Re-render subscriptions & delivery calendar if switching to subscription tab
+    // Re-render subscriptions or delivery calendar depending on tab
     if (tabId === 'subscription') {
       renderSubscriptions();
+      renderTomorrowStrip();
+    } else if (tabId === 'calendar') {
+      renderTomorrowStrip();
       renderMonthlyDeliveryCalendar();
     }
 
@@ -153,6 +166,7 @@
       $('.profile-content-container')?.scrollIntoView({ behavior: 'smooth' });
     }
   }
+  window.switchTab = switchTab;
 
   // ==========================================
   // 1. CUSTOMER PROFILE INITIALIZATION
@@ -1209,6 +1223,9 @@
             <button type="button" class="btn-sub-pill btn-vacation-pill" data-open-vacation="true">
               ✈️ Vacation Pause
             </button>
+            <button type="button" class="btn-sub-pill btn-view-cal-pill" data-view-cal="${sub.id}">
+              📅 View Calendar
+            </button>
           </div>
           <button type="button" class="btn-sub-cancel-link" data-cancel-sub="${sub.id}">
             Cancel Subscription
@@ -1219,17 +1236,19 @@
     }).join('');
 
     renderTomorrowStrip();
-    renderMonthlyDeliveryCalendar();
+    if (state.activeTab === 'calendar') {
+      renderMonthlyDeliveryCalendar();
+    }
   }
 
   // Tomorrow's Drop Quick-Skip Banner
   async function renderTomorrowStrip() {
-    const container = $('#subTomorrowStripContainer');
-    if (!container) return;
+    const containers = [$('#subTomorrowStripContainer'), $('#calTomorrowStripContainer')].filter(Boolean);
+    if (!containers.length) return;
 
     const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
     if (activeSubs.length === 0) {
-      container.innerHTML = '';
+      containers.forEach(c => c.innerHTML = '');
       return;
     }
 
@@ -1257,7 +1276,7 @@
 
     const subSummary = activeSubs.map((s) => `${s.quantity || '1 Litre'} ${s.product}`).join(' + ');
 
-    container.innerHTML = `
+    const stripHtml = `
       <div class="sub-tomorrow-strip ${isTomSkipped ? 'is-paused' : 'is-scheduled'}">
         <div class="sub-tomorrow-main">
           <div class="sub-tomorrow-lead">
@@ -1273,36 +1292,46 @@
           </div>
         </div>
         <div class="sub-tomorrow-cta">
-          <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" id="btnToggleTomorrowDrop" data-tom-key="${tomKey}">
+          <button type="button" class="btn-tomorrow-toggle-action ${isTomSkipped ? 'resume' : 'skip'}" data-toggle-tomorrow="true" data-tom-key="${tomKey}">
             ${isTomSkipped ? '▶ Resume Tomorrow\'s Drop' : '⏸ Skip Tomorrow Only'}
           </button>
         </div>
       </div>
     `;
 
-    $('#btnToggleTomorrowDrop')?.addEventListener('click', async () => {
-      const btn = $('#btnToggleTomorrowDrop');
-      if (btn) btn.disabled = true;
-      const targetSubs = state.subscriptions.filter(s => s.status === 'active');
-      try {
-        if (isTomSkipped) {
-          for (const sub of targetSubs) {
-            await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
+    containers.forEach((c) => {
+      c.innerHTML = stripHtml;
+    });
+
+    containers.forEach((c) => {
+      const btn = c.querySelector('[data-toggle-tomorrow]');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          $$('[data-toggle-tomorrow]').forEach(b => b.disabled = true);
+          const targetSubs = state.subscriptions.filter(s => s.status === 'active');
+          try {
+            if (isTomSkipped) {
+              for (const sub of targetSubs) {
+                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date?skipDate=${tomKey}`, { method: 'DELETE' });
+              }
+              showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
+            } else {
+              for (const sub of targetSubs) {
+                await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
+                  method: 'POST',
+                  body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
+                });
+              }
+              showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
+            }
+            await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+            renderTomorrowStrip();
+          } catch (err) {
+            showToast(err.message || 'Failed to update tomorrow delivery status.');
+          } finally {
+            $$('[data-toggle-tomorrow]').forEach(b => b.disabled = false);
           }
-          showToast(`▶ Tomorrow's delivery resumed for ${formattedDate}!`);
-        } else {
-          for (const sub of targetSubs) {
-            await apiRequest(`/api/v1/subscriptions/${sub.id}/skip-date`, {
-              method: 'POST',
-              body: JSON.stringify({ skipDate: tomKey, reason: 'Quick skip tomorrow' })
-            });
-          }
-          showToast(`⏸ Tomorrow's delivery skipped for ${formattedDate}. Rider will not deliver tomorrow.`);
-        }
-        await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
-        renderTomorrowStrip();
-      } catch (err) {
-        showToast(err.message || 'Failed to update tomorrow delivery status.');
+        });
       }
     });
   }
@@ -1335,7 +1364,23 @@
     const validSubs = activeSubs.length > 0 ? activeSubs : state.subscriptions;
 
     if (!validSubs.length) {
-      grid.innerHTML = `<div style="grid-column: 1 / -1; padding: 32px 16px; text-align: center; color: #64748b;">No active milk subscription found. Start a subscription above to view your delivery calendar!</div>`;
+      grid.innerHTML = `
+        <div class="calendar-empty-state" style="grid-column: 1 / -1; padding: 48px 20px; text-align: center; background: #ffffff; border-radius: 16px;">
+          <div style="font-size: 3rem; margin-bottom: 12px;">🥛</div>
+          <h3 style="font-size: 1.25rem; color: #0a3d66; margin: 0 0 8px; font-weight: 700;">No active subscription to show calendar for</h3>
+          <p style="font-size: 0.9rem; color: #64748b; margin: 0 auto 20px; max-width: 440px; line-height: 1.5;">Get farm-fresh milk delivered to your doorstep every morning with our flexible subscription plans.</p>
+          <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+            <a href="products.html?category=milk" class="primary-cart" style="padding: 10px 24px; font-size: 0.9rem; font-weight: 700; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; color: #fff;">
+              <span>Browse Subscriptions</span>
+              <span>→</span>
+            </a>
+            <button type="button" class="btn-sub-pill" id="btnEmptyStateGoSub" style="padding: 10px 20px; font-size: 0.9rem; font-weight: 600; cursor: pointer; border: 1px solid #cbd5e1; background: #ffffff; color: #0a3d66; border-radius: 10px;">
+              Go to Subscriptions Tab
+            </button>
+          </div>
+        </div>
+      `;
+      $('#btnEmptyStateGoSub')?.addEventListener('click', () => switchTab('subscription'));
       if (statsBar) statsBar.innerHTML = '';
       $('#calSelectedDayCard')?.classList.add('hidden');
       return;
@@ -1367,6 +1412,9 @@
       selectorEl.querySelectorAll('[data-select-cal-sub]').forEach((btn) => {
         btn.addEventListener('click', () => {
           state.selectedSubId = btn.dataset.selectCalSub;
+          const url = new URL(window.location);
+          url.searchParams.set('sub', state.selectedSubId);
+          window.history.replaceState({}, '', url);
           renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
         });
       });
@@ -1803,8 +1851,7 @@
     $('#ordersListContainer')?.addEventListener('click', (e) => {
       const goSubBtn = e.target.closest('[data-go-sub-tab]');
       if (goSubBtn) {
-        switchTab('subscription');
-        $('#profileMonthlyCalendarCard')?.scrollIntoView({ behavior: 'smooth' });
+        switchTab('calendar');
         return;
       }
 
@@ -3072,9 +3119,12 @@
   document.addEventListener('DOMContentLoaded', async () => {
     const params = new URLSearchParams(window.location.search);
     const initialTab = params.get('tab') || 'profile';
+    const subParam = params.get('sub');
+    if (subParam) {
+      state.selectedSubId = subParam;
+    }
 
     setupListeners();
-    renderMonthlyDeliveryCalendar();
 
     // Monthly Calendar Navigation Listeners
     $('#calPrevMonthBtn')?.addEventListener('click', () => {
@@ -3109,6 +3159,11 @@
     document.addEventListener('click', (e) => {
       const viewCalBtn = e.target.closest('[data-view-cal]');
       if (viewCalBtn) {
+        const subId = viewCalBtn.dataset.viewCal;
+        if (subId) {
+          state.selectedSubId = subId;
+        }
+        switchTab('calendar');
         const card = $('#profileMonthlyCalendarCard');
         if (card) {
           card.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -3127,6 +3182,6 @@
     await initProfile();
     fetchOrders();
     fetchAddresses();
-    fetchSubscriptions();
+    await fetchSubscriptions();
   });
 })();
