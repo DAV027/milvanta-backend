@@ -1317,37 +1317,53 @@
     });
   }
 
+  // Set of in-flight subscription mutation IDs to prevent duplicate concurrent actions
+  state.mutatingSubIds = state.mutatingSubIds || new Set();
+
   async function toggleSubscriptionStatus(subId, toggleBtn) {
+    if (state.mutatingSubIds.has(String(subId))) {
+      return;
+    }
     const sub = state.subscriptions.find((s) => String(s.id) === String(subId));
     if (!sub) return;
 
+    state.mutatingSubIds.add(String(subId));
     const isCurrentlyActive = sub.status === 'active';
     const endpoint = isCurrentlyActive ? `/api/v1/subscriptions/${subId}/pause` : `/api/v1/subscriptions/${subId}/resume`;
+
+    // Disable all matching toggle buttons across DOM
+    $$(`[data-toggle-sub="${subId}"]`).forEach((b) => { b.disabled = true; });
+
     try {
-      if (toggleBtn) toggleBtn.disabled = true;
       const res = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify({}) });
-      if (res && res.success) {
-        sub.status = res.status;
-        if (res.nextDelivery) sub.nextDelivery = res.nextDelivery;
-        showToast(res.message || (isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!'));
-      } else {
-        sub.status = isCurrentlyActive ? 'paused' : 'active';
-        showToast(isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!');
+      if (!res || !res.success) {
+        throw new Error(res?.error || res?.message || `Failed to ${isCurrentlyActive ? 'pause' : 'resume'} subscription.`);
+      }
+
+      // Update confirmed state strictly from server response
+      sub.status = res.status || (isCurrentlyActive ? 'paused' : 'active');
+      if (res.nextDelivery) sub.nextDelivery = res.nextDelivery;
+      showToast(res.message || (isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!'));
+
+      try {
+        localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
+      } catch {}
+
+      clearCachedCalendar(subId);
+
+      // Server-authoritative refresh of subscriptions and calendar
+      await fetchSubscriptions();
+      renderTomorrowStrip();
+      if (state.activeTab === 'calendar') {
+        await renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
       }
     } catch (err) {
-      console.warn('API subscription status update failed:', err);
-      sub.status = isCurrentlyActive ? 'paused' : 'active';
+      // Preserve the last confirmed state. Never flip status locally on failure!
+      console.warn('API subscription pause/resume failed:', err);
+      showToast(err.message || `Unable to ${isCurrentlyActive ? 'pause' : 'resume'} subscription. Please try again.`);
     } finally {
-      if (toggleBtn) toggleBtn.disabled = false;
-    }
-    try {
-      localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
-    } catch {}
-    clearCachedCalendar(subId);
-    renderSubscriptions();
-    renderTomorrowStrip();
-    if (state.activeTab === 'calendar') {
-      renderMonthlyDeliveryCalendar(currentCalYear, currentCalMonth);
+      state.mutatingSubIds.delete(String(subId));
+      $$(`[data-toggle-sub="${subId}"]`).forEach((b) => { b.disabled = false; });
     }
   }
 
@@ -1356,8 +1372,9 @@
     const containers = [$('#subTomorrowStripContainer'), $('#calTomorrowStripContainer')].filter(Boolean);
     if (!containers.length) return;
 
-    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
-    if (activeSubs.length === 0) {
+    // Paused subscriptions remain visible in Calendar/Subscription tomorrow banner with Resume action
+    const eligibleSubs = state.subscriptions.filter((s) => s.status === 'active' || s.status === 'paused');
+    if (eligibleSubs.length === 0) {
       containers.forEach(c => c.innerHTML = '');
       return;
     }
@@ -1374,8 +1391,34 @@
 
     const missingFetchList = [];
 
-    const stripHtml = activeSubs.map((sub) => {
+    const stripHtml = eligibleSubs.map((sub) => {
       const itemDesc = `${escapeHtml(sub.quantity || '1 Litre')} ${escapeHtml(sub.product || 'Milk')}`;
+
+      // If subscription itself is paused, always show paused with resume action
+      if (sub.status === 'paused') {
+        return `
+          <div class="sub-tomorrow-strip is-paused" data-tomorrow-sub="${sub.id}">
+            <div class="sub-tomorrow-main">
+              <div class="sub-tomorrow-lead">
+                <span class="sub-tomorrow-lead-badge">⚡ QUICK ACTION</span>
+                <strong class="sub-tomorrow-title">Tomorrow's Morning Drop:</strong>
+                <span class="sub-tomorrow-date">${formattedDate}</span>
+              </div>
+              <div class="sub-tomorrow-meta">
+                <span class="sub-tomorrow-status-tag paused">
+                  ⏸ Subscription Paused
+                </span>
+                <span class="sub-tomorrow-items-text">${itemDesc}</span>
+              </div>
+            </div>
+            <div class="sub-tomorrow-cta">
+              <button type="button" class="btn-tomorrow-toggle-action btn-sub-resume" data-toggle-sub="${sub.id}" style="background:#0284c7; color:#fff; border:none; cursor:pointer;">
+                ▶ Resume Subscription
+              </button>
+            </div>
+          </div>
+        `;
+      }
 
       // Retrieve tomorrow's authoritative status from the correct calendar month
       const subCal = getCachedCalendar(sub.id, tomYear, tomMonth);
@@ -1539,22 +1582,15 @@
           </span>
         `;
       } else {
-        stripClass = 'is-scheduled';
-        statusClass = 'scheduled';
-        statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
-        if (isDayEditable) {
-          ctaHtml = `
-            <button type="button" class="btn-tomorrow-toggle-action skip" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="skip">
-              ⏸ Skip Tomorrow Only
-            </button>
-          `;
-        } else {
-          ctaHtml = `
-            <span class="sub-tomorrow-cutoff-msg" style="font-size:0.82rem; color:#dc2626; font-weight:700;">
-              ⚠️ Cutoff passed (8:00 PM IST)
-            </span>
-          `;
-        }
+        // Fail closed for unknown delivery statuses
+        stripClass = 'is-unknown';
+        statusClass = 'unknown';
+        statusText = status ? `Status: ${escapeHtml(status)}` : 'Delivery status unavailable';
+        ctaHtml = `
+          <button type="button" class="btn-tomorrow-toggle-action disabled" disabled data-action="disabled" style="opacity: 0.6; cursor: not-allowed;">
+            Delivery Status Unavailable
+          </button>
+        `;
       }
 
       return `
@@ -1584,9 +1620,11 @@
     });
 
     // Check if any active subscription lacks cached calendar data for tomorrow
-    if (missingFetchList.length > 0) {
+    const activeSubsNeedingFetch = eligibleSubs.filter((s) => s.status === 'active');
+    const missingSubs = activeSubsNeedingFetch.filter((s) => !getCachedCalendar(s.id, tomYear, tomMonth));
+    if (missingSubs.length > 0) {
       state.fetchingCalendarFor = state.fetchingCalendarFor || new Set();
-      missingFetchList.forEach(async (s) => {
+      missingSubs.forEach(async (s) => {
         const fetchKey = getCalendarCacheKey(s.id, tomYear, tomMonth);
         if (state.fetchingCalendarFor.has(fetchKey)) return;
         state.fetchingCalendarFor.add(fetchKey);
@@ -1629,10 +1667,9 @@
       label.textContent = `${monthNames[month]} ${year}`;
     }
 
-    const activeSubs = state.subscriptions.filter((s) => s.status === 'active');
-    const validSubs = activeSubs.length > 0 ? activeSubs : state.subscriptions;
+    const visibleSubs = state.subscriptions.filter((s) => s.status === 'active' || s.status === 'paused');
 
-    if (!validSubs.length) {
+    if (!visibleSubs.length) {
       grid.innerHTML = `
         <div class="calendar-empty-state" style="grid-column: 1 / -1; padding: 48px 20px; text-align: center; background: #ffffff; border-radius: 16px;">
           <div style="font-size: 3rem; margin-bottom: 12px;">🥛</div>
@@ -1655,8 +1692,8 @@
       return;
     }
 
-    if (!state.selectedSubId || !validSubs.some((s) => String(s.id) === String(state.selectedSubId))) {
-      state.selectedSubId = validSubs[0].id;
+    if (!state.selectedSubId || !visibleSubs.some((s) => String(s.id) === String(state.selectedSubId))) {
+      state.selectedSubId = visibleSubs[0].id;
     }
 
     // Multi-subscription switcher UI
@@ -1669,12 +1706,13 @@
       grid.parentElement?.insertBefore(selectorEl, grid);
     }
 
-    if (validSubs.length > 1) {
+    if (visibleSubs.length > 1) {
       selectorEl.style.display = 'flex';
-      selectorEl.innerHTML = validSubs.map((s) => {
+      selectorEl.innerHTML = visibleSubs.map((s) => {
         const isSel = String(s.id) === String(state.selectedSubId);
+        const isPaused = s.status === 'paused';
         return `<button type="button" class="sub-tab-pill ${isSel ? 'active' : ''}" data-select-cal-sub="${s.id}" style="padding:6px 14px; border-radius:20px; font-size:0.82rem; font-weight:700; cursor:pointer; border:1px solid ${isSel ? '#0284c7' : '#cbd5e1'}; background:${isSel ? '#e0f2fe' : '#ffffff'}; color:${isSel ? '#0369a1' : '#475569'};">
-          🥛 ${escapeHtml(s.product || s.productName || 'Milk Plan')} (${escapeHtml(s.quantity || '500 ml')})
+          🥛 ${escapeHtml(s.product || s.productName || 'Milk Plan')} (${escapeHtml(s.quantity || '500 ml')})${isPaused ? ' <span style="color:#b91c1c; font-weight:800;">[⏸ Paused]</span>' : ''}
         </button>`;
       }).join('');
 
@@ -1793,7 +1831,7 @@
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
       let badgeHtml = '';
-      let statusType = dayData ? dayData.status : 'scheduled';
+      let statusType = dayData ? dayData.status : 'unknown';
       const isToday = dayData ? dayData.isToday : false;
 
       if (statusType === 'delivered') {
@@ -1898,7 +1936,7 @@
     const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dObj.getDay()];
     const formattedDate = `${dayName}, ${day} ${monthNames[month]} ${year}`;
 
-    const status = dayData?.status || 'scheduled';
+    const status = dayData?.status || 'unknown';
     const isEditable = Boolean(dayData?.isEditable);
     const productName = dayData?.productName || 'Pure Farm Fresh Milk';
     const quantity = dayData?.quantity || '500 ml';
@@ -1937,13 +1975,16 @@
     } else if (status === 'past') {
       statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Past Date</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">No past delivery recorded</span>`;
-    } else {
+    } else if (status === 'scheduled') {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       if (isEditable) {
         actionBtn = `<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip Delivery For This Day</button>`;
       } else {
         actionBtn = `<span style="font-size:0.78rem; color:#dc2626; font-weight:600;">⚠️ Cutoff passed (8:00 PM IST)</span>`;
       }
+    } else {
+      statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">${status && status !== 'unknown' ? `Status: ${escapeHtml(status)}` : 'Delivery Status Unavailable'}</span>`;
+      actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Delivery status unavailable</span>`;
     }
 
     inspector.innerHTML = `
@@ -2408,32 +2449,7 @@
       const toggleBtn = e.target.closest('[data-toggle-sub]');
       if (toggleBtn) {
         const id = toggleBtn.dataset.toggleSub;
-        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
-        if (sub) {
-          const isCurrentlyActive = sub.status === 'active';
-          const endpoint = isCurrentlyActive ? `/api/v1/subscriptions/${id}/pause` : `/api/v1/subscriptions/${id}/resume`;
-          try {
-            toggleBtn.disabled = true;
-            const res = await apiRequest(endpoint, { method: 'POST', body: JSON.stringify({}) });
-            if (res && res.success) {
-              sub.status = res.status;
-              if (res.nextDelivery) sub.nextDelivery = res.nextDelivery;
-              showToast(res.message || (isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!'));
-            } else {
-              sub.status = isCurrentlyActive ? 'paused' : 'active';
-              showToast(isCurrentlyActive ? 'Subscription paused.' : 'Subscription resumed!');
-            }
-          } catch (err) {
-            console.warn('API subscription status update failed:', err);
-            sub.status = isCurrentlyActive ? 'paused' : 'active';
-          } finally {
-            toggleBtn.disabled = false;
-          }
-          try {
-            localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
-          } catch {}
-          renderSubscriptions();
-        }
+        await toggleSubscriptionStatus(id, toggleBtn);
         return;
       }
 
