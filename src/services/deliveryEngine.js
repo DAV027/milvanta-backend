@@ -65,9 +65,9 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
 
       // 1a. Require verified payment evidence (fail closed if active row lacks payment proof)
       const hasPaymentEvidence = Boolean(
-        subNotes.lastPaymentId ||
-        subNotes.paymentId ||
-        (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
+        (subNotes.lastPaymentId || subNotes.paymentId) &&
+        subNotes.fulfillmentEntitled !== false &&
+        subNotes.authType !== 'mandate_only'
       );
       if (!hasPaymentEvidence) {
         skippedCount++;
