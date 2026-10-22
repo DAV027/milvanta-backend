@@ -592,9 +592,9 @@ describe('Milvanta — Subscription, Refunds, Calendar & Admin Suite', () => {
       }
     });
 
-    it('profile.html has incremented version query string (?v=20261022-1)', () => {
+    it('profile.html has incremented version query string (?v=20261022-2)', () => {
       const html = fs.readFileSync(path.resolve('frontend/profile.html'), 'utf8');
-      assert.match(html, /profile\.js\?v=20261022-1/, 'profile.html must reference profile.js with version ?v=20261022-1');
+      assert.match(html, /profile\.js\?v=20261022-2/, 'profile.html must reference profile.js with version ?v=20261022-2');
     });
 
     it('milvanta-cloudflare-upload.zip exists and contains non-zero bytes', () => {

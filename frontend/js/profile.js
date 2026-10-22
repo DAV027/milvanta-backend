@@ -249,7 +249,7 @@
       const isVerified = Boolean(state.customer.phone_verified || state.customer.phone_verified_at);
       const verifiedBadge = isVerified
         ? ' <span style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px;">✓ Verified</span>'
-        : ' <button type="button" id="btnVerifyPhoneOtp" style="background:#e0f2fe; color:#0369a1; border:none; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px; cursor:pointer;">Verify Mobile via OTP →</button>';
+        : ' <button type="button" id="btnVerifyPhoneOtp" style="background:#e0f2fe; color:#0369a1; border:none; font-size:0.75rem; font-weight:700; padding:2px 8px; border-radius:9999px; margin-left:6px; cursor:pointer;">Verify mobile number →</button>';
       phoneEl.innerHTML = state.customer.phone ? `+91 ${escapeHtml(state.customer.phone)}${verifiedBadge}` : '—';
 
       $('#btnVerifyPhoneOtp')?.addEventListener('click', () => promptPhoneOtpVerification(state.customer.phone));
@@ -268,57 +268,78 @@
     if ($('#profileDetailCity')) $('#profileDetailCity').textContent = `${area}, Hyderabad`;
   }
 
-  // Mobile OTP Verification Handler
+  // Accessible inline OTP form; codes stay in memory and never enter localStorage.
+  let otpResendAt = 0;
+  let otpCountdown;
   async function promptPhoneOtpVerification(phone) {
-    if (!phone) {
-      alert('Please enter a phone number in your profile first.');
-      return;
-    }
-
+    if (!phone) return;
+    const box = $('#whatsappOtpPanel');
+    box.hidden = false;
+    $('#whatsappOtpCode').focus();
+    await sendProfileOtp(phone);
+  }
+  async function sendProfileOtp(phone) {
+    if (Date.now() < otpResendAt) return;
+    const button = $('#whatsappOtpResend');
+    button.disabled = true;
+    $('#whatsappOtpStatus').textContent = 'Sending verification code...';
     try {
-      showToast('Sending OTP to +91 ' + phone + '...');
-      const sendRes = await apiRequest('/api/v1/auth/phone/send-otp', {
-        method: 'POST',
-        body: JSON.stringify({ phone })
-      });
-
-      if (!sendRes?.success) {
-        if (sendRes?.error === 'sms_service_unavailable' || sendRes?.message?.includes('pending configuration')) {
-          alert('Mobile OTP Service Notice:\nTwilio SMS verification is currently pending configuration. Your account remains active and usable.');
-        } else {
-          alert(sendRes?.message || 'Failed to send OTP. Please try again.');
-        }
-        return;
-      }
-
-      const code = prompt(`Enter the verification code sent to +91 ${phone}:`);
-      if (!code || !code.trim()) return;
-
-      const verifyRes = await apiRequest('/api/v1/auth/phone/verify-otp', {
-        method: 'POST',
-        body: JSON.stringify({ phone, code: code.trim() })
-      });
-
-      if (verifyRes?.verified) {
-        if (state.customer) {
-          state.customer.phone_verified = true;
-          state.customer.phone_verified_at = new Date().toISOString();
-          try {
-            localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
-          } catch {}
-        }
-        renderUserInfo();
-        showToast('✓ Mobile number verified successfully with Milvanta!');
-      } else {
-        alert(verifyRes?.message || 'Incorrect verification code. Please try again.');
-      }
-    } catch (err) {
-      if (err.message?.includes('unavailable') || err.message?.includes('pending configuration') || err.message?.includes('503')) {
-        alert('Mobile OTP Service Notice:\nTwilio SMS verification is currently pending configuration. Your account remains active and usable.');
-      } else {
-        alert(err.message || 'Verification request failed. Please check network and try again.');
-      }
+      const result = await apiRequest('/api/v1/auth/phone/send-otp', {method:'POST',body:JSON.stringify({phone})});
+      if (!result.success) throw new Error(result.message || 'Unable to send code.');
+      otpResendAt = Date.now() + (result.cooldownSeconds || 60)*1000;
+      $('#whatsappOtpStatus').textContent = result.message || 'Check WhatsApp for your code.';
+      clearInterval(otpCountdown);
+      const tick = () => {
+        const left = Math.max(0, Math.ceil((otpResendAt-Date.now())/1000));
+        button.disabled = left>0;
+        button.textContent = left ? `Resend in ${left}s` : 'Resend OTP';
+        if (!left) clearInterval(otpCountdown);
+      };
+      tick(); otpCountdown = setInterval(tick,1000);
+    } catch(error) {
+      button.disabled=false;
+      $('#whatsappOtpStatus').textContent=error.message || 'Unable to send code. Try again later.';
     }
+  }
+  async function loadWhatsAppPreferences() {
+    try {
+      const config = await apiRequest('/api/v1/auth/phone/config');
+      $('#whatsappPreferences').hidden = config.provider !== 'whatsapp';
+      $('#whatsappOtpChannel').textContent = config.provider === 'whatsapp' ? 'WhatsApp' : 'SMS';
+      if (config.provider !== 'whatsapp') return;
+      const p = await apiRequest('/api/v1/customers/notifications/preferences');
+      $('#whatsappConsent').checked = p.consent === true;
+      $('#whatsappLanguage').value = p.language || 'en';
+      document.querySelectorAll('[data-wa-category]').forEach(el => {el.checked=(p.categories || []).includes(el.value);});
+    } catch(error) { $('#whatsappPreferencesStatus').textContent=error.message; }
+  }
+  function setupWhatsAppForms() {
+    $('#whatsappOtpResend')?.addEventListener('click',()=>sendProfileOtp(state.customer.phone));
+    $('#whatsappOtpForm')?.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const button=$('#whatsappOtpVerify');button.disabled=true;
+      try {
+        const result=await apiRequest('/api/v1/auth/phone/verify-otp',{method:'POST',body:JSON.stringify({phone:state.customer.phone,code:$('#whatsappOtpCode').value.trim()})});
+        if(!result.verified) throw new Error(result.message || 'Invalid or expired code.');
+        $('#whatsappOtpCode').value='';
+        const session=await apiRequest('/api/v1/auth/me');
+        state.customer=session.customer || session.user;
+        localStorage.setItem('milvanta-user',JSON.stringify(state.customer));
+        $('#whatsappOtpStatus').textContent='Mobile number verified successfully.';
+        renderUserInfo();
+      } catch(error) {$('#whatsappOtpStatus').textContent=error.message;}
+      finally {button.disabled=false;}
+    });
+    $('#whatsappPreferencesForm')?.addEventListener('submit',async event=>{
+      event.preventDefault();
+      const button=$('#whatsappPreferencesSave');button.disabled=true;
+      try {
+        await apiRequest('/api/v1/customers/notifications/preferences',{method:'PATCH',body:JSON.stringify({enabled:$('#whatsappConsent').checked,language:$('#whatsappLanguage').value,categories:Array.from(document.querySelectorAll('[data-wa-category]:checked'),el=>el.value)})});
+        $('#whatsappPreferencesStatus').textContent=$('#whatsappConsent').checked?'WhatsApp preferences saved.':'You have opted out of WhatsApp notifications.';
+      } catch(error) {$('#whatsappPreferencesStatus').textContent=error.message;}
+      finally {button.disabled=false;}
+    });
+    loadWhatsAppPreferences();
   }
 
   // Update Cart Badge Count
@@ -3718,6 +3739,7 @@
     }
 
     setupListeners();
+    setupWhatsAppForms();
 
     // Monthly Calendar Navigation Listeners
     $('#calPrevMonthBtn')?.addEventListener('click', () => {

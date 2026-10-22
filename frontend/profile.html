@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=20261012-3" />
     <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
-    <link rel="stylesheet" href="css/profile.css?v=20261022-1" />
+    <link rel="stylesheet" href="css/profile.css?v=20261022-2" />
   </head>
   <body>
     <div class="page-shell">
@@ -230,7 +230,34 @@
                 </div>
               </div>
             </div>
-          </section>
+
+            <div id="whatsappOtpPanel" hidden style="padding:16px;max-width:480px">
+              <h3>Verify mobile number via <span id="whatsappOtpChannel">WhatsApp</span></h3>
+              <form id="whatsappOtpForm">
+                <label for="whatsappOtpCode">Six-digit verification code</label>
+                <input id="whatsappOtpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required style="width:100%;padding:12px;box-sizing:border-box" />
+                <button id="whatsappOtpVerify" class="account-action-pill" type="submit">Verify code</button>
+                <button id="whatsappOtpResend" class="account-action-pill" type="button">Send OTP via WhatsApp</button>
+              </form>
+              <p id="whatsappOtpStatus" role="status" aria-live="polite"></p>
+            </div>
+            <div id="whatsappPreferences" hidden style="padding:16px;max-width:480px">
+              <h3>WhatsApp delivery notifications</h3>
+              <form id="whatsappPreferencesForm">
+                <label><input id="whatsappConsent" type="checkbox" /> I agree to receive Milvanta order, subscription, delivery and payment updates on my verified WhatsApp number.</label>
+                <p>Choose updates:</p>
+                <label><input type="checkbox" data-wa-category value="orders" /> Orders</label>
+                <label><input type="checkbox" data-wa-category value="subscriptions" /> Subscriptions</label>
+                <label><input type="checkbox" data-wa-category value="deliveries" /> Deliveries</label>
+                <label><input type="checkbox" data-wa-category value="billing" /> Payment reminders</label>
+                <label for="whatsappLanguage">Language</label>
+                <select id="whatsappLanguage"><option value="en">English</option></select>
+                <p>Uncheck consent and save to opt out, or reply STOP on WhatsApp. Verification codes are sent only when you request them.</p>
+                <button id="whatsappPreferencesSave" type="submit" class="account-action-pill">Save preferences</button>
+              </form>
+              <p id="whatsappPreferencesStatus" role="status" aria-live="polite"></p>
+            </div>
+</section>
 
           <!-- Tab 2: My Orders Section -->
           <section id="tabPanel-orders" class="tab-panel" role="tabpanel" aria-labelledby="tab-orders">
@@ -1028,6 +1055,6 @@
     <script src="js/config.js?v=20261019-1"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="js/delivery.js?v=20261016-5"></script>
-    <script src="js/profile.js?v=20261022-1"></script>
+    <script src="js/profile.js?v=20261022-2"></script>
   </body>
 </html>

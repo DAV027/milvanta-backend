@@ -51,9 +51,9 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       assert.strictEqual(scriptJsPrimary, scriptJsCloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261021-4)', () => {
-      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261021-4'));
-      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261021-4'));
+    it('profile.html has incremented cache-busting version strings (?v=20261022-2)', () => {
+      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261022-2'));
+      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261022-2'));
     });
 
     it('milvanta-cloudflare-upload.zip exists and is non-empty', () => {
