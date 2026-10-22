@@ -13,7 +13,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    branch: fix/phase1-payment-security
+    branch: feature/meta-whatsapp-cloud-api
     buildCommand: npm ci
     preDeployCommand: node src/migrate.js --staging
     startCommand: npm start
@@ -49,6 +49,30 @@ services:
         value: "Milvanta Staging <orders@milvanta.in>"
       - key: ADMIN_EMAIL
         value: "projects@milvanta.in"
+      - key: NOTIFICATION_PROVIDER
+        value: whatsapp
+      - key: WHATSAPP_ENABLED
+        value: "false"
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: en
+      - key: WHATSAPP_APPROVED_TEMPLATES
+        value: ""
+      - key: DELIVERY_REMINDER_TIME_IST
+        value: "21:00"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_WABA_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_OTP_HASH_SECRET
+        sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN
@@ -65,7 +89,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    branch: fix/phase1-payment-security
+    branch: feature/meta-whatsapp-cloud-api
     schedule: "45 14 * * *" # Runs daily at 20:15 IST (14:45 UTC)
     buildCommand: npm ci
     startCommand: node scripts/daily-delivery-scheduler.js
@@ -84,6 +108,30 @@ services:
           property: connectionString
       - key: DATABASE_SSL
         value: "true"
+      - key: NOTIFICATION_PROVIDER
+        value: whatsapp
+      - key: WHATSAPP_ENABLED
+        value: "false"
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: en
+      - key: WHATSAPP_APPROVED_TEMPLATES
+        value: ""
+      - key: DELIVERY_REMINDER_TIME_IST
+        value: "21:00"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_WABA_ID
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_OTP_HASH_SECRET
+        sync: false
       - key: TWILIO_ACCOUNT_SID
         sync: false
       - key: TWILIO_AUTH_TOKEN

@@ -20,6 +20,7 @@ export const DLT_REGULATORY_INFO = {
 };
 
 export const SMS_TEMPLATES = {
+  SUBSCRIPTION_CANCELLED: { name:'SUBSCRIPTION_CANCELLED', dltStatus:'pending_approval', format: p => `Milvanta: Your ${p.productName} subscription has been cancelled.` },
   ORDER_CONFIRMED: {
     name: 'ORDER_CONFIRMED',
     dltTemplateId: '1407168000000000001',

@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
  * Server-authoritative PostgreSQL lifecycle, calendar, cutoff enforcement, and billing adjustments
  */
 
-import { queueNotification } from './twilioService.js';
+import { queueNotification } from './notificationService.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -566,12 +566,10 @@ export async function pauseSubscription(pool, { subscriptionId, customerId, star
       [subscriptionId, customerId, JSON.stringify({ effectiveStartDate, endDate, reason })]
     );
 
-    await client.query('COMMIT');
-
     // Asynchronously queue SMS notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_pause_${subscriptionId}_${effectiveStartDate}`;
-      queueNotification(pool, {
+      await queueNotification(client, {
         customerId,
         phone: sub.phone,
         templateKey: 'SUBSCRIPTION_PAUSED',
@@ -580,8 +578,10 @@ export async function pauseSubscription(pool, { subscriptionId, customerId, star
           pauseDate: effectiveStartDate
         },
         idempotencyKey
-      }).catch(() => {});
+      });
     }
+
+    await client.query('COMMIT');
 
     return {
       success: true,
@@ -680,12 +680,10 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
       [subscriptionId, customerId, JSON.stringify({ resumedAt: new Date().toISOString(), nextDelivery })]
     );
 
-    await client.query('COMMIT');
-
     // Queue SMS notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_resume_${subscriptionId}_${Date.now().toString(36)}`;
-      queueNotification(pool, {
+      await queueNotification(client, {
         customerId,
         phone: sub.phone,
         templateKey: 'SUBSCRIPTION_RESUMED',
@@ -694,8 +692,10 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
           nextDate: nextDelivery.split(',')[0]
         },
         idempotencyKey
-      }).catch(() => {});
+      });
     }
+
+    await client.query('COMMIT');
 
     return {
       success: true,
@@ -1106,6 +1106,7 @@ export async function cancelSubscription(pool, { subscriptionId, customerId, rea
       [subscriptionId, customerId, JSON.stringify({ reason, cancelledAt: new Date().toISOString() })]
     );
 
+    if (sub.phone) await queueNotification(client,{customerId,phone:sub.phone,templateKey:'SUBSCRIPTION_CANCELLED',params:{productName:sub.product_name},idempotencyKey:`sms_sub_cancel_${subscriptionId}`});
     await client.query('COMMIT');
 
     return {
@@ -1246,6 +1247,7 @@ export async function cancelSubscriptionWithRefund(pool, {
       ]
     );
 
+    if (sub.phone) await queueNotification(client,{customerId,phone:sub.phone,templateKey:'SUBSCRIPTION_CANCELLED',params:{productName:sub.product_name},idempotencyKey:`sms_sub_cancel_${subscriptionId}`});
     await client.query('COMMIT');
 
     return {

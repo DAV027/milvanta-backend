@@ -13,7 +13,7 @@ import {
   derivePaidThroughDate,
   getEffectivePaidThroughDate
 } from './subscriptionService.js';
-import { queueNotification } from './twilioService.js';
+import { queueNotification } from './notificationService.js';
 
 // Valid delivery lifecycle status transitions
 export const VALID_STATUS_TRANSITIONS = {
@@ -185,7 +185,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
         // Queue next-day reminder notification for 9:00 PM IST (if customer has phone)
         if (sub.phone) {
           const idempotencyKey = `sms_reminder_${sub.id}_${targetDate}`;
-          queueNotification(client, {
+          await queueNotification(client, {
             customerId: sub.customer_id,
             phone: sub.phone,
             templateKey: 'NEXT_DAY_REMINDER',
@@ -193,8 +193,10 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
               productName: sub.product_name,
               quantity: sub.quantity
             },
-            idempotencyKey
-          }).catch(() => {});
+            idempotencyKey,
+            deliveryOrderId: insertRes.rows[0].id,
+            scheduledAt: reminderScheduledAt(targetDate)
+          });
         }
       } else {
         skippedCount++; // Already exists
@@ -384,50 +386,52 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
       );
     }
 
-    await client.query('COMMIT');
-
-    // Trigger Twilio SMS notifications on key fulfillment transitions
+    // Queue fulfillment notifications atomically with the transition
     if (order.phone) {
       if (status === 'out_for_delivery') {
         const idempotencyKey = `sms_ofd_${order.id}_${order.delivery_date}`;
-        queueNotification(pool, {
+        await queueNotification(client, {
           customerId: order.customer_id,
           phone: order.phone,
           templateKey: 'OUT_FOR_DELIVERY',
+          deliveryOrderId: order.id,
           params: {
             productName: order.product_name,
             quantity: order.quantity
           },
           idempotencyKey
-        }).catch(() => {});
+        });
       } else if (status === 'delivered') {
         const idempotencyKey = `sms_dlv_${order.id}_${order.delivery_date}`;
-        const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-        queueNotification(pool, {
+        const timeStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+        await queueNotification(client, {
           customerId: order.customer_id,
           phone: order.phone,
           templateKey: 'DELIVERY_COMPLETED',
+          deliveryOrderId: order.id,
           params: {
             productName: order.product_name,
             quantity: order.quantity,
             time: timeStr
           },
           idempotencyKey
-        }).catch(() => {});
+        });
       } else if (status === 'failed') {
         const idempotencyKey = `sms_fail_${order.id}_${order.delivery_date}`;
-        queueNotification(pool, {
+        await queueNotification(client, {
           customerId: order.customer_id,
           phone: order.phone,
           templateKey: 'DELIVERY_FAILED',
+          deliveryOrderId: order.id,
           params: {
             reason: failedReason
           },
           idempotencyKey
-        }).catch(() => {});
+        });
       }
     }
 
+    await client.query('COMMIT');
     return {
       success: true,
       deliveryOrderId,
@@ -444,3 +448,12 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
   }
 }
 
+
+export function reminderScheduledAt(targetDate) {
+  const time=process.env.DELIVERY_REMINDER_TIME_IST || '21:00';
+  if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error('invalid_delivery_reminder_time');
+  const previous=new Date(`${targetDate}T00:00:00+05:30`);
+  previous.setUTCDate(previous.getUTCDate()-1);
+  const day=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata'}).format(previous);
+  return new Date(`${day}T${time}:00+05:30`);
+}

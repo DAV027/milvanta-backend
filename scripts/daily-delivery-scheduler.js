@@ -13,7 +13,7 @@
 import 'dotenv/config';
 import pg from 'pg';
 import { generateDailyDeliveries } from '../src/services/deliveryEngine.js';
-import { processNotificationOutbox } from '../src/services/twilioService.js';
+import { processNotificationOutbox, queueBillingReminders } from '../src/services/notificationService.js';
 import { getNowInIST, formatDateYMD } from '../src/services/subscriptionService.js';
 import { assertStagingDatabaseIsolation } from '../src/migrate.js';
 
@@ -62,6 +62,7 @@ async function main() {
 
     // 2. Process Notification Outbox (send pending reminders / SMS)
     console.log('Processing notification outbox...');
+    await queueBillingReminders(pool);
     const notifyRes = await processNotificationOutbox(pool, 50);
     console.log(`✅ Processed ${notifyRes.processed} pending notifications.`);
 

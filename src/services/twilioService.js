@@ -359,7 +359,7 @@ export async function processNotificationOutbox(pool, limit = 20) {
     const { rows: pending } = await client.query(
       `SELECT id, customer_id, phone, message_body, template_name, idempotency_key, attempts
        FROM notification_outbox
-       WHERE status = 'pending' AND scheduled_at <= NOW()
+       WHERE channel = 'sms' AND status = 'pending' AND scheduled_at <= NOW()
        ORDER BY scheduled_at ASC
        LIMIT $1
        FOR UPDATE SKIP LOCKED`,
