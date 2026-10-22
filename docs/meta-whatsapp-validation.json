@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-22",
+  "node": "24.21.0",
+  "postgres": "18.4 UTF8 local-only",
+  "new_whatsapp": {
+    "pass": 14,
+    "fail": 0
+  },
+  "focused_regressions": {
+    "pass": 163,
+    "fail": 0
+  },
+  "full": {
+    "tests": 328,
+    "pass": 316,
+    "fail": 12,
+    "new_failures_vs_base": []
+  },
+  "base_814468e": {
+    "tests": 314,
+    "pass": 301,
+    "fail": 13
+  },
+  "remaining_baseline_failures": [
+    "verifies frontend/admin.html does NOT use innerHTML for dynamic tables or error reporting",
+    "allows access to admin routes when valid x-admin-key header is provided",
+    "rejects order checkout with invalid idempotency key",
+    "rejects POST /api/v1/subscriptions if paymentId is missing with 400",
+    "rejects POST /api/v1/subscriptions if paymentId cannot be verified with 400/402",
+    "safely handles subscription.halted as paused (recoverable, NOT cancelled)",
+    "safely handles subscription.resumed back to active",
+    "safely handles subscription.completed as expired",
+    "handles idempotent duplicate webhooks gracefully",
+    "rejects order with outside-Hyderabad pincode (422)",
+    "blocks non-admin users from triggering daily delivery generation",
+    "blocks unauthenticated quantity change requests with 401"
+  ],
+  "mobile": {
+    "viewport": "390x844",
+    "otp": true,
+    "resend_countdown": true,
+    "failed_send": true,
+    "registration": true,
+    "signup_consent_saved": true,
+    "mandatory_skip_hidden": true,
+    "preferences_and_opt_out": true,
+    "horizontal_overflow": false,
+    "page_errors": []
+  },
+  "render_scheduler": "unverified: Milvanta workspace list_services returned null",
+  "live_messages_sent": 0,
+  "production_deployed": false
+}
