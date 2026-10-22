@@ -2263,7 +2263,7 @@ async function startPhoneOtpVerification(phone) {
   forgotContainer?.classList.add('hidden');
   otpContainer?.classList.remove('hidden');
 
-  $('#accountTitle').textContent = 'Verify Mobile Number';
+  $('#accountTitle').textContent = 'Verify with WhatsApp';
   $('#accountMessage').textContent = '';
 
   if (descEl) {
@@ -3676,12 +3676,9 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res && res.verified) {
         if (pendingWhatsAppConsent) {
           try {
-            const config = await apiRequest('/api/v1/auth/phone/config');
-            if (config.provider === 'whatsapp') {
-              await apiRequest('/api/v1/customers/notifications/preferences', {
-                method: 'PATCH', body: JSON.stringify({enabled: true})
-              });
-            }
+            await apiRequest('/api/v1/customers/notifications/preferences', {
+              method: 'PATCH', body: JSON.stringify({enabled: true})
+            });
           } catch {
             showStoreToast('Phone verified. Save WhatsApp preferences in your profile.');
           }

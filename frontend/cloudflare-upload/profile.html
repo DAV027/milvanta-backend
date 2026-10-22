@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=20261012-3" />
     <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
-    <link rel="stylesheet" href="css/profile.css?v=20261022-2" />
+    <link rel="stylesheet" href="css/profile.css?v=20261022-3" />
   </head>
   <body>
     <div class="page-shell">
@@ -232,17 +232,17 @@
             </div>
 
             <div id="whatsappOtpPanel" hidden style="padding:16px;max-width:480px">
-              <h3>Verify mobile number via <span id="whatsappOtpChannel">WhatsApp</span></h3>
+              <h3>Verify with WhatsApp</h3>
               <form id="whatsappOtpForm">
                 <label for="whatsappOtpCode">Six-digit verification code</label>
                 <input id="whatsappOtpCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required style="width:100%;padding:12px;box-sizing:border-box" />
                 <button id="whatsappOtpVerify" class="account-action-pill" type="submit">Verify code</button>
-                <button id="whatsappOtpResend" class="account-action-pill" type="button">Send OTP via WhatsApp</button>
+                <button id="whatsappOtpResend" class="account-action-pill" type="button">Send OTP to WhatsApp</button>
               </form>
               <p id="whatsappOtpStatus" role="status" aria-live="polite"></p>
             </div>
             <div id="whatsappPreferences" hidden style="padding:16px;max-width:480px">
-              <h3>WhatsApp delivery notifications</h3>
+              <h3>WhatsApp Notifications</h3>
               <form id="whatsappPreferencesForm">
                 <label><input id="whatsappConsent" type="checkbox" /> I agree to receive Milvanta order, subscription, delivery and payment updates on my verified WhatsApp number.</label>
                 <p>Choose updates:</p>
@@ -1055,6 +1055,6 @@
     <script src="js/config.js?v=20261019-1"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="js/delivery.js?v=20261016-5"></script>
-    <script src="js/profile.js?v=20261022-2"></script>
+    <script src="js/profile.js?v=20261022-3"></script>
   </body>
 </html>

@@ -1802,7 +1802,7 @@
       // ==========================================
       async function loadRefunds() {
         const tbody = document.getElementById('refundsTableBody');
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">Loading authoritative refund requests...</td></tr>';
+        showRefundTableMessage(tbody, 'Loading authoritative refund requests...');
 
         try {
           const params = new URLSearchParams({
@@ -1824,54 +1824,77 @@
           renderRefundsTable(loadedRefundsList);
           updateRefundPagination();
         } catch (err) {
-          tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 24px; color: #dc2626;">Failed to load refunds: ${escapeHtml(err.message)}</td></tr>`;
+          showRefundTableMessage(tbody, `Failed to load refunds: ${err.message}`, true);
         }
+      }
+
+      function showRefundTableMessage(tbody, message, isError = false) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 10;
+        cell.style.cssText = `text-align:center; padding:${isError ? 24 : 30}px; color:${isError ? '#dc2626' : '#64748b'};`;
+        cell.textContent = message;
+        row.appendChild(cell);
+        tbody.replaceChildren(row);
       }
 
       function renderRefundsTable(requests) {
         const tbody = document.getElementById('refundsTableBody');
         if (!requests.length) {
-          tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">No refund requests match the current filters.</td></tr>';
+          showRefundTableMessage(tbody, 'No refund requests match the current filters.');
           return;
         }
-
-        tbody.innerHTML = requests.map((r) => {
-          const isPending = r.status === 'pending';
+        const rows = requests.map((r) => {
+          const row = document.createElement('tr');
+          const addCell = (tag, text, style = '', className = '') => {
+            const cell = document.createElement('td');
+            const element = document.createElement(tag);
+            element.textContent = text;
+            element.style.cssText = style;
+            element.className = className;
+            cell.appendChild(element);
+            row.appendChild(cell);
+            return cell;
+          };
           const statusClass = r.status === 'processed' || r.status === 'approved' ? 'badge-active'
             : r.status === 'rejected' ? 'badge-cancelled'
             : r.status === 'failed' ? 'badge-expired' : 'badge-paused';
-
           const targetRef = r.requestType === 'subscription'
-            ? `Sub #${r.subscriptionId || '–'}`
-            : `Order #${r.orderNumber || r.orderId || '–'}`;
-
-          return `
-            <tr>
-              <td><strong>${escapeHtml(r.requestNumber)}</strong></td>
-              <td><span style="font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${r.requestType === 'subscription' ? '#0284c7' : '#059669'};">${r.requestType}</span></td>
-              <td>
-                <div style="font-weight:600; color:#0f172a;">${escapeHtml(r.customerName || '–')}</div>
-                <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(r.customerPhone || r.customerEmail || '–')}</div>
-              </td>
-              <td><span style="font-weight:600; color:#334155;">${targetRef}</span></td>
-              <td><strong style="color:#0f172a;">₹${(r.requestedAmount || 0).toLocaleString('en-IN')}</strong></td>
-              <td><strong style="color:#059669;">${r.approvedAmount ? '₹' + r.approvedAmount.toLocaleString('en-IN') : '–'}</strong></td>
-              <td><span style="font-size:0.78rem; text-transform:capitalize;">${(r.reasonCategory || 'other').replace(/_/g, ' ')}</span></td>
-              <td><span class="status-badge ${statusClass}">${r.status}</span></td>
-              <td style="font-size:0.78rem; color:#64748b;">${new Date(r.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' })}</td>
-              <td>
-                ${isPending ? `
-                  <div style="display:flex; gap:6px;">
-                    <button type="button" class="btn-update-order btn-approve-refund" data-ref-id="${r.id}" style="background:#059669; color:#fff; border:none; padding:4px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;">Approve</button>
-                    <button type="button" class="btn-reset btn-reject-refund" data-ref-id="${r.id}" style="padding:4px 8px; font-size:0.75rem; color:#dc2626; border-color:#fca5a5;">Reject</button>
-                  </div>
-                ` : `
-                  <span style="font-size:0.75rem; color:#64748b;">${r.reviewerName ? 'Reviewed by ' + r.reviewerName : 'Completed'}</span>
-                `}
-              </td>
-            </tr>
-          `;
-        }).join('');
+            ? `Sub #${r.subscriptionId || '\u2014'}`
+            : `Order #${r.orderNumber || r.orderId || '\u2014'}`;
+          addCell('strong', r.requestNumber);
+          addCell('span', r.requestType, `font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${r.requestType === 'subscription' ? '#0284c7' : '#059669'};`);
+          const customerCell = addCell('div', r.customerName || '\u2014', 'font-weight:600; color:#0f172a;');
+          const contact = document.createElement('div');
+          contact.style.cssText = 'font-size:0.75rem; color:#64748b;';
+          contact.textContent = r.customerPhone || r.customerEmail || '\u2014';
+          customerCell.appendChild(contact);
+          addCell('span', targetRef, 'font-weight:600; color:#334155;');
+          addCell('strong', '\u20b9' + (r.requestedAmount || 0).toLocaleString('en-IN'), 'color:#0f172a;');
+          addCell('strong', r.approvedAmount ? '\u20b9' + r.approvedAmount.toLocaleString('en-IN') : '\u2014', 'color:#059669;');
+          addCell('span', (r.reasonCategory || 'other').replace(/_/g, ' '), 'font-size:0.78rem; text-transform:capitalize;');
+          addCell('span', r.status, '', `status-badge ${statusClass}`);
+          addCell('span', new Date(r.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' }), 'font-size:0.78rem; color:#64748b;');
+          if (r.status === 'pending') {
+            const actions = addCell('div', '', 'display:flex; gap:6px;');
+            const container = actions.firstChild;
+            for (const action of ['approve', 'reject']) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = action === 'approve' ? 'btn-update-order btn-approve-refund' : 'btn-reset btn-reject-refund';
+              button.dataset.refId = String(r.id);
+              button.textContent = action === 'approve' ? 'Approve' : 'Reject';
+              button.style.cssText = action === 'approve'
+                ? 'background:#059669; color:#fff; border:none; padding:4px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;'
+                : 'padding:4px 8px; font-size:0.75rem; color:#dc2626; border-color:#fca5a5;';
+              container.appendChild(button);
+            }
+          } else {
+            addCell('span', r.reviewerName ? 'Reviewed by ' + r.reviewerName : 'Completed', 'font-size:0.75rem; color:#64748b;');
+          }
+          return row;
+        });
+        tbody.replaceChildren(...rows);
       }
 
       function updateRefundPagination() {

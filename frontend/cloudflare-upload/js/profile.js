@@ -303,10 +303,7 @@
   }
   async function loadWhatsAppPreferences() {
     try {
-      const config = await apiRequest('/api/v1/auth/phone/config');
-      $('#whatsappPreferences').hidden = config.provider !== 'whatsapp';
-      $('#whatsappOtpChannel').textContent = config.provider === 'whatsapp' ? 'WhatsApp' : 'SMS';
-      if (config.provider !== 'whatsapp') return;
+      $('#whatsappPreferences').hidden = false;
       const p = await apiRequest('/api/v1/customers/notifications/preferences');
       $('#whatsappConsent').checked = p.consent === true;
       $('#whatsappLanguage').value = p.language || 'en';
