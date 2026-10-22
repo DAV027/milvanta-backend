@@ -635,6 +635,7 @@
     <nav class="admin-tabs">
       <button class="tab-btn active" id="tabBtnSubscriptions" data-tab="subscriptions">🥛 Milk Subscriptions (<span id="tabCountSubs">0</span>)</button>
       <button class="tab-btn" id="tabBtnOrders" data-tab="orders">📦 Customer Orders (<span id="tabCountOrders">0</span>)</button>
+      <button class="tab-btn" id="tabBtnRefunds" data-tab="refunds">💰 Refund Requests (<span id="tabCountRefunds">0</span>)</button>
     </nav>
 
     <!-- Tab 1: Milk Subscriptions -->
@@ -765,6 +766,63 @@
       </div>
     </section>
 
+    <!-- Tab 3: Refund Requests Management -->
+    <section id="refundsSection" class="hidden">
+      <div class="filter-bar">
+        <div class="filter-group">
+          <input type="text" class="filter-input" id="refundSearchInput" placeholder="Search reference, customer, phone, payment ID..." />
+        </div>
+        <div class="filter-group">
+          <select class="filter-select" id="refundStatusFilter">
+            <option value="all">All Refund Statuses</option>
+            <option value="pending" selected>Pending Review</option>
+            <option value="processed">Processed / Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="failed">Gateway Failed</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <select class="filter-select" id="refundTypeFilter">
+            <option value="all">All Request Types</option>
+            <option value="subscription">Subscriptions Only</option>
+            <option value="order">Store Orders Only</option>
+          </select>
+        </div>
+        <button class="btn-reset" id="btnResetRefundFilters">Reset</button>
+      </div>
+
+      <div class="table-wrapper">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Request Reference</th>
+              <th>Type</th>
+              <th>Customer</th>
+              <th>Target Ref / Item</th>
+              <th>Requested</th>
+              <th>Approved</th>
+              <th>Reason Category</th>
+              <th>Status</th>
+              <th>Date</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="refundsTableBody">
+            <tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">Loading refund requests...</td></tr>
+          </tbody>
+        </table>
+
+        <div class="pagination-bar">
+          <span id="refundPaginationLabel">Showing 0-0 of 0 requests</span>
+          <div class="pagination-controls">
+            <button class="btn-page" id="btnRefundPrevPage" disabled>← Previous</button>
+            <span id="refundPageIndicator">Page 1</span>
+            <button class="btn-page" id="btnRefundNextPage" disabled>Next →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
   <!-- Status Update Modal -->
@@ -804,6 +862,74 @@
     </div>
   </div>
 
+  <!-- Admin Approve Refund Modal with Operator Confirmation -->
+  <div class="modal-backdrop hidden" id="adminApproveModal">
+    <div class="modal-content" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3 style="color: #065f46; margin: 0;">Approve Refund Request</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseApproveModal">&times;</button>
+      </div>
+      <form id="adminApproveForm" style="padding-top: 14px;">
+        <input type="hidden" id="approveRefundId" />
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 0.85rem; line-height: 1.5;">
+          <div>Reference: <strong id="approveModalRef" style="color: #0f172a;">–</strong></div>
+          <div>Customer: <strong id="approveModalCustomer" style="color: #0f172a;">–</strong> (<span id="approveModalContact">–</span>)</div>
+          <div>Payment ID: <strong id="approveModalPaymentId" style="color: #0f172a;">–</strong></div>
+          <div>Requested Amount: <strong id="approveModalRequestedAmt" style="color: #065f46;">₹0</strong></div>
+        </div>
+
+        <div style="margin-bottom: 12px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Approved Amount (₹)</label>
+          <input type="number" step="0.01" min="1" id="approveAmountInput" required class="filter-input" style="width: 100%; box-sizing: border-box; font-size: 1rem; font-weight: 700; color: #065f46;" />
+        </div>
+
+        <div style="margin-bottom: 14px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Admin Audit Note (Optional)</label>
+          <input type="text" id="approveNotesInput" class="filter-input" style="width: 100%; box-sizing: border-box;" placeholder="Approval reason or gateway verification note" />
+        </div>
+
+        <!-- High-Visibility Gateway Execution Warning -->
+        <div style="background: #fffbeb; border: 1.5px solid #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 0.8rem; color: #92400e; margin-bottom: 16px; line-height: 1.4;">
+          <strong>⚠️ Immediate Gateway Execution Notice:</strong><br />
+          Approving this request will immediately invoke the <strong>Razorpay Refund API</strong> to disburse funds directly back to the customer's original payment method. This cannot be undone.
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <button type="submit" id="btnConfirmApproveRefund" class="btn-admin-login" style="flex: 1.5; background: #059669; border: none; cursor: pointer;">Confirm &amp; Disburse Refund</button>
+          <button type="button" class="btn-reset" id="btnCancelApproveModal" style="flex: 1;">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Admin Reject Refund Modal -->
+  <div class="modal-backdrop hidden" id="adminRejectModal">
+    <div class="modal-content" style="max-width: 480px;">
+      <div class="modal-header">
+        <h3 style="color: #b91c1c; margin: 0;">Reject Refund Request</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseRejectModal">&times;</button>
+      </div>
+      <form id="adminRejectForm" style="padding-top: 14px;">
+        <input type="hidden" id="rejectRefundId" />
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 14px; font-size: 0.85rem; line-height: 1.5;">
+          <div>Reference: <strong id="rejectModalRef" style="color: #0f172a;">–</strong></div>
+          <div>Customer: <strong id="rejectModalCustomer" style="color: #0f172a;">–</strong></div>
+          <div>Requested Amount: <strong id="rejectModalRequestedAmt" style="color: #b91c1c;">₹0</strong></div>
+        </div>
+
+        <div style="margin-bottom: 16px;">
+          <label style="font-size: 0.825rem; font-weight: 600; display: block; margin-bottom: 4px;">Reason for Rejection (Mandatory) *</label>
+          <textarea id="rejectReasonInput" required rows="3" class="filter-input" style="width: 100%; box-sizing: border-box; font-family: inherit; resize: vertical;" placeholder="Explain why the refund request was denied (e.g. delivered on time, beyond cancellation window)..."></textarea>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+          <button type="submit" id="btnConfirmRejectRefund" class="btn-admin-login" style="flex: 1.5; background: #dc2626; border: none; cursor: pointer;">Confirm Rejection</button>
+          <button type="button" class="btn-reset" id="btnCancelRejectModal" style="flex: 1;">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
     (function() {
       const API_BASE = window.MILVANTA_API_URL || 'https://milvanta-backend.onrender.com';
@@ -822,6 +948,17 @@
         search: '',
         date: ''
       };
+
+      const refundState = {
+        page: 0,
+        limit: 50,
+        total: 0,
+        status: 'pending',
+        requestType: 'all',
+        search: ''
+      };
+
+      let loadedRefundsList = [];
 
       const orderState = {
         page: 0,
@@ -1432,9 +1569,36 @@
         activeTab = 'orders';
         tabBtnOrders.classList.add('active');
         tabBtnSubs.classList.remove('active');
+        tabBtnRefunds.classList.remove('active');
         ordersSection.classList.remove('hidden');
         subSection.classList.add('hidden');
+        refundsSection.classList.add('hidden');
         loadOrders();
+      });
+
+      const tabBtnRefunds = document.getElementById('tabBtnRefunds');
+      const refundsSection = document.getElementById('refundsSection');
+
+      tabBtnSubs.addEventListener('click', () => {
+        activeTab = 'subscriptions';
+        tabBtnSubs.classList.add('active');
+        tabBtnOrders.classList.remove('active');
+        tabBtnRefunds.classList.remove('active');
+        subSection.classList.remove('hidden');
+        ordersSection.classList.add('hidden');
+        refundsSection.classList.add('hidden');
+        loadSubscriptions();
+      });
+
+      tabBtnRefunds.addEventListener('click', () => {
+        activeTab = 'refunds';
+        tabBtnRefunds.classList.add('active');
+        tabBtnSubs.classList.remove('active');
+        tabBtnOrders.classList.remove('active');
+        refundsSection.classList.remove('hidden');
+        subSection.classList.add('hidden');
+        ordersSection.classList.add('hidden');
+        loadRefunds();
       });
 
       // Sub Filter Listeners
@@ -1631,6 +1795,256 @@
           btn.dataset.courier || '',
           btn.dataset.tracking || ''
         );
+      });
+
+      // ==========================================
+      // REFUND REQUESTS DATA LOADING & ACTIONS
+      // ==========================================
+      async function loadRefunds() {
+        const tbody = document.getElementById('refundsTableBody');
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">Loading authoritative refund requests...</td></tr>';
+
+        try {
+          const params = new URLSearchParams({
+            status: refundState.status,
+            requestType: refundState.requestType,
+            limit: refundState.limit,
+            offset: refundState.page * refundState.limit
+          });
+
+          const data = await apiRequest(`/api/v1/admin/refunds?${params.toString()}`);
+          loadedRefundsList = data.requests || [];
+          refundState.total = data.stats?.total_count || loadedRefundsList.length;
+
+          // Update tab count with pending count
+          if (document.getElementById('tabCountRefunds')) {
+            document.getElementById('tabCountRefunds').textContent = data.stats?.pending_count || 0;
+          }
+
+          renderRefundsTable(loadedRefundsList);
+          updateRefundPagination();
+        } catch (err) {
+          tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 24px; color: #dc2626;">Failed to load refunds: ${escapeHtml(err.message)}</td></tr>`;
+        }
+      }
+
+      function renderRefundsTable(requests) {
+        const tbody = document.getElementById('refundsTableBody');
+        if (!requests.length) {
+          tbody.innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 30px; color: #64748b;">No refund requests match the current filters.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = requests.map((r) => {
+          const isPending = r.status === 'pending';
+          const statusClass = r.status === 'processed' || r.status === 'approved' ? 'badge-active'
+            : r.status === 'rejected' ? 'badge-cancelled'
+            : r.status === 'failed' ? 'badge-expired' : 'badge-paused';
+
+          const targetRef = r.requestType === 'subscription'
+            ? `Sub #${r.subscriptionId || '–'}`
+            : `Order #${r.orderNumber || r.orderId || '–'}`;
+
+          return `
+            <tr>
+              <td><strong>${escapeHtml(r.requestNumber)}</strong></td>
+              <td><span style="font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${r.requestType === 'subscription' ? '#0284c7' : '#059669'};">${r.requestType}</span></td>
+              <td>
+                <div style="font-weight:600; color:#0f172a;">${escapeHtml(r.customerName || '–')}</div>
+                <div style="font-size:0.75rem; color:#64748b;">${escapeHtml(r.customerPhone || r.customerEmail || '–')}</div>
+              </td>
+              <td><span style="font-weight:600; color:#334155;">${targetRef}</span></td>
+              <td><strong style="color:#0f172a;">₹${(r.requestedAmount || 0).toLocaleString('en-IN')}</strong></td>
+              <td><strong style="color:#059669;">${r.approvedAmount ? '₹' + r.approvedAmount.toLocaleString('en-IN') : '–'}</strong></td>
+              <td><span style="font-size:0.78rem; text-transform:capitalize;">${(r.reasonCategory || 'other').replace(/_/g, ' ')}</span></td>
+              <td><span class="status-badge ${statusClass}">${r.status}</span></td>
+              <td style="font-size:0.78rem; color:#64748b;">${new Date(r.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' })}</td>
+              <td>
+                ${isPending ? `
+                  <div style="display:flex; gap:6px;">
+                    <button type="button" class="btn-update-order btn-approve-refund" data-ref-id="${r.id}" style="background:#059669; color:#fff; border:none; padding:4px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;">Approve</button>
+                    <button type="button" class="btn-reset btn-reject-refund" data-ref-id="${r.id}" style="padding:4px 8px; font-size:0.75rem; color:#dc2626; border-color:#fca5a5;">Reject</button>
+                  </div>
+                ` : `
+                  <span style="font-size:0.75rem; color:#64748b;">${r.reviewerName ? 'Reviewed by ' + r.reviewerName : 'Completed'}</span>
+                `}
+              </td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      function updateRefundPagination() {
+        const start = refundState.total === 0 ? 0 : refundState.page * refundState.limit + 1;
+        const end = Math.min((refundState.page + 1) * refundState.limit, refundState.total);
+        document.getElementById('refundPaginationLabel').textContent = `Showing ${start}-${end} of ${refundState.total} requests`;
+        document.getElementById('refundPageIndicator').textContent = `Page ${refundState.page + 1}`;
+        document.getElementById('btnRefundPrevPage').disabled = refundState.page === 0;
+        document.getElementById('btnRefundNextPage').disabled = end >= refundState.total;
+      }
+
+      // Filter Listeners for Refunds
+      document.getElementById('refundStatusFilter').addEventListener('change', (e) => {
+        refundState.status = e.target.value;
+        refundState.page = 0;
+        loadRefunds();
+      });
+
+      document.getElementById('refundTypeFilter').addEventListener('change', (e) => {
+        refundState.requestType = e.target.value;
+        refundState.page = 0;
+        loadRefunds();
+      });
+
+      document.getElementById('btnResetRefundFilters').addEventListener('click', () => {
+        document.getElementById('refundSearchInput').value = '';
+        document.getElementById('refundStatusFilter').value = 'all';
+        document.getElementById('refundTypeFilter').value = 'all';
+        refundState.search = '';
+        refundState.status = 'all';
+        refundState.requestType = 'all';
+        refundState.page = 0;
+        loadRefunds();
+      });
+
+      // Pagination Listeners for Refunds
+      document.getElementById('btnRefundPrevPage').addEventListener('click', () => {
+        if (refundState.page > 0) {
+          refundState.page--;
+          loadRefunds();
+        }
+      });
+      document.getElementById('btnRefundNextPage').addEventListener('click', () => {
+        if ((refundState.page + 1) * refundState.limit < refundState.total) {
+          refundState.page++;
+          loadRefunds();
+        }
+      });
+
+      // Approve & Reject Modal Opening and Execution
+      document.getElementById('refundsTableBody').addEventListener('click', (e) => {
+        const approveBtn = e.target.closest('.btn-approve-refund');
+        if (approveBtn) {
+          const refId = Number(approveBtn.dataset.refId);
+          const req = loadedRefundsList.find(r => r.id === refId);
+          if (req) {
+            document.getElementById('approveRefundId').value = req.id;
+            document.getElementById('approveModalRef').textContent = req.requestNumber;
+            document.getElementById('approveModalCustomer').textContent = req.customerName || '–';
+            document.getElementById('approveModalContact').textContent = req.customerPhone || req.customerEmail || '–';
+            document.getElementById('approveModalPaymentId').textContent = req.paymentId || 'Manual Review';
+            document.getElementById('approveModalRequestedAmt').textContent = `₹${req.requestedAmount.toLocaleString('en-IN')}`;
+            document.getElementById('approveAmountInput').value = req.requestedAmount;
+            document.getElementById('approveNotesInput').value = '';
+            document.getElementById('adminApproveModal').classList.remove('hidden');
+          }
+          return;
+        }
+
+        const rejectBtn = e.target.closest('.btn-reject-refund');
+        if (rejectBtn) {
+          const refId = Number(rejectBtn.dataset.refId);
+          const req = loadedRefundsList.find(r => r.id === refId);
+          if (req) {
+            document.getElementById('rejectRefundId').value = req.id;
+            document.getElementById('rejectModalRef').textContent = req.requestNumber;
+            document.getElementById('rejectModalCustomer').textContent = req.customerName || '–';
+            document.getElementById('rejectModalRequestedAmt').textContent = `₹${req.requestedAmount.toLocaleString('en-IN')}`;
+            document.getElementById('rejectReasonInput').value = '';
+            document.getElementById('adminRejectModal').classList.remove('hidden');
+          }
+          return;
+        }
+      });
+
+      // Approve Modal Handlers
+      document.getElementById('btnCloseApproveModal').addEventListener('click', () => {
+        document.getElementById('adminApproveModal').classList.add('hidden');
+      });
+      document.getElementById('btnCancelApproveModal').addEventListener('click', () => {
+        document.getElementById('adminApproveModal').classList.add('hidden');
+      });
+
+      document.getElementById('adminApproveForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const refundId = Number(document.getElementById('approveRefundId').value);
+        const amountRs = Number(document.getElementById('approveAmountInput').value);
+        const adminNotes = document.getElementById('approveNotesInput').value.trim();
+        const submitBtn = document.getElementById('btnConfirmApproveRefund');
+
+        if (!amountRs || amountRs <= 0) {
+          alert('Please enter a valid refund amount in Rupees.');
+          return;
+        }
+
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Calling Razorpay API...';
+        }
+
+        try {
+          const res = await apiRequest(`/api/v1/admin/refunds/${refundId}/approve`, {
+            method: 'POST',
+            body: JSON.stringify({
+              approvedAmountPaise: Math.round(amountRs * 100),
+              adminNotes
+            })
+          });
+          document.getElementById('adminApproveModal').classList.add('hidden');
+          alert(res.message || 'Refund successfully approved and executed on payment gateway.');
+          await loadRefunds();
+          await loadStats();
+        } catch (err) {
+          alert('Gateway refund failed: ' + err.message);
+        } finally {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Confirm & Disburse Refund';
+          }
+        }
+      });
+
+      // Reject Modal Handlers
+      document.getElementById('btnCloseRejectModal').addEventListener('click', () => {
+        document.getElementById('adminRejectModal').classList.add('hidden');
+      });
+      document.getElementById('btnCancelRejectModal').addEventListener('click', () => {
+        document.getElementById('adminRejectModal').classList.add('hidden');
+      });
+
+      document.getElementById('adminRejectForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const refundId = Number(document.getElementById('rejectRefundId').value);
+        const adminNotes = document.getElementById('rejectReasonInput').value.trim();
+        const submitBtn = document.getElementById('btnConfirmRejectRefund');
+
+        if (!adminNotes) {
+          alert('A mandatory rejection reason is required for the audit record.');
+          return;
+        }
+
+        if (submitBtn) {
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Recording Rejection...';
+        }
+
+        try {
+          const res = await apiRequest(`/api/v1/admin/refunds/${refundId}/reject`, {
+            method: 'POST',
+            body: JSON.stringify({ adminNotes })
+          });
+          document.getElementById('adminRejectModal').classList.add('hidden');
+          alert(res.message || 'Refund request rejected.');
+          await loadRefunds();
+          await loadStats();
+        } catch (err) {
+          alert('Failed to reject refund: ' + err.message);
+        } finally {
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Confirm Rejection';
+          }
+        }
       });
 
       // Boot
