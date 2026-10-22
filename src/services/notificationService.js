@@ -1,35 +1,21 @@
-// One provider per event; retain stable event keys across cutover. No automatic fallback.
-import * as twilio from './twilioService.js';
+// Meta WhatsApp is the sole phone-messaging transport. Historical event keys remain stable.
 import * as whatsapp from './whatsappService.js';
 import * as otp from './whatsappOtpService.js';
 export { normalizeIndianPhoneNumber } from './whatsappService.js';
+export const queueNotification = whatsapp.queueWhatsAppNotification;
+export const processNotificationOutbox = whatsapp.processWhatsAppOutbox;
 
-export function notificationProvider() {
-  const provider = process.env.NOTIFICATION_PROVIDER || 'twilio';
-  if (!['twilio','whatsapp'].includes(provider)) throw new Error('invalid_notification_provider');
-  return provider;
-}
-export function queueNotification(pool,args) {
-  return notificationProvider()==='whatsapp' ? whatsapp.queueWhatsAppNotification(pool,args) : twilio.queueNotification(pool,args);
-}
-export async function processNotificationOutbox(pool,limit,options) {
-  const provider=notificationProvider();
-  const primary=await (provider==='whatsapp' ? whatsapp.processWhatsAppOutbox(pool,limit,options) : twilio.processNotificationOutbox(pool,limit));
-  // Opt-in drain for rows queued before cutover. Each channel claims only its own immutable rows.
-  // Off by default so provider selection never silently sends via the previous provider.
-  if(process.env.NOTIFICATION_DRAIN_PREVIOUS_PROVIDER==='true') {
-    const previous=await (provider==='whatsapp' ? twilio.processNotificationOutbox(pool,limit) : whatsapp.processWhatsAppOutbox(pool,limit,options));
-    return {processed:primary.processed+previous.processed};
-  }
-  return primary;
-}
 export async function sendPhoneOtp(args,options) {
-  try { return await (notificationProvider()==='whatsapp' ? otp.sendPhoneOtp(args,options) : twilio.sendPhoneOtp(args)); }
-  catch (error) { return {success:false,error:error instanceof whatsapp.WhatsAppError?error.code:'otp_service_error',statusCode:error.statusCode || 503,message:'Unable to send a verification code. Please try again later.'}; }
+  try { return await otp.sendPhoneOtp(args,options); }
+  catch(error) {
+    return {success:false,error:error instanceof whatsapp.WhatsAppError?error.code:'otp_service_error',statusCode:error.statusCode || 503,message:'WhatsApp verification is unavailable. Please try again later.'};
+  }
 }
 export async function verifyPhoneOtp(args,options) {
-  try { return await (notificationProvider()==='whatsapp' ? otp.verifyPhoneOtp(args,options) : twilio.verifyPhoneOtp(args)); }
-  catch (error) { return {verified:false,error:error instanceof whatsapp.WhatsAppError?error.code:'otp_service_error',statusCode:error.statusCode || 503,message:'Unable to verify this code.'}; }
+  try { return await otp.verifyPhoneOtp(args,options); }
+  catch(error) {
+    return {verified:false,error:error instanceof whatsapp.WhatsAppError?error.code:'otp_service_error',statusCode:error.statusCode || 503,message:'Unable to verify this WhatsApp code.'};
+  }
 }
 
 // Called after existing payment evidence validation. No billing decisions here.
@@ -42,7 +28,6 @@ export async function queuePaidSubscriptionActivation(pool,subscriptionId) {
 
 export async function queueBillingReminders(pool) {
   // Renewal reminders use existing authenticated entitlement notes; no changes to payment state.
-  if (notificationProvider()!=='whatsapp') return {queued:0};
   const {rows}=await pool.query(`SELECT s.*,c.phone FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id
     WHERE s.status='active' AND s.notes->>'paidThroughDate'=to_char((NOW() AT TIME ZONE 'Asia/Kolkata')::date+3,'YYYY-MM-DD')
       AND (s.notes->>'lastPaymentId' IS NOT NULL OR s.notes->>'paymentId' IS NOT NULL)

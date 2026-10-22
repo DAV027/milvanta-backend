@@ -47,8 +47,6 @@ services:
         value: "Milvanta <orders@milvanta.in>"
       - key: ADMIN_EMAIL
         value: "projects@milvanta.in"
-      - key: NOTIFICATION_PROVIDER
-        value: twilio
       - key: WHATSAPP_ENABLED
         value: "false"
       - key: WHATSAPP_GRAPH_API_VERSION
@@ -70,16 +68,6 @@ services:
       - key: WHATSAPP_VERIFY_TOKEN
         sync: false
       - key: WHATSAPP_OTP_HASH_SECRET
-        sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_VERIFY_SERVICE_SID
-        sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
-        sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false
 
   - type: cron
@@ -96,8 +84,6 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "true"
-      - key: NOTIFICATION_PROVIDER
-        value: twilio
       - key: WHATSAPP_ENABLED
         value: "false"
       - key: WHATSAPP_GRAPH_API_VERSION
@@ -119,12 +105,4 @@ services:
       - key: WHATSAPP_VERIFY_TOKEN
         sync: false
       - key: WHATSAPP_OTP_HASH_SECRET
-        sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
-        sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
         sync: false

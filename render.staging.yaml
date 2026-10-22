@@ -13,7 +13,7 @@ services:
     runtime: node
     plan: starter
     region: oregon
-    branch: feature/meta-whatsapp-cloud-api
+    branch: feature/whatsapp-only-final
     buildCommand: npm ci
     preDeployCommand: node src/migrate.js --staging
     startCommand: npm start
@@ -49,8 +49,6 @@ services:
         value: "Milvanta Staging <orders@milvanta.in>"
       - key: ADMIN_EMAIL
         value: "projects@milvanta.in"
-      - key: NOTIFICATION_PROVIDER
-        value: whatsapp
       - key: WHATSAPP_ENABLED
         value: "false"
       - key: WHATSAPP_GRAPH_API_VERSION
@@ -73,23 +71,13 @@ services:
         sync: false
       - key: WHATSAPP_OTP_HASH_SECRET
         sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_VERIFY_SERVICE_SID
-        sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
-        sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
-        value: https://milvanta-api-staging.onrender.com/api/v1/webhooks/twilio/status
 
   - type: cron
     name: milvanta-delivery-staging
     runtime: node
     plan: starter
     region: oregon
-    branch: feature/meta-whatsapp-cloud-api
+    branch: feature/whatsapp-only-final
     schedule: "45 14 * * *" # Runs daily at 20:15 IST (14:45 UTC)
     buildCommand: npm ci
     startCommand: node scripts/daily-delivery-scheduler.js
@@ -108,8 +96,6 @@ services:
           property: connectionString
       - key: DATABASE_SSL
         value: "true"
-      - key: NOTIFICATION_PROVIDER
-        value: whatsapp
       - key: WHATSAPP_ENABLED
         value: "false"
       - key: WHATSAPP_GRAPH_API_VERSION
@@ -132,12 +118,4 @@ services:
         sync: false
       - key: WHATSAPP_OTP_HASH_SECRET
         sync: false
-      - key: TWILIO_ACCOUNT_SID
-        sync: false
-      - key: TWILIO_AUTH_TOKEN
-        sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
-        sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
-        value: https://milvanta-api-staging.onrender.com/api/v1/webhooks/twilio/status
 

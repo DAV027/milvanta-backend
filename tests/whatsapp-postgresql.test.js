@@ -6,12 +6,13 @@ import { sendPhoneOtp,verifyPhoneOtp } from '../src/services/whatsappOtpService.
 import { WHATSAPP_TEMPLATES } from '../src/services/whatsappTemplates.js';
 import { setWhatsAppPreferences,queueWhatsAppNotification,processWhatsAppOutbox,handleWhatsAppWebhook } from '../src/services/whatsappService.js';
 import { queuePaidSubscriptionActivation } from '../src/services/notificationService.js';
+import { processNotificationOutbox,queueNotification } from '../src/services/notificationService.js';
 import { generateDailyDeliveries,reminderScheduledAt } from '../src/services/deliveryEngine.js';
 process.env.NODE_ENV='test';
 process.env.RAZORPAY_WEBHOOK_SECRET='test-only-razorpay-signing-secret';
 process.env.RAZORPAY_KEY_ID='rzp_test_whatsapp_mock';
 process.env.RAZORPAY_KEY_SECRET='test-only-razorpay-api-secret';
-Object.assign(process.env,{ NOTIFICATION_PROVIDER:'whatsapp',WHATSAPP_ENABLED:'true',WHATSAPP_GRAPH_API_VERSION:'v25.0',WHATSAPP_ACCESS_TOKEN:'mock-token',WHATSAPP_PHONE_NUMBER_ID:'123',WHATSAPP_WABA_ID:'456',WHATSAPP_TEMPLATE_LANGUAGE:'en',WHATSAPP_OTP_HASH_SECRET:'test-only-hmac-secret-at-least-32-characters',WHATSAPP_APP_SECRET:'test-app-secret',WHATSAPP_VERIFY_TOKEN:'verify-test',WHATSAPP_APPROVED_TEMPLATES:Object.values(WHATSAPP_TEMPLATES).map(t=>t.name+':en').join(',') });
+Object.assign(process.env,{ WHATSAPP_ENABLED:'true',WHATSAPP_GRAPH_API_VERSION:'v25.0',WHATSAPP_ACCESS_TOKEN:'mock-token',WHATSAPP_PHONE_NUMBER_ID:'123',WHATSAPP_WABA_ID:'456',WHATSAPP_TEMPLATE_LANGUAGE:'en',WHATSAPP_OTP_HASH_SECRET:'test-only-hmac-secret-at-least-32-characters',WHATSAPP_APP_SECRET:'test-app-secret',WHATSAPP_VERIFY_TOKEN:'verify-test',WHATSAPP_APPROVED_TEMPLATES:Object.values(WHATSAPP_TEMPLATES).map(t=>t.name+':en').join(',') });
 let setup,pool,customer,sessionHash=crypto.createHash('sha256').update('session-A').digest('hex'),lastCode;
 const mockedFetch=async(url,options)=>{
   const body=JSON.parse(options.body);
@@ -79,6 +80,16 @@ test('explicit consent and idempotent order outbox; concurrent workers send once
   assert.equal(sends,1);
   const {rows}=await pool.query("SELECT * FROM notification_outbox WHERE idempotency_key='order-1'");
   assert.equal(rows[0].status,'accepted');assert.equal(rows[0].delivered_at,null);
+});
+test('historical SMS rows and event keys are preserved without processing or replay',async()=>{
+  await pool.query(`INSERT INTO notification_outbox(customer_id,phone,channel,template_name,message_body,idempotency_key,status)
+    VALUES($1,$2,'sms','HISTORICAL','Historical audit text','legacy-payment-event','pending')`,[customer.id,customer.phone]);
+  assert.equal((await queueNotification(pool,notification('legacy-payment-event'))).duplicate,true);
+  const before=(await pool.query("SELECT * FROM notification_outbox WHERE idempotency_key='legacy-payment-event'")).rows[0];
+  let sends=0;
+  await processNotificationOutbox(pool,100,{fetchImpl:async()=>{sends++;throw Error('No pending WhatsApp messages expected');}});
+  const after=(await pool.query("SELECT * FROM notification_outbox WHERE idempotency_key='legacy-payment-event'")).rows[0];
+  assert.equal(sends,0);assert.deepEqual(after,before);
 });
 function event(status,id,timestamp,extra={}){return {object:'whatsapp_business_account',entry:[{id:'456',changes:[{field:'messages',value:{metadata:{phone_number_id:'123'},statuses:[{status,id,timestamp:String(timestamp),...extra}]}}]}]};}
 test('webhooks deduplicate, never regress read status, reconcile callback before response, opt-out',async()=>{

@@ -7,7 +7,7 @@
  * 1. Generates next-morning delivery orders for all eligible active milk subscriptions.
  * 2. Excludes paused, vacation, and skipped subscriptions.
  * 3. Enforces duplicate-order prevention.
- * 4. Processes notification outbox for pending SMS reminders.
+ * 4. Processes notification outbox for pending WhatsApp reminders.
  */
 
 import 'dotenv/config';
@@ -60,7 +60,7 @@ async function main() {
       totalActiveSubscriptions: result.totalActiveSubscriptions
     });
 
-    // 2. Process Notification Outbox (send pending reminders / SMS)
+    // 2. Process Notification Outbox (send pending reminders / WhatsApp)
     console.log('Processing notification outbox...');
     await queueBillingReminders(pool);
     const notifyRes = await processNotificationOutbox(pool, 50);

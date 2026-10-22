@@ -566,7 +566,7 @@ export async function pauseSubscription(pool, { subscriptionId, customerId, star
       [subscriptionId, customerId, JSON.stringify({ effectiveStartDate, endDate, reason })]
     );
 
-    // Asynchronously queue SMS notification
+    // Asynchronously queue WhatsApp notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_pause_${subscriptionId}_${effectiveStartDate}`;
       await queueNotification(client, {
@@ -680,7 +680,7 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
       [subscriptionId, customerId, JSON.stringify({ resumedAt: new Date().toISOString(), nextDelivery })]
     );
 
-    // Queue SMS notification
+    // Queue WhatsApp notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_resume_${subscriptionId}_${Date.now().toString(36)}`;
       await queueNotification(client, {
