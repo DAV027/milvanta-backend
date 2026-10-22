@@ -10,7 +10,8 @@ import {
   formatDateYMD,
   DAILY_DELIVERY_CUTOFF_HOUR_IST,
   acquireClient,
-  derivePaidThroughDate
+  derivePaidThroughDate,
+  getEffectivePaidThroughDate
 } from './subscriptionService.js';
 import { queueNotification } from './twilioService.js';
 
@@ -87,15 +88,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
       }
 
       // 1c. Derive and enforce authenticated paid-through end date
-      const paidThroughEndDate = derivePaidThroughDate({
-        startDate: subStartDate,
-        paidThroughDate: subNotes.paidThroughDate,
-        current_end: subNotes.current_end,
-        cost_per_day_paise: sub.cost_per_day_paise,
-        total_amount_paise: sub.total_amount_paise,
-        paidCount: subNotes.paidCount,
-        months: subNotes.months
-      });
+      const paidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
 
       // Fail closed if paid-through entitlement cannot be established
       if (!paidThroughEndDate) {
@@ -381,6 +374,15 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
         JSON.stringify({ deliveryOrderId, previousStatus: order.status, newStatus: status, notes, reason })
       ]
     );
+
+    if (status === 'delivered' && order.subscription_id) {
+      await client.query(
+        `INSERT INTO subscription_entitlement_ledger (
+          subscription_id, customer_id, entry_type, days_delta, amount_paise, delivery_date, notes
+        ) VALUES ($1, $2, 'delivery_fulfilled', -1, $3, $4, $5)`,
+        [order.subscription_id, order.customer_id, order.cost_paise || 0, order.delivery_date, `Delivery fulfilled: ${order.delivery_order_number}`]
+      );
+    }
 
     await client.query('COMMIT');
 
