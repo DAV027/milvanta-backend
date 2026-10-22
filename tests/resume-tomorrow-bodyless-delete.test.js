@@ -520,10 +520,10 @@ describe('Milvanta — Bodyless DELETE & Hardened Content-Type Parser Suite', ()
       assert.strictEqual(primary, cloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261021-4)', () => {
+    it('profile.html has incremented cache-busting version strings (?v=20261022-3)', () => {
       const primary = fs.readFileSync(path.join(process.cwd(), 'frontend/profile.html'), 'utf8');
-      assert.ok(primary.includes('css/profile.css?v=20261021-4'));
-      assert.ok(primary.includes('js/profile.js?v=20261021-4'));
+      assert.ok(primary.includes('css/profile.css?v=20261022-3'));
+      assert.ok(primary.includes('js/profile.js?v=20261022-3'));
     });
   });
 });

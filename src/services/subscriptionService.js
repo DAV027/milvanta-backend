@@ -1,14 +1,10 @@
+import crypto from 'node:crypto';
 /**
  * Milvanta Subscription Domain Service
  * Server-authoritative PostgreSQL lifecycle, calendar, cutoff enforcement, and billing adjustments
  */
 
-import {
-  APPROVED_MILK_PACK_SIZES,
-  getMilkDailySubscriptionRatePaise,
-  parseLitresFromSize
-} from '../pricing.js';
-import { queueNotification } from './twilioService.js';
+import { queueNotification } from './notificationService.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -85,6 +81,241 @@ export function addCalendarMonths(startDateStr, numMonths = 1) {
   const nextCycleDate = new Date(Date.UTC(targetYear, targetMonth - 1, nextCycleStartDay));
   nextCycleDate.setUTCDate(nextCycleDate.getUTCDate() - 1);
   return nextCycleDate.toISOString().slice(0, 10);
+}
+
+export function addDaysToYMD(ymdStr, days) {
+  if (!ymdStr || typeof ymdStr !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(ymdStr.trim())) return null;
+  const d = new Date(`${ymdStr.trim()}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + Number(days || 0));
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Determine if subscription is a recurring autopay mandate (Razorpay sub_... or continuous mandate)
+ */
+export function isRecurringAutopaySubscription(sub) {
+  if (!sub) return false;
+  const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+  const rzpSubId = sub.razorpay_subscription_id || notes.razorpay_subscription_id || notes.subscription_id;
+  if (typeof rzpSubId === 'string' && rzpSubId.startsWith('sub_')) {
+    return true;
+  }
+  if (sub.plan_type === 'continuous' || notes.authType === 'recurring' || notes.plan_type === 'continuous') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Determine if subscription is prepaid (fixed period or non-autopay)
+ */
+export function isPrepaidSubscription(sub) {
+  return !isRecurringAutopaySubscription(sub);
+}
+
+/**
+ * Sum net delivery extensions for a subscription
+ */
+export async function getSubscriptionNetExtensionDays(clientOrPool, subscriptionId) {
+  const { rows } = await clientOrPool.query(
+    `SELECT COALESCE(SUM(days_count), 0)::int as total_extension_days
+     FROM subscription_billing_adjustments
+     WHERE subscription_id = $1 AND adjustment_type = 'extension'`,
+    [subscriptionId]
+  );
+  return rows[0]?.total_extension_days || 0;
+}
+
+/**
+ * Authoritative Effective Paid-Through Date
+ * Includes base calendar schedule plus carried-forward extension days for prepaid subscriptions
+ */
+export async function getEffectivePaidThroughDate(clientOrPool, sub) {
+  if (!sub) return null;
+  const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+  const subStartDate = subNotes.startDate || subNotes.start_date ||
+    (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+      ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+      : null) ||
+    (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+
+  const basePaidThroughDate = derivePaidThroughDate({
+    startDate: subStartDate,
+    paidThroughDate: subNotes.paidThroughDate,
+    current_end: subNotes.current_end,
+    cost_per_day_paise: sub.cost_per_day_paise,
+    total_amount_paise: sub.total_amount_paise,
+    paidCount: subNotes.paidCount,
+    months: subNotes.months
+  });
+
+  if (!basePaidThroughDate) return null;
+
+  if (isPrepaidSubscription(sub)) {
+    const netExtensionDays = await getSubscriptionNetExtensionDays(clientOrPool, sub.id);
+    if (netExtensionDays > 0) {
+      return addDaysToYMD(basePaidThroughDate, netExtensionDays);
+    }
+  }
+
+  return basePaidThroughDate;
+}
+
+/**
+ * Record entry into subscription entitlement ledger
+ */
+export async function recordEntitlementLedgerEntry(clientOrPool, {
+  subscriptionId,
+  customerId,
+  entryType,
+  billingCycleStart = null,
+  billingCycleEnd = null,
+  daysDelta = 0,
+  amountPaise = 0,
+  deliveryDate = null,
+  paymentId = null,
+  refundRequestId = null,
+  notes = null,
+  metadata = {}
+}) {
+  const { client, release } = await acquireClient(clientOrPool);
+  try {
+    const { rows } = await client.query(
+      `INSERT INTO subscription_entitlement_ledger (
+        subscription_id, customer_id, entry_type,
+        billing_cycle_start, billing_cycle_end, days_delta,
+        amount_paise, delivery_date, payment_id,
+        refund_request_id, notes, metadata
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
+      RETURNING *`,
+      [
+        subscriptionId, customerId, entryType,
+        billingCycleStart, billingCycleEnd, daysDelta,
+        amountPaise, deliveryDate, paymentId,
+        refundRequestId, notes, JSON.stringify(metadata || {})
+      ]
+    );
+    return rows[0];
+  } finally {
+    release();
+  }
+}
+
+/**
+ * Server-authoritative calculation of subscription entitlement and refundable balance
+ */
+export async function calculateSubscriptionEntitlement(poolOrClient, { subscriptionId, customerId }) {
+  const { client, release } = await acquireClient(poolOrClient);
+  try {
+    const sub = await getVerifiedSubscription(client, subscriptionId, customerId);
+    if (!sub) return null;
+
+    const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+    const costPerDayPaise = Number(sub.cost_per_day_paise) || 10500;
+    const isAutopay = isRecurringAutopaySubscription(sub);
+    const planType = isAutopay ? 'recurring_autopay' : 'prepaid';
+
+    const subStartDate = subNotes.startDate || subNotes.start_date ||
+      (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+        ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+        : null) ||
+      (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+
+    const basePaidThroughDate = derivePaidThroughDate({
+      startDate: subStartDate,
+      paidThroughDate: subNotes.paidThroughDate,
+      current_end: subNotes.current_end,
+      cost_per_day_paise: sub.cost_per_day_paise,
+      total_amount_paise: sub.total_amount_paise,
+      paidCount: subNotes.paidCount,
+      months: subNotes.months
+    });
+
+    const netExtensionDays = isAutopay ? 0 : await getSubscriptionNetExtensionDays(client, sub.id);
+    const effectivePaidThroughDate = basePaidThroughDate
+      ? (netExtensionDays > 0 ? addDaysToYMD(basePaidThroughDate, netExtensionDays) : basePaidThroughDate)
+      : null;
+
+    // Delivery stats
+    const { rows: deliveryStats } = await client.query(
+      `SELECT 
+         COUNT(*) FILTER (WHERE status = 'delivered')::int as delivered_count,
+         COUNT(*) FILTER (WHERE status = 'scheduled')::int as scheduled_count,
+         COUNT(*) FILTER (WHERE status = 'cancelled')::int as cancelled_count
+       FROM subscription_delivery_orders
+       WHERE subscription_id = $1`,
+      [subscriptionId]
+    );
+    const deliveredCount = deliveryStats[0]?.delivered_count || 0;
+    const scheduledCount = deliveryStats[0]?.scheduled_count || 0;
+    const cancelledCount = deliveryStats[0]?.cancelled_count || 0;
+
+    // Billing adjustments
+    const { rows: creditRows } = await client.query(
+      `SELECT COALESCE(SUM(amount_paise), 0)::int as total_credit_paise,
+              COALESCE(SUM(days_count), 0)::int as total_credit_days
+       FROM subscription_billing_adjustments
+       WHERE subscription_id = $1 AND adjustment_type = 'credit'`,
+      [subscriptionId]
+    );
+    const accruedCreditPaise = creditRows[0]?.total_credit_paise || 0;
+
+    // Refund requests
+    const { rows: refundStats } = await client.query(
+      `SELECT 
+         COALESCE(SUM(approved_amount_paise) FILTER (WHERE status IN ('approved', 'processed')), 0)::int as refunded_amount_paise,
+         COALESCE(SUM(requested_amount_paise) FILTER (WHERE status = 'pending'), 0)::int as pending_refund_paise
+       FROM refund_requests
+       WHERE subscription_id = $1`,
+      [subscriptionId]
+    );
+    const alreadyRefundedPaise = refundStats[0]?.refunded_amount_paise || 0;
+    const pendingRefundPaise = refundStats[0]?.pending_refund_paise || 0;
+
+    const totalContractAmountPaise = Number(sub.total_amount_paise) || (costPerDayPaise * (subNotes.months ? subNotes.months * 30 : 30));
+    const deliveredValuePaise = deliveredCount * costPerDayPaise;
+
+    const unusedBalancePaise = Math.max(0, totalContractAmountPaise - deliveredValuePaise - alreadyRefundedPaise);
+    const estimatedRefundablePaise = Math.max(0, unusedBalancePaise - pendingRefundPaise);
+
+    const totalDaysPurchased = Math.round(totalContractAmountPaise / costPerDayPaise);
+    const unusedDays = Math.max(0, Math.floor(unusedBalancePaise / costPerDayPaise));
+
+    const paymentId = subNotes.paymentId || subNotes.lastPaymentId || null;
+    const razorpaySubscriptionId = sub.razorpay_subscription_id || subNotes.razorpay_subscription_id || null;
+
+    return {
+      subscriptionId: sub.id,
+      customerId: sub.customer_id,
+      productName: sub.product_name,
+      quantity: sub.quantity,
+      planType,
+      isAutopay,
+      costPerDayPaise,
+      totalContractAmountPaise,
+      deliveredCount,
+      scheduledCount,
+      cancelledCount,
+      deliveredValuePaise,
+      netExtensionDays,
+      accruedCreditPaise,
+      alreadyRefundedPaise,
+      pendingRefundPaise,
+      unusedBalancePaise,
+      estimatedRefundablePaise,
+      totalDaysPurchased,
+      unusedDays,
+      subStartDate,
+      basePaidThroughDate,
+      effectivePaidThroughDate,
+      paymentId,
+      razorpaySubscriptionId,
+      status: sub.status
+    };
+  } finally {
+    release();
+  }
 }
 
 /**
@@ -216,7 +447,7 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
   let subPaidThroughEndDate = null;
   try {
     const { rows: subRows } = await pool.query(
-      'SELECT notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at FROM customer_subscriptions WHERE id = $1',
+      'SELECT id, customer_id, notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at, plan_type, razorpay_subscription_id FROM customer_subscriptions WHERE id = $1',
       [subscriptionId]
     );
     const subRecord = subRows[0];
@@ -240,15 +471,7 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
       )
     );
     if (hasPayment) {
-      subPaidThroughEndDate = derivePaidThroughDate({
-        startDate: subStartDate || (subRecord?.created_at ? formatDateYMD(new Date(subRecord.created_at)) : null),
-        paidThroughDate: subNotes.paidThroughDate,
-        current_end: subNotes.current_end,
-        cost_per_day_paise: subRecord?.cost_per_day_paise,
-        total_amount_paise: subRecord?.total_amount_paise,
-        paidCount: subNotes.paidCount,
-        months: subNotes.months
-      });
+      subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
     }
   } catch {}
 
@@ -343,12 +566,10 @@ export async function pauseSubscription(pool, { subscriptionId, customerId, star
       [subscriptionId, customerId, JSON.stringify({ effectiveStartDate, endDate, reason })]
     );
 
-    await client.query('COMMIT');
-
-    // Asynchronously queue SMS notification
+    // Asynchronously queue WhatsApp notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_pause_${subscriptionId}_${effectiveStartDate}`;
-      queueNotification(pool, {
+      await queueNotification(client, {
         customerId,
         phone: sub.phone,
         templateKey: 'SUBSCRIPTION_PAUSED',
@@ -357,8 +578,10 @@ export async function pauseSubscription(pool, { subscriptionId, customerId, star
           pauseDate: effectiveStartDate
         },
         idempotencyKey
-      }).catch(() => {});
+      });
     }
+
+    await client.query('COMMIT');
 
     return {
       success: true,
@@ -392,6 +615,14 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
       return { success: false, error: 'cannot_resume_cancelled_subscription', statusCode: 400 };
     }
 
+    // Find any open pause records to calculate paused days
+    const { rows: openPauses } = await client.query(
+      `SELECT id, pause_start_date, pause_end_date
+       FROM subscription_delivery_pauses
+       WHERE subscription_id = $1 AND resumed_at IS NULL`,
+      [subscriptionId]
+    );
+
     // Close any open pause records
     await client.query(
       `UPDATE subscription_delivery_pauses 
@@ -399,6 +630,39 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
        WHERE subscription_id = $1 AND resumed_at IS NULL`,
       [subscriptionId]
     );
+
+    const istNow = getNowInIST();
+    const todayYMD = formatDateYMD(istNow);
+
+    // For any indefinite pause (pause_end_date is null), calculate elapsed pause days and record adjustment
+    for (const p of openPauses) {
+      if (!p.pause_end_date && p.pause_start_date) {
+        const pauseStart = p.pause_start_date.toISOString ? p.pause_start_date.toISOString().slice(0, 10) : String(p.pause_start_date).slice(0, 10);
+        if (todayYMD >= pauseStart) {
+          const d1 = new Date(`${pauseStart}T00:00:00Z`);
+          const d2 = new Date(`${todayYMD}T00:00:00Z`);
+          const pausedDays = Math.max(1, Math.round((d2 - d1) / (24 * 3600 * 1000)));
+          const isPrepaid = isPrepaidSubscription(sub);
+          const adjType = isPrepaid ? 'extension' : 'credit';
+          const totalAmount = (sub.cost_per_day_paise || 10500) * pausedDays;
+
+          await client.query(
+            `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [subscriptionId, customerId, adjType, pausedDays, totalAmount, `Indefinite pause ${adjType} (${pausedDays} days)`]
+          );
+
+          await recordEntitlementLedgerEntry(client, {
+            subscriptionId,
+            customerId,
+            entryType: 'manual_pause',
+            daysDelta: pausedDays,
+            amountPaise: totalAmount,
+            notes: `Indefinite pause ${adjType} (${pausedDays} days)`
+          });
+        }
+      }
+    }
 
     // Calculate next delivery date
     const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
@@ -416,12 +680,10 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
       [subscriptionId, customerId, JSON.stringify({ resumedAt: new Date().toISOString(), nextDelivery })]
     );
 
-    await client.query('COMMIT');
-
-    // Queue SMS notification
+    // Queue WhatsApp notification
     if (sub.phone) {
       const idempotencyKey = `sms_sub_resume_${subscriptionId}_${Date.now().toString(36)}`;
-      queueNotification(pool, {
+      await queueNotification(client, {
         customerId,
         phone: sub.phone,
         templateKey: 'SUBSCRIPTION_RESUMED',
@@ -430,8 +692,10 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
           nextDate: nextDelivery.split(',')[0]
         },
         idempotencyKey
-      }).catch(() => {});
+      });
     }
+
+    await client.query('COMMIT');
 
     return {
       success: true,
@@ -528,7 +792,7 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
       );
 
       // Record billing extension (prepaid) or credit (recurring mandate)
-      const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
+      const isPrepaid = isPrepaidSubscription(sub);
       const adjType = isPrepaid ? 'extension' : 'credit';
       const adjNotes = isPrepaid
         ? `Carried forward 1 day delivery for skipped date ${cleanSkipDate}`
@@ -539,6 +803,16 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
          VALUES ($1, $2, $3, 1, $4, $5)`,
         [subscriptionId, customerId, adjType, sub.cost_per_day_paise || 10500, adjNotes]
       );
+
+      await recordEntitlementLedgerEntry(client, {
+        subscriptionId,
+        customerId,
+        entryType: 'delivery_skipped',
+        daysDelta: 1,
+        amountPaise: sub.cost_per_day_paise || 10500,
+        deliveryDate: cleanSkipDate,
+        notes: adjNotes
+      });
 
       // Update next delivery date
       nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
@@ -654,7 +928,7 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       );
 
       // Revert 1 day extension/credit in billing adjustments
-      const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
+      const isPrepaid = isPrepaidSubscription(sub);
       const adjType = isPrepaid ? 'extension' : 'credit';
 
       await client.query(
@@ -662,6 +936,16 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
          VALUES ($1, $2, $3, -1, $4, $5)`,
         [subscriptionId, customerId, adjType, -(sub.cost_per_day_paise || 10500), `Reverted 1 day ${adjType} for unskipped date ${cleanSkipDate}`]
       );
+
+      await recordEntitlementLedgerEntry(client, {
+        subscriptionId,
+        customerId,
+        entryType: isPrepaid ? 'extension_carried_forward' : 'credit_consumed',
+        daysDelta: -1,
+        amountPaise: -(sub.cost_per_day_paise || 10500),
+        deliveryDate: cleanSkipDate,
+        notes: `Reverted 1 day ${adjType} for unskipped date ${cleanSkipDate}`
+      });
 
       nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
       await client.query(
@@ -743,7 +1027,7 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
     );
 
     // Record billing adjustment (extension for prepaid, credit for recurring mandate)
-    const isPrepaid = sub.plan_type !== 'continuous' || !sub.razorpay_subscription_id;
+    const isPrepaid = isPrepaidSubscription(sub);
     const adjType = isPrepaid ? 'extension' : 'credit';
     const totalAmount = (sub.cost_per_day_paise || 10500) * daysCount;
 
@@ -752,6 +1036,15 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [subscriptionId, customerId, adjType, daysCount, totalAmount, `Vacation ${adjType} from ${startDate} to ${endDate}`]
     );
+
+    await recordEntitlementLedgerEntry(client, {
+      subscriptionId,
+      customerId,
+      entryType: 'vacation_pause',
+      daysDelta: daysCount,
+      amountPaise: totalAmount,
+      notes: `Vacation ${adjType} from ${startDate} to ${endDate}`
+    });
 
     const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
     await client.query(
@@ -784,66 +1077,6 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
   }
 }
 
-/**
- * MODIFY subscription quantity / pack size
- */
-export async function modifySubscriptionQuantity(pool, { subscriptionId, customerId, newQuantity }) {
-  const cleanQty = String(newQuantity || '').trim();
-  if (!APPROVED_MILK_PACK_SIZES.some(s => s.toLowerCase() === cleanQty.toLowerCase())) {
-    return {
-      success: false,
-      error: 'invalid_pack_size',
-      message: `Supported pack sizes: ${APPROVED_MILK_PACK_SIZES.join(', ')}`
-    };
-  }
-
-  const { client, release } = await acquireClient(pool);
-  try {
-    await client.query('BEGIN');
-    const sub = await getVerifiedSubscription(client, subscriptionId, customerId);
-    if (!sub) {
-      await client.query('ROLLBACK');
-      return { success: false, error: 'subscription_not_found', statusCode: 404 };
-    }
-
-    const newDailyRatePaise = getMilkDailySubscriptionRatePaise(sub.product_name, cleanQty);
-    const newQtyNum = parseLitresFromSize(cleanQty);
-
-    await client.query(
-      `UPDATE customer_subscriptions 
-       SET quantity = $2, quantity_num = $3, cost_per_day_paise = $4, updated_at = NOW()
-       WHERE id = $1`,
-      [subscriptionId, cleanQty, newQtyNum, newDailyRatePaise]
-    );
-
-    await client.query(
-      `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
-       VALUES ($1, $2, 'subscription_quantity_modified', 'customer', $3::jsonb)`,
-      [subscriptionId, customerId, JSON.stringify({ previousQty: sub.quantity, newQuantity: cleanQty, newDailyRatePaise })]
-    );
-
-    await client.query('COMMIT');
-
-    return {
-      success: true,
-      subscriptionId,
-      quantity: cleanQty,
-      quantityNum: newQtyNum,
-      dailyRate: newDailyRatePaise / 100,
-      dailyRatePaise: newDailyRatePaise,
-      message: `Subscription updated to ${cleanQty} (₹${newDailyRatePaise / 100}/day).`
-    };
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    release();
-  }
-}
-
-/**
- * CANCEL a subscription
- */
 export async function cancelSubscription(pool, { subscriptionId, customerId, reason = 'Customer requested cancellation' }) {
   const { client, release } = await acquireClient(pool);
   try {
@@ -873,6 +1106,7 @@ export async function cancelSubscription(pool, { subscriptionId, customerId, rea
       [subscriptionId, customerId, JSON.stringify({ reason, cancelledAt: new Date().toISOString() })]
     );
 
+    if (sub.phone) await queueNotification(client,{customerId,phone:sub.phone,templateKey:'SUBSCRIPTION_CANCELLED',params:{productName:sub.product_name},idempotencyKey:`sms_sub_cancel_${subscriptionId}`});
     await client.query('COMMIT');
 
     return {
@@ -880,6 +1114,156 @@ export async function cancelSubscription(pool, { subscriptionId, customerId, rea
       subscriptionId,
       status: 'cancelled',
       message: 'Subscription has been cancelled.'
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    release();
+  }
+}
+
+/**
+ * CANCEL a subscription with authoritative refund calculation and request creation
+ */
+export async function cancelSubscriptionWithRefund(pool, {
+  subscriptionId,
+  customerId,
+  reason = 'Customer requested cancellation',
+  customerNotes = null,
+  requestedRefundAmountPaise = null,
+  razorpayClient = null
+}) {
+  const { client, release } = await acquireClient(pool);
+  try {
+    await client.query('BEGIN');
+    const sub = await getVerifiedSubscription(client, subscriptionId, customerId);
+    if (!sub) {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'subscription_not_found', statusCode: 404 };
+    }
+
+    if (sub.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return { success: false, error: 'already_cancelled', message: 'Subscription is already cancelled.', statusCode: 400 };
+    }
+
+    // Attempt Razorpay gateway cancellation if continuous recurring subscription
+    let gatewayCancelled = false;
+    let gatewayError = null;
+    const isAutopay = isRecurringAutopaySubscription(sub);
+    const rzpSubId = sub.razorpay_subscription_id || (sub.notes && sub.notes.razorpay_subscription_id);
+
+    if (isAutopay && rzpSubId && razorpayClient) {
+      try {
+        await razorpayClient.subscriptions.cancel(rzpSubId, false);
+        gatewayCancelled = true;
+      } catch (gwErr) {
+        gatewayError = gwErr.error?.description || gwErr.message;
+        // If already cancelled or past on gateway, allow customer cancellation to complete
+        if (gatewayError && (gatewayError.toLowerCase().includes('cancelled') || gatewayError.toLowerCase().includes('not found'))) {
+          gatewayCancelled = true;
+        }
+      }
+    }
+
+    // Calculate entitlement before marking cancelled
+    const entitlement = await calculateSubscriptionEntitlement(client, { subscriptionId, customerId });
+
+    // Mark subscription cancelled
+    await client.query(
+      "UPDATE customer_subscriptions SET status = 'cancelled', next_delivery = 'Cancelled', updated_at = NOW() WHERE id = $1",
+      [subscriptionId]
+    );
+
+    // Cancel all future scheduled delivery orders
+    await client.query(
+      `UPDATE subscription_delivery_orders 
+       SET status = 'cancelled', failed_reason = 'Subscription cancelled by customer', updated_at = NOW()
+       WHERE subscription_id = $1 AND status = 'scheduled'`,
+      [subscriptionId]
+    );
+
+    let refundRow = null;
+    if (entitlement && entitlement.estimatedRefundablePaise > 0) {
+      const refundAmount = requestedRefundAmountPaise && Number(requestedRefundAmountPaise) > 0
+        ? Math.min(Number(requestedRefundAmountPaise), entitlement.estimatedRefundablePaise)
+        : entitlement.estimatedRefundablePaise;
+
+      const timestamp = Date.now().toString(36).toUpperCase();
+      const random = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const requestNumber = `REF-SUB-${timestamp}-${random}`;
+      const idempotencyKey = `cancel_refund_sub_${subscriptionId}_${Date.now()}`;
+
+      const { rows: rfRows } = await client.query(
+        `INSERT INTO refund_requests (
+          request_number, request_type, customer_id, subscription_id,
+          payment_id, gateway_subscription_id, requested_amount_paise,
+          calculated_eligible_amount_paise, currency, reason_category,
+          reason_detail, customer_notes, status, idempotency_key
+        ) VALUES ($1, 'subscription', $2, $3, $4, $5, $6, $7, 'INR', 'cancellation', $8, $9, 'pending', $10)
+        RETURNING *`,
+        [
+          requestNumber, customerId, subscriptionId,
+          entitlement.paymentId || 'manual_review', entitlement.razorpaySubscriptionId,
+          refundAmount, entitlement.estimatedRefundablePaise,
+          reason, customerNotes, idempotencyKey
+        ]
+      );
+      refundRow = rfRows[0];
+
+      // Insert audit history
+      await client.query(
+        `INSERT INTO refund_request_history (refund_request_id, previous_status, new_status, actor_type, actor_id, note)
+         VALUES ($1, NULL, 'pending', 'customer', $2, 'Subscription cancellation refund request submitted')`,
+        [refundRow.id, customerId]
+      );
+
+      // Record in entitlement ledger
+      await client.query(
+        `INSERT INTO subscription_entitlement_ledger (
+          subscription_id, customer_id, entry_type, days_delta, amount_paise, payment_id, refund_request_id, notes
+        ) VALUES ($1, $2, 'refund_requested', 0, $3, $4, $5, $6)`,
+        [subscriptionId, customerId, refundAmount, entitlement.paymentId, refundRow.id, `Cancellation refund request submitted (${requestNumber})`]
+      );
+    }
+
+    // Record subscription domain event
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, customer_id, event_type, actor, payload)
+       VALUES ($1, $2, 'subscription_cancelled', 'customer', $3::jsonb)`,
+      [
+        subscriptionId,
+        customerId,
+        JSON.stringify({
+          reason,
+          customerNotes,
+          gatewayCancelled,
+          gatewayError,
+          refundRequestId: refundRow ? refundRow.id : null,
+          refundRequestNumber: refundRow ? refundRow.request_number : null,
+          cancelledAt: new Date().toISOString()
+        })
+      ]
+    );
+
+    if (sub.phone) await queueNotification(client,{customerId,phone:sub.phone,templateKey:'SUBSCRIPTION_CANCELLED',params:{productName:sub.product_name},idempotencyKey:`sms_sub_cancel_${subscriptionId}`});
+    await client.query('COMMIT');
+
+    return {
+      success: true,
+      subscriptionId,
+      status: 'cancelled',
+      refundRequest: refundRow ? {
+        id: refundRow.id,
+        requestNumber: refundRow.request_number,
+        requestedAmount: refundRow.requested_amount_paise / 100,
+        requestedAmountPaise: refundRow.requested_amount_paise,
+        status: refundRow.status
+      } : null,
+      message: refundRow
+        ? `Subscription cancelled. Refund request #${refundRow.request_number} for ₹${refundRow.requested_amount_paise / 100} submitted for admin review.`
+        : 'Subscription has been cancelled.'
     };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -941,15 +1325,7 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
       : null);
 
-  const subPaidThroughEndDate = derivePaidThroughDate({
-    startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
-    paidThroughDate: subNotes.paidThroughDate,
-    current_end: subNotes.current_end,
-    cost_per_day_paise: sub.cost_per_day_paise,
-    total_amount_paise: sub.total_amount_paise,
-    paidCount: subNotes.paidCount,
-    months: subNotes.months
-  });
+  const subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, sub);
 
   const days = [];
   for (let d = 1; d <= daysInMonth; d++) {

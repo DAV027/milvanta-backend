@@ -2224,6 +2224,7 @@ function setAccountMode(mode) {
 
 let phoneOtpCooldownTimer = null;
 let pendingPhoneForVerification = '';
+let pendingWhatsAppConsent = false;
 
 function startPhoneOtpCooldown(seconds = 60) {
   if (phoneOtpCooldownTimer) clearInterval(phoneOtpCooldownTimer);
@@ -2262,13 +2263,16 @@ async function startPhoneOtpVerification(phone) {
   forgotContainer?.classList.add('hidden');
   otpContainer?.classList.remove('hidden');
 
-  $('#accountTitle').textContent = 'Verify Mobile Number';
+  $('#accountTitle').textContent = 'Verify with WhatsApp';
   $('#accountMessage').textContent = '';
 
   if (descEl) {
-    descEl.innerHTML = `We sent a verification code to <strong>+91 ${escapeHtml(pendingPhoneForVerification)}</strong>.`;
+    descEl.innerHTML = `Requesting a verification code for <strong>+91 ${escapeHtml(pendingPhoneForVerification)}</strong>.`;
   }
 
+  const config = await apiRequest('/api/v1/auth/phone/config').catch(() => ({mandatory:true}));
+  $('#btnSkipPhoneOtp')?.classList.toggle('hidden', config.mandatory);
+  $('#btnContinueFromOtp')?.classList.toggle('hidden', config.mandatory);
   // Attempt to send OTP via backend
   try {
     const res = await apiRequest('/api/v1/auth/phone/send-otp', {
@@ -2285,7 +2289,7 @@ async function startPhoneOtpVerification(phone) {
     }
   } catch (err) {
     console.warn('send-otp notice:', err.message);
-    // If Twilio service is unconfigured (503) or unavailable
+    // Verification service unavailable; do not claim the phone is verified
     if (err.message.includes('unavailable') || err.message.includes('pending configuration') || err.message.includes('503')) {
       noticeEl?.classList.remove('hidden');
     } else {
@@ -3621,6 +3625,7 @@ document.addEventListener('DOMContentLoaded', () => {
         updateAccountButton();
         renderCart();
 
+        pendingWhatsAppConsent = $('#signupWhatsAppConsent')?.checked === true;
         // Prompt phone OTP verification
         startPhoneOtpVerification(phone);
         return;
@@ -3669,6 +3674,16 @@ document.addEventListener('DOMContentLoaded', () => {
         body: JSON.stringify({ phone: pendingPhoneForVerification, code })
       });
       if (res && res.verified) {
+        if (pendingWhatsAppConsent) {
+          try {
+            await apiRequest('/api/v1/customers/notifications/preferences', {
+              method: 'PATCH', body: JSON.stringify({enabled: true})
+            });
+          } catch {
+            showStoreToast('Phone verified. Save WhatsApp preferences in your profile.');
+          }
+          pendingWhatsAppConsent = false;
+        }
         if (state.customer) {
           state.customer.phone_verified = true;
           state.customer.phone_verified_at = new Date().toISOString();

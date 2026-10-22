@@ -47,15 +47,27 @@ services:
         value: "Milvanta <orders@milvanta.in>"
       - key: ADMIN_EMAIL
         value: "projects@milvanta.in"
-      - key: TWILIO_ACCOUNT_SID
+      - key: WHATSAPP_ENABLED
+        value: "false"
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: en
+      - key: WHATSAPP_APPROVED_TEMPLATES
+        value: ""
+      - key: DELIVERY_REMINDER_TIME_IST
+        value: "21:00"
+      - key: WHATSAPP_ACCESS_TOKEN
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
-      - key: TWILIO_VERIFY_SERVICE_SID
+      - key: WHATSAPP_WABA_ID
         sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
+      - key: WHATSAPP_APP_SECRET
         sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_OTP_HASH_SECRET
         sync: false
 
   - type: cron
@@ -72,11 +84,25 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "true"
-      - key: TWILIO_ACCOUNT_SID
+      - key: WHATSAPP_ENABLED
+        value: "false"
+      - key: WHATSAPP_GRAPH_API_VERSION
+        value: v25.0
+      - key: WHATSAPP_TEMPLATE_LANGUAGE
+        value: en
+      - key: WHATSAPP_APPROVED_TEMPLATES
+        value: ""
+      - key: DELIVERY_REMINDER_TIME_IST
+        value: "21:00"
+      - key: WHATSAPP_ACCESS_TOKEN
         sync: false
-      - key: TWILIO_AUTH_TOKEN
+      - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
-      - key: TWILIO_MESSAGING_SERVICE_SID
+      - key: WHATSAPP_WABA_ID
         sync: false
-      - key: TWILIO_STATUS_CALLBACK_URL
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_OTP_HASH_SECRET
         sync: false

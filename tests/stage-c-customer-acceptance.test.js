@@ -11,6 +11,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import pg from 'pg';
+import { configureMockWhatsApp } from './helpers/mockWhatsApp.js';
+import { setWhatsAppPreferences } from '../src/services/whatsappService.js';
 
 // Set test environment configuration
 process.env.NODE_ENV = 'test';
@@ -20,6 +22,7 @@ process.env.RAZORPAY_KEY_ID = 'rzp_test_stage_acceptance';
 process.env.RAZORPAY_KEY_SECRET = 'milvanta_rzp_secret_for_acceptance_tests';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'milvanta_rzp_webhook_for_acceptance_tests';
 
+const graph=configureMockWhatsApp();
 const { Pool } = pg;
 
 let testSetup = null;
@@ -36,7 +39,7 @@ if (testDbConfig.isConfigured) {
   `);
 }
 
-const { app } = await import('../src/server.js');
+const { app,pool:appPool } = await import('../src/server.js');
 const {
   getMilkDailySubscriptionRatePaise,
   calculateContinuousMonthsDays
@@ -60,9 +63,8 @@ const {
   sendPhoneOtp,
   verifyPhoneOtp,
   queueNotification,
-  processNotificationOutbox,
-  mockTwilioStore
-} = await import('../src/services/twilioService.js');
+  processNotificationOutbox
+} = await import('../src/services/notificationService.js');
 
 describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', () => {
   let pool;
@@ -82,9 +84,7 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
 
   before(async () => {
     if (!testSetup) {
-      console.warn('[Stage C Acceptance] TEST_DATABASE_URL not set; running in mock fallback mode.');
-      hasRealDb = false;
-      return;
+      assertTestDatabaseConfigured();
     }
 
     pool = testSetup.pool;
@@ -94,6 +94,8 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   });
 
   after(async () => {
+    await app.close();
+    await appPool?.end();
     if (client) {
       client.release();
     }
@@ -142,22 +144,21 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 3: Customer Mobile OTP Verification (Twilio Mock in Test Mode)
+  // Scenario 3: Customer Mobile OTP Verification (Mocked Meta Graph API)
   // -------------------------------------------------------------------------
-  it('Scenario 3: Customer mobile OTP verification (Twilio mock in test mode)', async () => {
-    const sendRes = await sendPhoneOtp({ phone: customerPhone, customerId, pool: client });
+  it('Scenario 3: Customer mobile OTP verification (mocked Meta Graph API)', async () => {
+    const sessionHash=crypto.createHash('sha256').update(authToken).digest('hex');
+    const sendRes = await sendPhoneOtp({ phone: customerPhone, customerId, sessionHash, pool: client },{fetchImpl:graph.fetchImpl});
     assert.equal(sendRes.success, true);
-    assert.equal(sendRes.mockMode, true);
     assert.equal(sendRes.otp, undefined, 'Must not leak OTP to caller');
 
-    // Retrieve OTP stored in mock store
-    const storedOtp = mockTwilioStore.verifications.get(`+91${customerPhone}`)?.code || '123456';
-    const verifyRes = await verifyPhoneOtp({ phone: customerPhone, code: storedOtp, customerId, pool: client });
+    const verifyRes = await verifyPhoneOtp({ phone: customerPhone, code: graph.lastOtp, customerId,sessionHash,pool: client });
     assert.equal(verifyRes.verified, true);
 
     if (hasRealDb) {
       const check = await client.query('SELECT phone_verified_at FROM customers WHERE id = $1', [customerId]);
       assert.ok(check.rows[0].phone_verified_at !== null);
+      await setWhatsAppPreferences(client,{id:customerId,phone:customerPhone,phone_verified_at:check.rows[0].phone_verified_at},{enabled:true});
     }
   });
 
@@ -485,9 +486,9 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 18: Notification Outbox Queuing SMS for Events
+  // Scenario 18: Notification Outbox Queuing WhatsApp for Events
   // -------------------------------------------------------------------------
-  it('Scenario 18: Notification outbox queuing SMS for order/subscription/delivery events', async () => {
+  it('Scenario 18: Notification outbox queuing WhatsApp for order/subscription/delivery events', async () => {
     if (hasRealDb) {
       const queueRes = await queueNotification(client, {
         customerId,
@@ -505,25 +506,25 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
 
       const check = await client.query('SELECT status, message_body FROM notification_outbox WHERE id = $1', [queueRes.outboxId]);
       assert.equal(check.rows[0].status, 'pending');
-      assert.ok(check.rows[0].message_body.includes('Milvanta'));
+      assert.equal(check.rows[0].message_body,'');
     }
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 19: Notification Worker Sending SMS and Recording Sent/Failed Status
+  // Scenario 19: Notification Worker Sending WhatsApp and Recording Sent/Failed Status
   // -------------------------------------------------------------------------
-  it('Scenario 19: Notification worker sending SMS and recording sent/failed status', async () => {
+  it('Scenario 19: Notification worker sending WhatsApp and recording sent/failed status', async () => {
     if (hasRealDb) {
-      const processRes = await processNotificationOutbox(client, 10);
+      const processRes = await processNotificationOutbox(client, 10,{fetchImpl:graph.fetchImpl});
       assert.ok(processRes.processed >= 1);
 
       const sentRows = await client.query(
-        "SELECT id, status, sent_at, twilio_message_sid FROM notification_outbox WHERE customer_id = $1 AND status = 'sent'",
+        "SELECT id, status, sent_at, meta_message_id FROM notification_outbox WHERE customer_id = $1 AND status = 'accepted'",
         [customerId]
       );
       assert.ok(sentRows.rows.length >= 1);
-      assert.ok(sentRows.rows[0].sent_at !== null);
-      assert.ok(sentRows.rows[0].twilio_message_sid !== null);
+      assert.equal(sentRows.rows[0].sent_at,null,'Acceptance is not proof of delivery');
+      assert.ok(sentRows.rows[0].meta_message_id !== null);
     }
   });
 
