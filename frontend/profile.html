@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="css/style.css?v=20261012-3" />
     <link rel="stylesheet" href="css/storefront.css?v=20261012-3" />
-    <link rel="stylesheet" href="css/profile.css?v=20261021-4" />
+    <link rel="stylesheet" href="css/profile.css?v=20261022-1" />
   </head>
   <body>
     <div class="page-shell">
@@ -345,13 +345,16 @@
                 <!-- Populated dynamically when a day is clicked -->
               </div>
 
-              <!-- Calendar Legend -->
-              <div class="calendar-legend-bar" style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 0.78rem; color: #64748b; padding-top: 12px; border-top: 1px solid #f1f5f9;">
-                <span style="font-weight: 600; color: #334155;">Legend:</span>
-                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #10b981; display: inline-block;"></span> Delivered</span>
-                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #0284c7; display: inline-block;"></span> Scheduled (6:00 AM – 7:00 AM)</span>
-                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; display: inline-block;"></span> Today's Delivery</span>
-                <span style="display: inline-flex; align-items: center; gap: 5px;"><span style="width: 10px; height: 10px; border-radius: 50%; background: #ef4444; display: inline-block;"></span> Paused / No Drop</span>
+              <!-- Calendar Legend with Inline Lucide SVG Icons -->
+              <div class="calendar-legend-bar" style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; font-size: 0.78rem; color: #64748b; padding-top: 12px; border-top: 1px solid #f1f5f9;">
+                <span style="font-weight: 700; color: #334155;">Legend:</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-scheduled"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8v2H8z"/><path d="M9 4v3l-2 3v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V10l-2-3V4"/><path d="M7 14h10"/></svg></span> Scheduled (6:00 AM – 7:00 AM)</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-delivered"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg></span> Delivered</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-today"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span> Today</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-skipped"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg></span> Skipped</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-vacation"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg></span> Vacation</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-paused"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/></svg></span> Paused</span>
+                <span class="cal-legend-item"><span class="cal-icon-badge badge-pending"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> Pending Payment</span>
               </div>
             </div>
           </section>
@@ -891,6 +894,127 @@
       </div>
     </div>
 
+    <!-- Modal: Subscription Cancellation & Authoritative Refund Request -->
+    <div class="modal-overlay hidden" id="subscriptionCancelModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="subCancelModalTitle" style="max-width: 540px;">
+        <button type="button" class="modal-close" id="closeSubCancelModal" aria-label="Close cancellation modal">×</button>
+        <p class="modal-kicker">SUBSCRIPTION MANAGEMENT</p>
+        <h2 id="subCancelModalTitle" style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 6px;">Cancel Subscription &amp; Review Refund</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 16px;">We're sorry to see you go. Cancelling will stop all upcoming morning drops. Any remaining unfulfilled balance will be refunded.</p>
+        
+        <!-- Entitlement Summary Card -->
+        <div id="subCancelEntitlementCard" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+            <strong id="subCancelProductName" style="font-size: 1.05rem; color: #0a3d66;">Pure Cow Milk</strong>
+            <span id="subCancelQuantity" style="font-size: 0.85rem; color: #475569; font-weight: 600;">1 Litre / day</span>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.8rem; color: #475569; margin-bottom: 10px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 10px;">
+            <div>Paid Through: <strong id="subCancelPaidThrough" style="color: #0f172a;">–</strong></div>
+            <div>Delivered Mornings: <strong id="subCancelDeliveredCount" style="color: #0f172a;">–</strong></div>
+            <div>Unused Mornings: <strong id="subCancelUnusedDays" style="color: #0f172a;">–</strong></div>
+            <div>Delivered Value: <strong id="subCancelDeliveredValue" style="color: #0f172a;">–</strong></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: 10px 12px;">
+            <div>
+              <span style="font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: #065f46; display: block;">Calculated Refundable Balance</span>
+              <span style="font-size: 0.75rem; color: #047857;">Original payment method</span>
+            </div>
+            <strong id="subCancelRefundAmount" style="font-size: 1.35rem; color: #065f46;">₹0</strong>
+          </div>
+        </div>
+
+        <form id="subCancelForm" style="display: grid; gap: 12px;">
+          <label style="font-size: 0.8rem; font-weight: 600; color: #1e293b;">Reason for Cancellation
+            <select id="subCancelReasonSelect" required style="width: 100%; padding: 9px 12px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.88rem;">
+              <option value="Moving away / Relocating">Moving away / Relocating</option>
+              <option value="Not consuming milk daily">Not consuming milk daily</option>
+              <option value="Taking a temporary break">Taking a temporary break</option>
+              <option value="Quality or taste preference">Quality or taste preference</option>
+              <option value="Financial / Pricing reasons">Financial / Pricing reasons</option>
+              <option value="Other">Other</option>
+            </select>
+          </label>
+          <label style="font-size: 0.8rem; font-weight: 600; color: #1e293b;">Additional Feedback (Optional)
+            <textarea id="subCancelFeedbackInput" rows="2" placeholder="Help us improve our fresh dairy service..." style="width: 100%; padding: 8px 12px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+          </label>
+          <div style="display: flex; gap: 10px; margin-top: 8px;">
+            <button type="submit" id="btnConfirmCancelSub" style="flex: 1.5; justify-content: center; background: #dc2626; color: #fff; border: none; border-radius: 8px; padding: 12px; font-weight: 700; cursor: pointer; min-height: 44px;">
+              Cancel &amp; Request Refund
+            </button>
+            <button type="button" class="btn-sub-pause" id="btnKeepSub" style="flex: 1; justify-content: center; min-height: 44px; font-weight: 600;">
+              Keep Subscription
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal: Request Order Refund -->
+    <div class="modal-overlay hidden" id="orderRefundModal" aria-hidden="true">
+      <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="orderRefundModalTitle" style="max-width: 540px;">
+        <button type="button" class="modal-close" id="closeOrderRefundModal" aria-label="Close refund modal">×</button>
+        <p class="modal-kicker">ORDER SUPPORT &amp; RETURNS</p>
+        <h2 id="orderRefundModalTitle" style="font-size: 1.35rem; color: #0a3d66; margin: 0 0 6px;">Request Order Refund</h2>
+        <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 14px;">Select the items and issue encountered. Refunds are processed back to your original payment account.</p>
+
+        <!-- Order Info Card -->
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <div>
+            <strong id="orderRefundNumber" style="font-size: 0.95rem; color: #0a3d66;">MV-0000</strong>
+            <div id="orderRefundDate" style="font-size: 0.78rem; color: #64748b;">–</div>
+          </div>
+          <div style="text-align: right;">
+            <span style="font-size: 0.72rem; color: #64748b; display: block;">Max Refundable</span>
+            <strong id="orderRefundMaxAmount" style="font-size: 1.15rem; color: #059669;">₹0</strong>
+          </div>
+        </div>
+
+        <form id="orderRefundForm" style="display: grid; gap: 12px;">
+          <!-- Items Checklist -->
+          <div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label style="font-size: 0.8rem; font-weight: 700; color: #1e293b; margin: 0;">Select Items for Refund</label>
+              <button type="button" id="btnSelectAllRefundItems" style="background: none; border: none; color: #0284c7; font-size: 0.76rem; font-weight: 600; cursor: pointer; text-decoration: underline;">Select All</button>
+            </div>
+            <div id="orderRefundItemsContainer" style="max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px;">
+              <!-- Populated dynamically -->
+            </div>
+          </div>
+
+          <label style="font-size: 0.8rem; font-weight: 600; color: #1e293b;">Reason for Request
+            <select id="orderRefundReasonSelect" required style="width: 100%; padding: 9px 12px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.88rem;">
+              <option value="damaged_item">Damaged or Leaking Item</option>
+              <option value="wrong_item">Wrong Item Delivered</option>
+              <option value="missing_item">Item Missing from Delivery</option>
+              <option value="quality_issue">Quality / Freshness Concern</option>
+              <option value="non_delivery">Order Not Delivered</option>
+              <option value="cancellation">Order Cancelled</option>
+              <option value="other">Other Issue</option>
+            </select>
+          </label>
+
+          <label style="font-size: 0.8rem; font-weight: 600; color: #1e293b;">Describe the Issue
+            <textarea id="orderRefundNotesInput" rows="2" required placeholder="Please provide details about what went wrong with the item(s)..." style="width: 100%; padding: 8px 12px; margin-top: 4px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
+          </label>
+
+          <!-- Refund Amount Calculation -->
+          <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;">
+            <span style="font-size: 0.85rem; font-weight: 600; color: #065f46;">Requested Refund Total:</span>
+            <strong id="orderRefundCalculatedTotal" style="font-size: 1.2rem; color: #065f46;">₹0</strong>
+          </div>
+
+          <div style="display: flex; gap: 10px; margin-top: 6px;">
+            <button type="submit" id="btnSubmitOrderRefund" style="flex: 1.5; justify-content: center; background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 12px; font-weight: 700; cursor: pointer; min-height: 44px;">
+              Submit Refund Request
+            </button>
+            <button type="button" class="btn-sub-pause" id="btnCancelOrderRefundModal" style="flex: 1; justify-content: center; min-height: 44px; font-weight: 600;">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- Interactive Policy Dialog Modal (Razorpay Compliance) -->
     <div class="modal-overlay hidden" id="policyModal" aria-hidden="true">
       <div class="account-panel" role="dialog" aria-modal="true" aria-labelledby="policyTitle">
@@ -904,6 +1028,6 @@
     <script src="js/config.js?v=20261019-1"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="js/delivery.js?v=20261016-5"></script>
-    <script src="js/profile.js?v=20261021-4"></script>
+    <script src="js/profile.js?v=20261022-1"></script>
   </body>
 </html>

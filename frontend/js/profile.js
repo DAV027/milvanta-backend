@@ -444,9 +444,7 @@
     try {
       const data = await apiRequest('/api/v1/orders');
       if (data && Array.isArray(data.orders)) {
-        loadedOrders = data.orders
-          .filter((o) => String(o.order_status || o.status || '').toLowerCase() !== 'cancelled')
-          .map(formatOrderRow);
+        loadedOrders = data.orders.map(formatOrderRow);
       }
     } catch (err) {
       console.warn('Backend orders fetch failed, reading from local cache:', err);
@@ -457,8 +455,6 @@
       const localOrders = JSON.parse(localStorage.getItem('milvanta-orders') || '[]');
       if (Array.isArray(localOrders) && localOrders.length > 0) {
         localOrders.forEach((lo) => {
-          const loStatus = String(lo.order_status || lo.status || '').toLowerCase();
-          if (loStatus === 'cancelled') return;
           const loId = lo.id || lo.order_number;
           if (!loadedOrders.some((o) => o.id === loId)) {
             loadedOrders.push(formatOrderRow(lo));
@@ -540,8 +536,6 @@
       console.warn('Subscription orders integration notice:', e);
     }
 
-    // Exclude any cancelled order
-    loadedOrders = loadedOrders.filter((o) => String(o.status || '').toLowerCase() !== 'cancelled');
 
     // Sort by date descending
     loadedOrders.sort((a, b) => new Date(b.rawDate || b.date) - new Date(a.rawDate || a.date));
@@ -722,14 +716,14 @@
     const container = $('#ordersListContainer');
     if (!container) return;
 
-    // Filter out any cancelled orders
-    const activeOrders = state.orders.filter((order) => String(order.status || '').toLowerCase() !== 'cancelled');
+    // Keep all orders visible (including cancelled)
+    const allOrders = state.orders;
 
     // Update filter counts
-    const subsCount = activeOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom').length;
-    const storeCount = activeOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom').length;
+    const subsCount = allOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom').length;
+    const storeCount = allOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom').length;
 
-    if ($('#filterCountAll')) $('#filterCountAll').textContent = activeOrders.length;
+    if ($('#filterCountAll')) $('#filterCountAll').textContent = allOrders.length;
     if ($('#filterCountSubs')) $('#filterCountSubs').textContent = subsCount;
     if ($('#filterCountStore')) $('#filterCountStore').textContent = storeCount;
 
@@ -738,7 +732,7 @@
       pill.classList.toggle('active', pill.dataset.orderFilter === state.orderFilter);
     });
 
-    if (!activeOrders.length) {
+    if (!allOrders.length) {
       container.innerHTML = `
         <div style="text-align: center; padding: 48px 20px; background: #fff; border-radius: 16px; border: 1px solid #eef2f6;">
           <div style="font-size: 2.8rem; margin-bottom: 12px;">🧺</div>
@@ -751,11 +745,11 @@
     }
 
     // Filter by selected tab (all, subscriptions, store)
-    let filteredOrders = activeOrders;
+    let filteredOrders = allOrders;
     if (state.orderFilter === 'subscriptions') {
-      filteredOrders = activeOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom');
+      filteredOrders = allOrders.filter((o) => o.orderType === 'subscription_continuous' || o.orderType === 'subscription_custom');
     } else if (state.orderFilter === 'store') {
-      filteredOrders = activeOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom');
+      filteredOrders = allOrders.filter((o) => o.orderType !== 'subscription_continuous' && o.orderType !== 'subscription_custom');
     }
 
     if (!filteredOrders.length) {
@@ -879,6 +873,11 @@
                 <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
                   <span>+ Re-order</span>
                 </button>
+                ${(order.paymentStatus === 'paid' || order.status === 'paid' || order.status === 'delivered') ? `
+                  <button type="button" class="btn-order-refund" data-order-refund="${order.id}">
+                    <span>↩ Request Refund</span>
+                  </button>
+                ` : ''}
               `}
               <button type="button" class="btn-order-details" data-details-id="${order.id}">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
@@ -1216,9 +1215,6 @@
           <div class="sub-hero-actions-left">
             <button type="button" class="btn-sub-pill ${isPaused ? 'btn-resume-primary' : 'btn-pause-secondary'}" data-toggle-sub="${sub.id}">
               ${isPaused ? '▶ Resume Subscription' : '⏸ Pause Subscription'}
-            </button>
-            <button type="button" class="btn-sub-pill btn-modify-pill" data-modify-sub="${sub.id}">
-              ✏️ Modify Quantity
             </button>
             <button type="button" class="btn-sub-pill btn-vacation-pill" data-open-vacation="true">
               ✈️ Vacation Pause
@@ -1836,32 +1832,34 @@
 
       if (statusType === 'delivered') {
         deliveredCount++;
-        badgeHtml = `<span class="month-cal-day-badge badge-delivered">✔ Delivered</span>`;
+        badgeHtml = `<span class="cal-icon-badge badge-delivered" title="Delivered"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg></span>`;
       } else if (statusType === 'skipped') {
         pausedCount++;
-        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Skipped</span>`;
+        badgeHtml = `<span class="cal-icon-badge badge-skipped" title="Skipped by customer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg></span>`;
       } else if (statusType === 'vacation') {
         pausedCount++;
-        badgeHtml = `<span class="month-cal-day-badge badge-paused" style="background:#fef2f2; color:#b91c1c;">✈️ Vacation</span>`;
+        badgeHtml = `<span class="cal-icon-badge badge-vacation" title="Vacation Pause"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg></span>`;
       } else if (statusType === 'paused') {
         pausedCount++;
-        badgeHtml = `<span class="month-cal-day-badge badge-paused">⏸ Paused</span>`;
+        badgeHtml = `<span class="cal-icon-badge badge-paused" title="Subscription Paused"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="10" x2="10" y1="15" y2="9"/><line x1="14" x2="14" y1="15" y2="9"/></svg></span>`;
       } else if (statusType === 'pending_payment') {
-        badgeHtml = `<span class="month-cal-day-badge badge-none" style="background:#fef3c7; color:#92400e;">⏳ Pending</span>`;
+        badgeHtml = `<span class="cal-icon-badge badge-pending" title="Awaiting Billing Payment"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>`;
+      } else if (statusType === 'failed') {
+        badgeHtml = `<span class="cal-icon-badge badge-failed" title="Delivery Failed"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg></span>`;
       } else if (statusType === 'ended') {
-        badgeHtml = `<span class="month-cal-day-badge badge-none">Ended</span>`;
+        badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
       } else if (statusType === 'not_started') {
-        badgeHtml = `<span class="month-cal-day-badge badge-none">Starts Later</span>`;
+        badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
       } else if (statusType === 'cancelled') {
-        badgeHtml = `<span class="month-cal-day-badge badge-none">Cancelled</span>`;
+        badgeHtml = `<span class="month-cal-day-badge badge-none">×</span>`;
       } else if (statusType === 'past') {
         badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
       } else if (statusType === 'scheduled') {
         scheduledCount++;
         if (isToday) {
-          badgeHtml = `<span class="month-cal-day-badge badge-today">🚚 Today</span>`;
+          badgeHtml = `<span class="cal-icon-badge badge-today" title="Today's Morning Delivery"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>`;
         } else {
-          badgeHtml = `<span class="month-cal-day-badge badge-scheduled">🥛 6:00 AM</span>`;
+          badgeHtml = `<span class="cal-icon-badge badge-scheduled" title="Scheduled Morning Milk (6:00 AM – 7:00 AM)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2h8v2H8z"/><path d="M9 4v3l-2 3v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V10l-2-3V4"/><path d="M7 14h10"/></svg></span>`;
         }
       } else {
         badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
@@ -2289,6 +2287,13 @@
         return;
       }
 
+      const refundBtn = e.target.closest('[data-order-refund]');
+      if (refundBtn) {
+        const orderId = refundBtn.dataset.orderRefund;
+        openOrderRefundModal(orderId);
+        return;
+      }
+
       const detailsBtn = e.target.closest('[data-details-id]');
       if (detailsBtn) {
         const orderId = detailsBtn.dataset.detailsId;
@@ -2453,66 +2458,251 @@
         return;
       }
 
-      const modifyBtn = e.target.closest('[data-modify-sub]');
-      if (modifyBtn) {
-        const id = modifyBtn.dataset.modifySub;
-        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
-        if (sub) {
-          const supportedPacks = ['500 ml', '1 Litre', '1.5 Litre', '2 Litre', '2.5 Litre', '3 Litre', '3.5 Litre', '4 Litre', '4.5 Litre', '5 Litre'];
-          const promptMsg = `Choose pack size for ${sub.product}:\n(${supportedPacks.join(', ')})`;
-          const newQty = prompt(promptMsg, sub.quantity || '1 Litre');
-          if (newQty && newQty.trim()) {
-            const cleanQty = newQty.trim();
-            try {
-              const res = await apiRequest(`/api/v1/subscriptions/${id}/quantity`, {
-                method: 'PATCH',
-                body: JSON.stringify({ quantity: cleanQty })
-              });
-              if (res?.quantity) {
-                sub.quantity = res.quantity;
-                if (res.dailyRate) sub.dailyRate = res.dailyRate;
-                if (res.dailyRatePaise) sub.costPerDay = res.dailyRatePaise / 100;
-                showToast(res.message || `Quantity updated to ${cleanQty}`);
-              } else {
-                sub.quantity = cleanQty;
-                showToast(`Quantity updated to ${cleanQty}`);
-              }
-            } catch (err) {
-              console.warn('API subscription quantity update notice:', err);
-              sub.quantity = cleanQty;
-              showToast(`Quantity updated to ${cleanQty}`);
-            }
-            try {
-              localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
-            } catch {}
-            renderSubscriptions();
-          }
-        }
-        return;
-      }
-
       const cancelBtn = e.target.closest('[data-cancel-sub]');
       if (cancelBtn) {
         const id = cancelBtn.dataset.cancelSub;
-        const sub = state.subscriptions.find((s) => String(s.id) === String(id));
-        if (sub && confirm(`Are you sure you want to cancel your morning subscription for ${sub.product}?`)) {
-          state.subscriptions = state.subscriptions.filter((s) => String(s.id) !== String(id));
-          try {
-            await apiRequest(`/api/v1/subscriptions/${id}/cancel`, {
-              method: 'POST',
-              body: JSON.stringify({ reason: 'Customer requested cancellation' })
-            });
-          } catch (err) {
-            console.warn('API subscription cancellation notice:', err);
-          }
-          try {
-            localStorage.setItem('milvanta-subscriptions', JSON.stringify(state.subscriptions));
-          } catch {}
-          renderSubscriptions();
-          showToast('Subscription cancelled.');
-        }
+        openSubscriptionCancelModal(id);
         return;
       }
+    });
+
+    // ==========================================
+    // SUBSCRIPTION CANCELLATION & REFUND MODAL
+    // ==========================================
+    let activeCancelSubId = null;
+
+    async function openSubscriptionCancelModal(subId) {
+      activeCancelSubId = subId;
+      const modal = $('#subscriptionCancelModal');
+      if (!modal) return;
+
+      const sub = state.subscriptions.find((s) => String(s.id) === String(subId));
+      if ($('#subCancelProductName')) $('#subCancelProductName').textContent = sub?.product || 'Pure Farm Fresh Milk';
+      if ($('#subCancelQuantity')) $('#subCancelQuantity').textContent = sub?.quantity || '1 Litre / day';
+      if ($('#subCancelPaidThrough')) $('#subCancelPaidThrough').textContent = 'Loading schedule...';
+      if ($('#subCancelDeliveredCount')) $('#subCancelDeliveredCount').textContent = 'Calculating...';
+      if ($('#subCancelUnusedDays')) $('#subCancelUnusedDays').textContent = 'Calculating...';
+      if ($('#subCancelDeliveredValue')) $('#subCancelDeliveredValue').textContent = 'Calculating...';
+      if ($('#subCancelRefundAmount')) $('#subCancelRefundAmount').textContent = 'Calculating...';
+      if ($('#subCancelFeedbackInput')) $('#subCancelFeedbackInput').value = '';
+
+      modal.classList.remove('hidden');
+
+      try {
+        const res = await apiRequest(`/api/v1/subscriptions/${subId}/cancellation-preview`);
+        if (res && res.entitlement) {
+          const ent = res.entitlement;
+          if ($('#subCancelProductName')) $('#subCancelProductName').textContent = ent.productName || 'Pure Fresh Milk';
+          if ($('#subCancelQuantity')) $('#subCancelQuantity').textContent = ent.quantity || '1 Litre / day';
+          if ($('#subCancelPaidThrough')) $('#subCancelPaidThrough').textContent = ent.effectivePaidThroughDate || ent.basePaidThroughDate || 'Active';
+          if ($('#subCancelDeliveredCount')) $('#subCancelDeliveredCount').textContent = `${ent.deliveredCount} Mornings`;
+          if ($('#subCancelUnusedDays')) $('#subCancelUnusedDays').textContent = `${ent.unusedDays} Mornings`;
+          if ($('#subCancelDeliveredValue')) $('#subCancelDeliveredValue').textContent = `₹${(ent.deliveredValue || 0).toLocaleString('en-IN')}`;
+          if ($('#subCancelRefundAmount')) $('#subCancelRefundAmount').textContent = `₹${(ent.estimatedRefundable || 0).toLocaleString('en-IN')}`;
+        }
+      } catch (err) {
+        console.warn('Failed to load cancellation preview:', err);
+        if ($('#subCancelRefundAmount')) $('#subCancelRefundAmount').textContent = 'Calculated upon review';
+      }
+    }
+
+    $('#subCancelForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!activeCancelSubId) return;
+
+      const btn = $('#btnConfirmCancelSub');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Processing Cancellation...';
+      }
+
+      const reason = $('#subCancelReasonSelect')?.value || 'Customer requested cancellation';
+      const feedback = $('#subCancelFeedbackInput')?.value || '';
+
+      try {
+        const res = await apiRequest(`/api/v1/subscriptions/${activeCancelSubId}/cancel-with-refund`, {
+          method: 'POST',
+          body: JSON.stringify({
+            reason,
+            customerNotes: feedback
+          })
+        });
+
+        $('#subscriptionCancelModal')?.classList.add('hidden');
+        showToast(res.message || 'Subscription cancelled.');
+        await fetchSubscriptions();
+        if (String(state.selectedSubId) === String(activeCancelSubId)) {
+          renderMonthlyDeliveryCalendar();
+        }
+      } catch (err) {
+        alert(err.message || 'Failed to cancel subscription.');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Cancel & Request Refund';
+        }
+        activeCancelSubId = null;
+      }
+    });
+
+    $('#closeSubCancelModal')?.addEventListener('click', () => {
+      $('#subscriptionCancelModal')?.classList.add('hidden');
+      activeCancelSubId = null;
+    });
+    $('#btnKeepSub')?.addEventListener('click', () => {
+      $('#subscriptionCancelModal')?.classList.add('hidden');
+      activeCancelSubId = null;
+    });
+
+    // ==========================================
+    // ORDER REFUND REQUEST MODAL
+    // ==========================================
+    let activeOrderRefundNumber = null;
+    let activeOrderRefundEligibility = null;
+
+    async function openOrderRefundModal(orderNumber) {
+      activeOrderRefundNumber = orderNumber;
+      const modal = $('#orderRefundModal');
+      if (!modal) return;
+
+      if ($('#orderRefundNumber')) $('#orderRefundNumber').textContent = `#${orderNumber}`;
+      if ($('#orderRefundDate')) $('#orderRefundDate').textContent = 'Loading details...';
+      if ($('#orderRefundMaxAmount')) $('#orderRefundMaxAmount').textContent = 'Checking...';
+      if ($('#orderRefundItemsContainer')) $('#orderRefundItemsContainer').innerHTML = '<div style="padding:10px; color:#64748b;">Loading order items...</div>';
+      if ($('#orderRefundCalculatedTotal')) $('#orderRefundCalculatedTotal').textContent = '₹0';
+      if ($('#orderRefundNotesInput')) $('#orderRefundNotesInput').value = '';
+
+      modal.classList.remove('hidden');
+
+      try {
+        const el = await apiRequest(`/api/v1/orders/${orderNumber}/refund-eligibility`);
+        if (!el.eligible) {
+          alert(el.message || 'This order is not eligible for refund.');
+          modal.classList.add('hidden');
+          return;
+        }
+
+        activeOrderRefundEligibility = el;
+        if ($('#orderRefundDate')) $('#orderRefundDate').textContent = el.createdAt ? `Placed on ${new Date(el.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : '';
+        if ($('#orderRefundMaxAmount')) $('#orderRefundMaxAmount').textContent = `₹${(el.maxRefundableAmount || 0).toLocaleString('en-IN')}`;
+
+        // Render items checklist
+        if (Array.isArray(el.items) && el.items.length > 0) {
+          $('#orderRefundItemsContainer').innerHTML = el.items.map((item, idx) => `
+            <label class="refund-item-row selected" style="cursor: pointer;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" class="refund-item-check" data-item-idx="${idx}" checked style="width: 16px; height: 16px;" />
+                <div>
+                  <strong style="color: #0f172a; display: block;">${escapeHtml(item.name)}</strong>
+                  <span style="color: #64748b; font-size: 0.76rem;">Qty: ${item.quantity} ${item.packSize ? `· ${escapeHtml(item.packSize)}` : ''}</span>
+                </div>
+              </div>
+              <strong style="color: #0f172a;">₹${((item.totalPaise || 0) / 100).toLocaleString('en-IN')}</strong>
+            </label>
+          `).join('');
+
+          recalculateOrderRefundTotal();
+
+          $('.refund-item-check').forEach((cb) => {
+            cb.addEventListener('change', () => {
+              const row = cb.closest('.refund-item-row');
+              if (row) row.classList.toggle('selected', cb.checked);
+              recalculateOrderRefundTotal();
+            });
+          });
+        } else {
+          $('#orderRefundItemsContainer').innerHTML = '<div style="color:#64748b; font-size:0.8rem;">Full order refund</div>';
+          $('#orderRefundCalculatedTotal').textContent = `₹${(el.maxRefundableAmount || 0).toLocaleString('en-IN')}`;
+        }
+      } catch (err) {
+        alert(err.message || 'Failed to check order refund eligibility.');
+        modal.classList.add('hidden');
+      }
+    }
+
+    function recalculateOrderRefundTotal() {
+      if (!activeOrderRefundEligibility) return;
+      const checks = $('.refund-item-check');
+      let sumPaise = 0;
+      checks.forEach((cb) => {
+        if (cb.checked) {
+          const idx = Number(cb.dataset.itemIdx);
+          const item = activeOrderRefundEligibility.items?.[idx];
+          if (item) {
+            sumPaise += (item.totalPaise || 0);
+          }
+        }
+      });
+
+      const maxPaise = activeOrderRefundEligibility.maxRefundablePaise || 0;
+      const finalPaise = checks.length > 0 ? Math.min(sumPaise, maxPaise) : maxPaise;
+      if ($('#orderRefundCalculatedTotal')) $('#orderRefundCalculatedTotal').textContent = `₹${(finalPaise / 100).toLocaleString('en-IN')}`;
+    }
+
+    $('#btnSelectAllRefundItems')?.addEventListener('click', () => {
+      $('.refund-item-check').forEach((cb) => {
+        cb.checked = true;
+        cb.closest('.refund-item-row')?.classList.add('selected');
+      });
+      recalculateOrderRefundTotal();
+    });
+
+    $('#orderRefundForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!activeOrderRefundNumber || !activeOrderRefundEligibility) return;
+
+      const btn = $('#btnSubmitOrderRefund');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Submitting Request...';
+      }
+
+      const reasonCategory = $('#orderRefundReasonSelect')?.value || 'other';
+      const notes = $('#orderRefundNotesInput')?.value || '';
+
+      const selectedItems = [];
+      $('.refund-item-check').forEach((cb) => {
+        if (cb.checked) {
+          const idx = Number(cb.dataset.itemIdx);
+          const item = activeOrderRefundEligibility.items?.[idx];
+          if (item) selectedItems.push(item);
+        }
+      });
+
+      try {
+        const res = await apiRequest(`/api/v1/orders/${activeOrderRefundNumber}/refund-request`, {
+          method: 'POST',
+          body: JSON.stringify({
+            reasonCategory,
+            customerNotes: notes,
+            selectedItems: selectedItems.length > 0 ? selectedItems : null
+          })
+        });
+
+        $('#orderRefundModal')?.classList.add('hidden');
+        showToast(res.message || 'Refund request submitted for admin review.');
+        await fetchOrders();
+      } catch (err) {
+        alert(err.message || 'Failed to submit refund request.');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Submit Refund Request';
+        }
+        activeOrderRefundNumber = null;
+        activeOrderRefundEligibility = null;
+      }
+    });
+
+    $('#closeOrderRefundModal')?.addEventListener('click', () => {
+      $('#orderRefundModal')?.classList.add('hidden');
+      activeOrderRefundNumber = null;
+      activeOrderRefundEligibility = null;
+    });
+    $('#btnCancelOrderRefundModal')?.addEventListener('click', () => {
+      $('#orderRefundModal')?.classList.add('hidden');
+      activeOrderRefundNumber = null;
+      activeOrderRefundEligibility = null;
     });
 
     // Edit Profile Modal & Handler
