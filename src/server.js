@@ -37,14 +37,22 @@ import {
   skipDeliveryDate,
   unskipDeliveryDate,
   setVacation,
-  modifySubscriptionQuantity,
   cancelSubscription,
+  cancelSubscriptionWithRefund,
+  calculateSubscriptionEntitlement,
   getSubscriptionCalendar,
   calculateNextDeliveryDate,
   isDeliveryCutoffPassed,
   derivePaidThroughDate,
   formatDateYMD
 } from './services/subscriptionService.js';
+import {
+  calculateOrderRefundEligibility,
+  createOrderRefundRequest,
+  listAdminRefundRequests,
+  approveRefundRequest,
+  rejectRefundRequest
+} from './services/refundService.js';
 import {
   generateDailyDeliveries,
   getDailyDeliveries,
@@ -2872,16 +2880,49 @@ app.post('/api/v1/subscriptions/:id/vacation', { preHandler: app.authenticate },
   return reply.send(result);
 });
 
-app.patch('/api/v1/subscriptions/:id/quantity', { preHandler: app.authenticate }, async (request, reply) => {
+app.get('/api/v1/subscriptions/:id/cancellation-preview', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const subId = Number(request.params.id);
   if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
-  const { quantity } = request.body || {};
 
-  const result = await modifySubscriptionQuantity(pool, {
+  const entitlement = await calculateSubscriptionEntitlement(pool, {
+    subscriptionId: subId,
+    customerId: request.customer.id
+  });
+
+  if (!entitlement) {
+    return reply.code(404).send({ error: 'subscription_not_found', statusCode: 404 });
+  }
+
+  return reply.send({
+    success: true,
+    entitlement: {
+      ...entitlement,
+      totalContractAmount: entitlement.totalContractAmountPaise / 100,
+      costPerDay: entitlement.costPerDayPaise / 100,
+      deliveredValue: entitlement.deliveredValuePaise / 100,
+      unusedBalance: entitlement.unusedBalancePaise / 100,
+      estimatedRefundable: entitlement.estimatedRefundablePaise / 100,
+      alreadyRefunded: entitlement.alreadyRefundedPaise / 100,
+      pendingRefund: entitlement.pendingRefundPaise / 100,
+      accruedCredit: entitlement.accruedCreditPaise / 100
+    }
+  });
+});
+
+app.post('/api/v1/subscriptions/:id/cancel-with-refund', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+  const { reason, customerNotes, requestedRefundAmountPaise } = request.body || {};
+
+  const result = await cancelSubscriptionWithRefund(pool, {
     subscriptionId: subId,
     customerId: request.customer.id,
-    newQuantity: quantity
+    reason,
+    customerNotes,
+    requestedRefundAmountPaise,
+    razorpayClient: razorpay
   });
 
   if (!result.success) {
@@ -3298,6 +3339,97 @@ function formatISTDateTime(isoOrDate) {
 }
 
 // ---------- Admin Order Management ----------
+// ---------- Customer Order Refund Endpoints ----------
+app.get('/api/v1/orders/:orderNumber/refund-eligibility', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { orderNumber } = request.params;
+  if (!orderNumber) return reply.code(400).send({ error: 'order_number_required' });
+
+  const eligibility = await calculateOrderRefundEligibility(pool, {
+    orderNumber,
+    customerId: request.customer.id
+  });
+
+  if (eligibility.error === 'order_not_found') {
+    return reply.code(404).send(eligibility);
+  }
+  return reply.send(eligibility);
+});
+
+app.post('/api/v1/orders/:orderNumber/refund-request', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { orderNumber } = request.params;
+  if (!orderNumber) return reply.code(400).send({ error: 'order_number_required' });
+  const { reasonCategory, reasonDetail, customerNotes, selectedItems } = request.body || {};
+
+  const result = await createOrderRefundRequest(pool, {
+    orderNumber,
+    customerId: request.customer.id,
+    reasonCategory,
+    reasonDetail,
+    customerNotes,
+    selectedItems
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.code(201).send(result);
+});
+
+// ---------- Admin Refund Management Endpoints ----------
+app.get('/api/v1/admin/refunds', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { status, requestType, limit, offset } = request.query || {};
+
+  const result = await listAdminRefundRequests(pool, {
+    status,
+    requestType,
+    limit,
+    offset
+  });
+
+  return reply.send(result);
+});
+
+app.post('/api/v1/admin/refunds/:id/approve', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const refundId = Number(request.params.id);
+  if (!Number.isSafeInteger(refundId) || refundId <= 0) return reply.code(400).send({ error: 'invalid_refund_id' });
+  const { approvedAmountPaise, adminNotes } = request.body || {};
+
+  const result = await approveRefundRequest(pool, {
+    refundRequestId: refundId,
+    adminId: request.customer.id,
+    approvedAmountPaise,
+    adminNotes,
+    razorpayClient: razorpay
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
+app.post('/api/v1/admin/refunds/:id/reject', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const refundId = Number(request.params.id);
+  if (!Number.isSafeInteger(refundId) || refundId <= 0) return reply.code(400).send({ error: 'invalid_refund_id' });
+  const { adminNotes } = request.body || {};
+
+  const result = await rejectRefundRequest(pool, {
+    refundRequestId: refundId,
+    adminId: request.customer.id,
+    adminNotes
+  });
+
+  if (!result.success) {
+    return reply.code(result.statusCode || 400).send(result);
+  }
+  return reply.send(result);
+});
+
 app.get('/api/v1/admin/orders', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -3926,6 +4058,29 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               });
               dispatchOrderPaidSms(pool, orderId).catch(() => {});
             }
+          }
+        }
+      }
+
+      // C. Razorpay Refund Lifecycle Events
+      if (['refund.processed', 'refund.failed'].includes(eventName)) {
+        const refundEntity = request.body?.payload?.refund?.entity;
+        if (refundEntity?.id) {
+          const newStatus = eventName === 'refund.processed' ? 'processed' : 'failed';
+          const updateRes = await client.query(
+            `UPDATE refund_requests
+             SET status = $2, gateway_refund_id = $1, gateway_response = $3::jsonb, updated_at = NOW()
+             WHERE gateway_refund_id = $1 OR payment_id = $4
+             RETURNING id, status, customer_id, subscription_id`,
+            [refundEntity.id, newStatus, JSON.stringify(refundEntity), refundEntity.payment_id]
+          );
+          if (updateRes.rows.length > 0) {
+            const rf = updateRes.rows[0];
+            await client.query(
+              `INSERT INTO refund_request_history (refund_request_id, previous_status, new_status, actor_type, note, payload)
+               VALUES ($1, $2, $3, 'webhook', $4, $5::jsonb)`,
+              [rf.id, rf.status, newStatus, `Razorpay webhook ${eventName}`, JSON.stringify(refundEntity)]
+            );
           }
         }
       }
