@@ -1,13 +1,5 @@
-# Direct Meta WhatsApp migration
+# Historical initial migration design
 
-Implement the supplied migration brief without production side effects. Base: 814468e on the refund/calendar feature branch, six commits ahead of origin/main. Its uncommitted refund edits stay in the original checkout; integrate those separately after review. Do not modify applied migrations or billing/refund decisions.
+Superseded by the user-approved WhatsApp-only brief and [current design](../specs/2026-10-22-whatsapp-only-design.md).
 
-Use a provider facade (default Twilio) so an event has one channel and its existing unique event key survives cutover. WhatsApp templates have ordered parameters and an explicit operator-managed approved-template allowlist; unknown or unapproved templates fail closed. No automatic fallback between providers.
-
-Use authenticated post-signup phone verification, matching the existing account-first registration flow. Validate the database session, bind challenges to customer and session token digest, generate random six-digit codes, store salted HMAC digests with a dedicated secret, expire in five minutes, serialize resend by phone, enforce a 60-second cooldown and five attempts, and consume atomically with customer verification. Never persist plaintext OTPs. Existing signup/login policy stays unchanged; email recovery never verifies a phone.
-
-Reuse notification_outbox with channel-specific claims, SKIP LOCKED, bounded attempts and retry scheduling. A network timeout or crash after dispatch is ambiguous: hold for reconciliation rather than resend and risk duplication. A positive Graph response means accepted only. Signed callbacks carry opaque outbox IDs to reconcile callbacks that arrive before the send response; store deduplicated minimal events and apply monotonic status progression. Validate WABA and phone-number identity as well as signature. Opt-out updates WhatsApp consent only.
-
-Explicit verified-number consent defaults off. Enforce category, number, language, consent and delivery eligibility both when queuing and before sending. Add cancellation, payment issue and renewal notifications; preserve payment evidence guards before activation. Schedule next-day reminders at configurable IST time and expire stale reminders. Keep Twilio dependency/configuration until a separately approved production cutover and cleanup.
-
-Validation uses a local disposable PostgreSQL instance, mocked fetch, real HMAC signatures, API injection and mobile browser checks. No Neon/Render production test traffic or live sends. Package the complete Cloudflare tree with matching equivalent files. Push reviewable feature commits only; no merge or deployment. Report external setup and scheduler verification separately from local test evidence.
+The original artifact is preserved in Git at commit a6aac72ecd8ae093e28021a1eb4ba7fb0677d02f. Its temporary two-provider rollout instructions are obsolete and must not be used for deployment. See [the current cutover guide](../../meta-whatsapp-cutover.md).

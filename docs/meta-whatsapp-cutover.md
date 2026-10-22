@@ -1,12 +1,12 @@
 # Milvanta direct Meta WhatsApp migration
 
-This branch implements direct Graph API messaging. **Production cutover is not ready**: credentials, approved templates, real OTP/customer delivery and a provisioned scheduler have not been verified. WhatsApp is disabled in both supplied Blueprints. Production defaults to Twilio. No deployment, production migration or live send was performed.
+This branch implements direct Graph API messaging. **Production cutover is not ready**: credentials, approved templates, real OTP/customer delivery and a provisioned scheduler have not been verified. WhatsApp is disabled in both supplied Blueprints. Meta WhatsApp is the sole active phone-messaging implementation; there is no alternate transport or fallback. No deployment, production migration or live send was performed.
 
 ## Architecture and integration base
 
 Base commit `814468e` contains six refund/admin/calendar commits beyond `origin/main`. Review this branch against that commit for the messaging-only diff. Merging directly against main will also include those six commits; integrate the refund work first or review it as a stacked dependency. The original checkout's two uncommitted refund-file edits and untracked files were preserved and are not included.
 
-`notificationService.js` selects one provider when an event is queued. The existing global unique event keys remain unchanged, including the historical `sms_` prefix: a payment cannot create a second event merely because the provider changes. Each worker claims only its own persisted channel. Existing Twilio OTP, callback, credentials, dependency and SMS history remain for controlled cutover; removal belongs in a separate cleanup commit after approved production validation.
+`notificationService.js` delegates exclusively to `whatsappService.js` and `whatsappOtpService.js`. The global unique event keys remain unchanged, including the historical `sms_` prefixes, so existing payment keys cannot create duplicate confirmations. New messages are always queued with `channel = 'whatsapp'`. Only WhatsApp rows can be claimed. Historical SMS rows, provider IDs and old preferences remain untouched as audit data; there is no worker, callback, dependency or runtime option that can send them or replay them through Meta.
 
 `whatsappService.js` uses Node fetch directly against the fixed HTTPS Graph host, with a ten-second abort timeout, no redirects and up to two retries for explicit throttling rejections. The outbox instead schedules bounded retries in PostgreSQL (five attempts, exponential delay, honoring Retry-After). Authorization/configuration/template errors fail closed; raw provider error prose is never returned or logged. No intermediary or Meta SDK is used.
 
@@ -14,7 +14,7 @@ Atomic SKIP LOCKED claims use unique lease tokens and persist before HTTP. A ret
 
 No provider can guarantee exactly-once delivery across an HTTP crash boundary. A timeout, ambiguous 5xx/malformed success, database failure after dispatch, or processing lease older than five minutes is held as **uncertain**. A subsequent signed delivery callback can reconcile it. Never automatically resend an uncertain row; an operator must verify the original request with Meta before deciding whether to retry. Batch entries refresh their leases before dispatch. Opt-out cannot recall an HTTP request already in flight.
 
-`whatsappOtpService.js` implements the existing account-first signup flow: OTP endpoints require an active database-backed login session in WhatsApp mode. A challenge is bound to customer, normalized account phone and SHA256 of the session token. Six digits come from crypto.randomInt; salted HMAC-SHA256 digests require a separate random secret. Challenges expire after five minutes, serialize 60-second resend cooldowns by phone, allow five attempts, supersede older requests and consume verification atomically with phone_verified_at. Verification uses timingSafeEqual and no plaintext code is persisted or logged. Failed sends cannot verify. Tests require an explicitly injected mock fetch and never infer success from missing credentials.
+`whatsappOtpService.js` implements the existing account-first signup flow: OTP endpoints require an active database-backed login session unconditionally. A challenge is bound to customer, normalized account phone and SHA256 of the session token. Six digits come from crypto.randomInt; salted HMAC-SHA256 digests require a separate random secret. Challenges expire after five minutes, serialize 60-second resend cooldowns by phone, allow five attempts, supersede older requests and consume verification atomically with phone_verified_at. Verification uses timingSafeEqual and no plaintext code is persisted or logged. Failed sends cannot verify. Tests require an explicitly injected mock fetch and never infer success from missing credentials.
 
 Registration and login policy remain unchanged. `MANDATORY_PHONE_VERIFICATION` continues to gate the existing subscription/payment/order operations. Email/password recovery remains available through existing secure account flows, and never marks a phone verified. If phone verification is mandatory and WhatsApp is unavailable, phone-dependent operations remain blocked; there is no email bypass.
 
@@ -28,8 +28,6 @@ Configure the API and scheduler consistently:
 
 | Variable | Value or purpose |
 |---|---|
-| `NOTIFICATION_PROVIDER` | `twilio` by default; `whatsapp` for isolated staging |
-| `NOTIFICATION_DRAIN_PREVIOUS_PROVIDER` | `false` by default; explicit temporary drain of historical channel rows |
 | `WHATSAPP_ENABLED` | `false` until setup and consent/template checks are complete |
 | `WHATSAPP_GRAPH_API_VERSION` | Pinned configurable `v25.0`; confirm support in Meta dashboard at deployment |
 | `WHATSAPP_ACCESS_TOKEN` | System-user token with WhatsApp messaging permissions; secret |
@@ -83,14 +81,18 @@ Daily generation still runs at 20:15 IST (`45 14 * * *` UTC). It excludes unpaid
 
 **Provisioning assessment, 2026-10-22:** after user selected the Milvanta Render workspace, list_services returned `null` both with and without previews. The required cron service could not be verified as provisioned. No service was created or triggered. Blueprint declarations alone do not establish an active scheduler. Before launch, verify the service/repository/branch, isolated staging DB, environment, enabled status, last successful run, generated deliveries and due outbox processing. Since the cron runs before reminder time, the API sweep must also be healthy at reminder time. The staging scheduler remains disabled by default.
 
-Cutover requires a separate production approval:
+Cutover requires a separate production approval. Readiness is **BLOCKED** until every prerequisite is verified:
 
-1. Integrate/refine the refund dependency and resolve unrelated baseline test failures; test migration and features on an isolated staging DB.
-2. Complete Meta credentials, approved templates, consent, signed callback and real staging delivery verification.
-3. Inventory pending/processing/uncertain rows grouped by channel. Prefer draining the old provider before changing the queue provider. Alternatively explicitly set `NOTIFICATION_DRAIN_PREVIOUS_PROVIDER=true` temporarily while both channels' credentials and consent are intentionally authorized. Unique event keys still prevent one event being queued on both channels.
-4. Confirm old-channel pending rows are drained or intentionally held, and investigate every uncertain row. With drain off, historical rows remain held for deliberate draining or rollback; never silently migrate/requeue them to another provider.
-5. Enable WhatsApp and switch NOTIFICATION_PROVIDER consistently across API and scheduler; verify OTP, order and subscription receipts, delivery scheduler and opt-out. Stop the old-provider drain and verify no further Twilio traffic. Do not delete working fallback configuration before verification.
-6. Remove Twilio package/configuration in a separate approved cleanup commit. For rollback, select Twilio, preserve all WhatsApp audit records and reconcile in-flight/uncertain requests before any resend.
+1. Integrate/review the refund dependency without unintended merges and validate unchanged migrations through 015 on isolated staging. No new SQL migration is required by the cleanup branch.
+2. Verify the registered Meta WABA/business number, production system-user access token and webhook app secret.
+3. Verify approved authentication and utility templates for every enabled name/locale; populate the allowlist only from actual approval evidence.
+4. Confirm the signed Meta callback and run separately authorized real staging OTP and utility-message delivery tests, including receipts, failed-send behavior and consent/opt-out. No real send is authorized by this implementation brief.
+5. Verify a provisioned scheduler, correct database/branch/environment and a successful generation/reminder run. A Blueprint is not provisioning evidence.
+6. Inventory historical SMS and uncertain rows without sending or requeueing them. Preserve their keys and audit metadata. Resolve unknown Meta outcomes through authentic receipts/operator investigation rather than automatic retries.
+7. With explicit production authorization, deploy the WhatsApp-only branch, apply existing pending migrations and configure Meta consistently on API and scheduler. Enable WHATSAPP_ENABLED only after the checks above. Verify production OTP, confirmations, reminders and consent behavior under that authorization.
+8. Keep all previous-provider credentials removed from new deployment settings. If WhatsApp fails, disable sending and investigate; never switch to SMS or use email as proof of phone ownership. Existing Resend email purposes are unchanged.
+
+This branch has exactly one phone-messaging provider. Previous two-provider rollout instructions are superseded. Historical implementation evidence remains available in Git.
 
 ## Sanitized send example
 
