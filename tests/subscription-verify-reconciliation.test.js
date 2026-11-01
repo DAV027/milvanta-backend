@@ -28,6 +28,7 @@ const { app, razorpay } = await import('../src/server.js');
 const { generateDailyDeliveries } = await import('../src/services/deliveryEngine.js');
 const { getSubscriptionCalendar, addCalendarMonths, derivePaidThroughDate } = await import('../src/services/subscriptionService.js');
 const { sendSubscriptionConfirmationEmails } = await import('../src/email.js');
+const { calculateContinuousMonthsDays } = await import('../src/pricing.js');
 
 describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconciliation Suite', () => {
   let customerAId;
@@ -62,6 +63,18 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
       [testEmailB, testPhoneB]
     );
     customerBId = resB.rows[0].id;
+
+    // Seed default customer addresses
+    await pool.query(
+      `INSERT INTO customer_addresses (customer_id, address_fingerprint, recipient_name, phone, house, building, street, landmark, city, state, pincode, is_default)
+       VALUES ($1, 'fp_alpha', 'Customer Alpha', $2, 'Flat 101', 'Tower A', 'Road No 10 Banjara Hills', 'Near Park', 'Hyderabad', 'Telangana', '500034', TRUE)`,
+      [customerAId, testPhoneA]
+    );
+    await pool.query(
+      `INSERT INTO customer_addresses (customer_id, address_fingerprint, recipient_name, phone, house, building, street, landmark, city, state, pincode, is_default)
+       VALUES ($1, 'fp_beta', 'Customer Beta', $2, 'Flat 202', 'Tower B', 'Road No 12 Jubilee Hills', 'Near Club', 'Hyderabad', 'Telangana', '500033', TRUE)`,
+      [customerBId, testPhoneB]
+    );
 
     // Generate tokens
     tokenA = app.jwt.sign({ sub: String(customerAId), email: testEmailA });
@@ -2324,8 +2337,10 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
         assert.equal(data.success, true);
         assert.equal(data.dailyRate, 105);
         // Ensure the Razorpay plan amount strictly matches dailyRate * daysCount without spurious delivery surcharges
-        assert.equal(data.amount, 325500);
-        assert.equal(data.totalAmount, 325500);
+        const expectedDays = calculateContinuousMonthsDays(0, 1);
+        const expectedAmount = expectedDays * 10500;
+        assert.equal(data.amount, expectedAmount);
+        assert.equal(data.totalAmount, expectedAmount);
       } finally {
         razorpay.plans.create = originalPlansCreate;
         razorpay.subscriptions.create = originalSubsCreate;
@@ -2588,7 +2603,7 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
            0, 'active', 'Tomorrow, 6:00 AM', 'custom', 'Custom Plan',
            0, $2, $3::jsonb
          ) RETURNING id`,
-        [customerAId, subId, JSON.stringify({ subscriptionId: subId, lastPaymentId: 'pay_unverifiable_mock' })]
+        [customerAId, subId, JSON.stringify({ subscriptionId: subId, lastPaymentId: 'pay_unverifiable_mock', fulfillmentEntitled: true })]
       );
       const localId = insertRes.rows[0].id;
 
@@ -2620,6 +2635,7 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
           subscriptionId: subId,
           lastPaymentId: 'pay_valid_paid_period',
           paidCount: 1,
+          fulfillmentEntitled: true,
           startDate: '2026-10-01',
           paidThroughDate: '2026-10-25'
         })]

@@ -28,6 +28,7 @@ before(async()=>{
   setup=await setupDisposableTestSchema();pool=setup.pool;
   const {rows}=await pool.query(`INSERT INTO customers(full_name,email,phone,password_salt,password_hash) VALUES('WA Test','wa@test.invalid','9876543210','salt','hash') RETURNING *`);
   customer=rows[0];
+  await pool.query(`INSERT INTO customer_addresses(customer_id,address_fingerprint,recipient_name,phone,house,building,street,city,state,pincode,is_default) VALUES($1,'wa-fp','WA Test','9876543210','H-12','Tower A','Banjara Hills Rd 1','Hyderabad','Telangana','500034',TRUE)`,[customer.id]);
 });
 after(async()=>{if(setup) await cleanupDisposableTestSchema(pool,setup.schemaName);});
 async function clearOtp(){ await pool.query('DELETE FROM whatsapp_otp_challenges'); }

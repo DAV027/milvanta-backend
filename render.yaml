@@ -84,6 +84,8 @@ services:
         sync: false
       - key: DATABASE_SSL
         value: "true"
+      - key: DELIVERY_SCHEDULER_ENABLED
+        value: "false"
       - key: WHATSAPP_ENABLED
         value: "false"
       - key: WHATSAPP_GRAPH_API_VERSION
