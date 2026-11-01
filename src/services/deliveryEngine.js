@@ -219,17 +219,153 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null) {
 }
 
 /**
+ * PREVIEW DAILY DELIVERY ORDERS (DRY RUN)
+ * Strictly read-only: does not insert any records.
+ */
+export async function previewDailyDeliveries(pool, targetDateYMD = null) {
+  if (!pool) throw new Error('Database pool required');
+  const targetDate = targetDateYMD || getTomorrowDeliveryDateYMD();
+
+  const { client, release } = await acquireClient(pool);
+  try {
+    const { rows: activeSubs } = await client.query(
+      `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              c.full_name, c.phone, c.email
+       FROM customer_subscriptions cs
+       JOIN customers c ON c.id = cs.customer_id
+       WHERE cs.status = 'active'
+       ORDER BY cs.id ASC`
+    );
+
+    let eligibleCount = 0;
+    let alreadyGeneratedCount = 0;
+    let toGenerateCount = 0;
+    const skippedBreakdown = {
+      noPaymentEvidence: 0,
+      beforeStartDate: 0,
+      noEntitlement: 0,
+      beyondEntitlement: 0,
+      skippedDate: 0,
+      onVacationOrPause: 0
+    };
+    const eligibleList = [];
+
+    for (const sub of activeSubs) {
+      const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+
+      const hasPaymentEvidence = Boolean(
+        (subNotes.lastPaymentId || subNotes.paymentId) &&
+        subNotes.fulfillmentEntitled !== false &&
+        subNotes.authType !== 'mandate_only'
+      );
+      if (!hasPaymentEvidence) {
+        skippedBreakdown.noPaymentEvidence++;
+        continue;
+      }
+
+      const subStartDate = subNotes.startDate || subNotes.start_date ||
+        (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+          ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+          : null) ||
+        (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+
+      if (!subStartDate || targetDate < subStartDate) {
+        skippedBreakdown.beforeStartDate++;
+        continue;
+      }
+
+      const paidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
+      if (!paidThroughEndDate) {
+        skippedBreakdown.noEntitlement++;
+        continue;
+      }
+      if (targetDate > paidThroughEndDate) {
+        skippedBreakdown.beyondEntitlement++;
+        continue;
+      }
+
+      const { rows: skipped } = await client.query(
+        'SELECT id FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',
+        [sub.id, targetDate]
+      );
+      if (skipped.length > 0) {
+        skippedBreakdown.skippedDate++;
+        continue;
+      }
+
+      const { rows: paused } = await client.query(
+        `SELECT id FROM subscription_delivery_pauses 
+         WHERE subscription_id = $1 
+           AND pause_start_date <= $2 
+           AND (pause_end_date IS NULL OR pause_end_date >= $2)
+           AND resumed_at IS NULL`,
+        [sub.id, targetDate]
+      );
+      if (paused.length > 0) {
+        skippedBreakdown.onVacationOrPause++;
+        continue;
+      }
+
+      eligibleCount++;
+
+      // Check if already generated
+      const { rows: existing } = await client.query(
+        'SELECT id, delivery_order_number, status FROM subscription_delivery_orders WHERE subscription_id = $1 AND delivery_date = $2',
+        [sub.id, targetDate]
+      );
+
+      const isAlreadyGenerated = existing.length > 0;
+      if (isAlreadyGenerated) {
+        alreadyGeneratedCount++;
+      } else {
+        toGenerateCount++;
+      }
+
+      eligibleList.push({
+        subscriptionId: sub.id,
+        customerId: sub.customer_id,
+        customerName: sub.full_name,
+        customerPhone: sub.phone,
+        productName: sub.product_name,
+        quantity: sub.quantity,
+        quantityNum: Number(sub.quantity_num) || 1,
+        paidThroughDate: paidThroughEndDate,
+        alreadyGenerated: isAlreadyGenerated,
+        existingDeliveryOrderNumber: existing[0]?.delivery_order_number || null,
+        existingStatus: existing[0]?.status || null
+      });
+    }
+
+    return {
+      success: true,
+      targetDate,
+      totalActiveSubscriptions: activeSubs.length,
+      eligibleCount,
+      alreadyGeneratedCount,
+      toGenerateCount,
+      skippedBreakdown,
+      eligibleSubscriptions: eligibleList
+    };
+  } finally {
+    release();
+  }
+}
+
+/**
  * Get daily delivery orders for operations dispatch
  */
 export async function getDailyDeliveries(pool, dateOrOptions = null) {
   let targetDate;
   let status = null;
+  let search = null;
   let limit = 100;
   let offset = 0;
 
   if (dateOrOptions && typeof dateOrOptions === 'object') {
     targetDate = dateOrOptions.date || getTomorrowDeliveryDateYMD();
     status = dateOrOptions.status || null;
+    search = dateOrOptions.search || null;
     limit = dateOrOptions.limit || 100;
     offset = dateOrOptions.offset || 0;
   } else if (typeof dateOrOptions === 'string') {
@@ -238,26 +374,44 @@ export async function getDailyDeliveries(pool, dateOrOptions = null) {
     targetDate = getTomorrowDeliveryDateYMD();
   }
 
-  let query = `
-    SELECT sdo.*, c.full_name AS customer_name, c.phone AS customer_phone
+  let baseQuery = `
     FROM subscription_delivery_orders sdo
     JOIN customers c ON c.id = sdo.customer_id
     WHERE sdo.delivery_date = $1
   `;
   const params = [targetDate];
 
-  if (status) {
+  if (status && status !== 'all') {
     params.push(status);
-    query += ` AND sdo.status = $${params.length}`;
+    baseQuery += ` AND sdo.status = $${params.length}`;
   }
 
-  query += ` ORDER BY sdo.id ASC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-  params.push(limit, offset);
+  if (search && search.trim()) {
+    params.push(`%${search.trim().toLowerCase()}%`);
+    baseQuery += ` AND (
+      LOWER(sdo.delivery_order_number) LIKE $${params.length} OR
+      LOWER(sdo.product_name) LIKE $${params.length} OR
+      LOWER(c.full_name) LIKE $${params.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${params.length} OR
+      LOWER(COALESCE(sdo.delivery_address->>'phone', '')) LIKE $${params.length} OR
+      LOWER(COALESCE(sdo.delivery_address->>'recipient_name', '')) LIKE $${params.length} OR
+      LOWER(COALESCE(sdo.delivery_address->>'street', '')) LIKE $${params.length} OR
+      LOWER(COALESCE(sdo.delivery_address->>'city', '')) LIKE $${params.length}
+    )`;
+  }
+
+  const query = `
+    SELECT sdo.*, c.full_name AS customer_name, c.phone AS customer_phone
+    ${baseQuery}
+    ORDER BY sdo.id ASC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+  `;
+  const queryParams = [...params, limit, offset];
 
   try {
-    const { rows } = await pool.query(query, params);
+    const { rows } = await pool.query(query, queryParams);
 
-    // Group counts by status
+    // Group counts by status (for target date)
     const { rows: countRows } = await pool.query(
       `SELECT status, COUNT(*) AS count
        FROM subscription_delivery_orders
@@ -267,11 +421,15 @@ export async function getDailyDeliveries(pool, dateOrOptions = null) {
     );
     const statusCounts = Object.fromEntries(countRows.map(r => [r.status, Number(r.count)]));
 
+    // Total count for current query filter
+    const countRes = await pool.query(`SELECT COUNT(*) AS total ${baseQuery}`, params);
+    const totalMatching = Number(countRes.rows[0]?.total || 0);
+
     return {
       deliveryDate: targetDate,
       deliveries: rows,
       counts: statusCounts,
-      total: rows.length
+      total: totalMatching
     };
   } catch (err) {
     if (err.code === '42P01') {
