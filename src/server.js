@@ -535,7 +535,7 @@ app.post('/api/v1/auth/login', {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const email = request.body.email.trim().toLowerCase();
   const { rows } = await pool.query(
-    'SELECT id, full_name, email, phone, password_salt, password_hash FROM customers WHERE LOWER(email) = $1',
+    'SELECT id, full_name, email, phone, COALESCE(is_admin, FALSE) AS is_admin, password_salt, password_hash FROM customers WHERE LOWER(email) = $1',
     [email]
   );
   const user = rows[0];
