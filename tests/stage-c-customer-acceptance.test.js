@@ -79,6 +79,12 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   let bufSubId;
   let tomorrowYMD;
   let generatedDeliveries = [];
+  const getFutureYMD = (daysAhead) => {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    return formatDateYMD(d);
+  };
+  let dynamicSkipDate;
 
   before(async () => {
     if (!testSetup) {
@@ -313,7 +319,8 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   // Scenario 10: Skipping a Single Delivery Date for Buffalo Milk
   // -------------------------------------------------------------------------
   it('Scenario 10: Skipping a single delivery date for Buffalo milk', async () => {
-    const skipDate = '2026-10-24';
+    dynamicSkipDate = getFutureYMD(4);
+    const skipDate = dynamicSkipDate;
     if (hasRealDb) {
       const skipRes = await skipDeliveryDate(client, {
         subscriptionId: bufSubId,
@@ -339,8 +346,8 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
   // Scenario 11: Setting Vacation Mode for Cow Milk
   // -------------------------------------------------------------------------
   it('Scenario 11: Setting vacation mode for Cow milk', async () => {
-    const startDate = '2026-10-26';
-    const endDate = '2026-10-29';
+    const startDate = getFutureYMD(6);
+    const endDate = getFutureYMD(9);
     if (hasRealDb) {
       const vacRes = await setVacation(client, {
         subscriptionId: cowSubId,
@@ -469,15 +476,15 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
       const calendar = await getSubscriptionCalendar(client, {
         subscriptionId: bufSubId,
         customerId,
-        year: 2026,
-        month: 9 // October (0-indexed)
+        year: new Date().getFullYear(),
+        month: new Date().getMonth()
       });
       assert.ok(calendar);
       assert.ok(Array.isArray(calendar.days));
       assert.ok(calendar.days.length >= 28);
 
-      // Verify the skipped date is marked skipped
-      const skippedDay = calendar.days.find(d => d.date === '2026-10-24');
+      const targetDate = dynamicSkipDate || getFutureYMD(4);
+      const skippedDay = calendar.days.find(d => d.date === targetDate);
       if (skippedDay) {
         assert.equal(skippedDay.status, 'skipped');
       }

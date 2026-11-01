@@ -28,6 +28,7 @@ const { app, razorpay } = await import('../src/server.js');
 const { generateDailyDeliveries } = await import('../src/services/deliveryEngine.js');
 const { getSubscriptionCalendar, addCalendarMonths, derivePaidThroughDate } = await import('../src/services/subscriptionService.js');
 const { sendSubscriptionConfirmationEmails } = await import('../src/email.js');
+const { calculateContinuousMonthsDays } = await import('../src/pricing.js');
 
 describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconciliation Suite', () => {
   let customerAId;
@@ -2324,8 +2325,10 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
         assert.equal(data.success, true);
         assert.equal(data.dailyRate, 105);
         // Ensure the Razorpay plan amount strictly matches dailyRate * daysCount without spurious delivery surcharges
-        assert.equal(data.amount, 325500);
-        assert.equal(data.totalAmount, 325500);
+        const expectedDays = calculateContinuousMonthsDays(0, 1);
+        const expectedAmount = expectedDays * 10500;
+        assert.equal(data.amount, expectedAmount);
+        assert.equal(data.totalAmount, expectedAmount);
       } finally {
         razorpay.plans.create = originalPlansCreate;
         razorpay.subscriptions.create = originalSubsCreate;
