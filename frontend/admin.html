@@ -2250,11 +2250,97 @@
         document.getElementById('statusModal').classList.remove('hidden');
       }
 
-      // Refunds loader
+      function showRefundTableMessage(tbody, message, isError = false) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 10;
+        cell.style.cssText = `text-align:center; padding:${isError ? 24 : 30}px; color:${isError ? '#dc2626' : '#64748b'};`;
+        cell.textContent = message;
+        row.appendChild(cell);
+        tbody.replaceChildren(row);
+      }
+
+      function renderRefundsTable(requests) {
+        const tbody = document.getElementById('refundsTableBody');
+        if (!requests.length) {
+          showRefundTableMessage(tbody, 'No refund requests match the current filters.');
+          return;
+        }
+        const rows = requests.map((r) => {
+          const row = document.createElement('tr');
+          const addCell = (tag, text, style = '', className = '') => {
+            const cell = document.createElement('td');
+            const element = document.createElement(tag);
+            element.textContent = text;
+            if (style) element.style.cssText = style;
+            if (className) element.className = className;
+            cell.appendChild(element);
+            row.appendChild(cell);
+            return cell;
+          };
+          const statusClass = r.status === 'processed' || r.status === 'approved' ? 'badge-active'
+            : r.status === 'rejected' ? 'badge-cancelled'
+            : r.status === 'failed' ? 'badge-expired' : 'badge-paused';
+          const targetRef = r.requestType === 'subscription'
+            ? `Sub #${r.subscriptionId || '—'}`
+            : `Order #${r.orderNumber || r.orderId || '—'}`;
+          addCell('strong', r.requestNumber || '');
+          addCell('span', r.requestType || '', `font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${r.requestType === 'subscription' ? '#0284c7' : '#059669'};`);
+          const customerCell = addCell('div', r.customerName || '—', 'font-weight:600; color:#0f172a;');
+          const contact = document.createElement('div');
+          contact.style.cssText = 'font-size:0.75rem; color:#64748b;';
+          contact.textContent = r.customerPhone || r.customerEmail || '—';
+          customerCell.appendChild(contact);
+          addCell('span', targetRef, 'font-weight:600; color:#334155;');
+          addCell('strong', '₹' + (r.requestedAmount || 0).toLocaleString('en-IN'), 'color:#0f172a;');
+          addCell('strong', r.approvedAmount ? '₹' + r.approvedAmount.toLocaleString('en-IN') : '—', 'color:#059669;');
+          addCell('span', (r.reasonCategory || 'other').replace(/_/g, ' '), 'font-size:0.78rem; text-transform:capitalize;');
+          addCell('span', r.status || '', '', `status-badge ${statusClass}`);
+          addCell('span', r.createdAt ? new Date(r.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '—', 'font-size:0.78rem; color:#64748b;');
+          if (r.status === 'pending' || r.status === 'requested' || r.status === 'under_review') {
+            const actions = addCell('div', '', 'display:flex; gap:6px;');
+            const container = actions.firstChild;
+            for (const action of ['approve', 'reject']) {
+              const button = document.createElement('button');
+              button.type = 'button';
+              button.className = action === 'approve' ? 'btn-update-order btn-approve-refund' : 'btn-reset btn-reject-refund';
+              button.dataset.refId = String(r.id);
+              button.textContent = action === 'approve' ? 'Approve' : 'Reject';
+              button.style.cssText = action === 'approve'
+                ? 'background:#059669; color:#fff; border:none; padding:4px 10px; border-radius:6px; font-weight:700; font-size:0.75rem; cursor:pointer;'
+                : 'padding:4px 8px; font-size:0.75rem; color:#dc2626; border-color:#fca5a5;';
+              if (typeof button.addEventListener === 'function') {
+                button.addEventListener('click', () => {
+                  if (action === 'approve') openApproveModal(r);
+                  else openRejectModal(r);
+                });
+              }
+              container.appendChild(button);
+            }
+          } else {
+            addCell('span', r.reviewerName ? 'Reviewed by ' + r.reviewerName : 'Completed', 'font-size:0.75rem; color:#64748b;');
+          }
+          return row;
+        });
+        tbody.replaceChildren(...rows);
+      }
+
+      function updateRefundPagination() {
+        const start = refundState.total === 0 ? 0 : refundState.page * refundState.limit + 1;
+        const end = Math.min((refundState.page + 1) * refundState.limit, refundState.total);
+        const lbl = document.getElementById('refundPaginationLabel');
+        if (lbl) lbl.textContent = `Showing ${start}-${end} of ${refundState.total} requests`;
+        const ind = document.getElementById('refundPageIndicator');
+        if (ind) ind.textContent = `Page ${refundState.page + 1}`;
+        const prev = document.getElementById('btnRefundPrevPage');
+        if (prev) prev.disabled = refundState.page === 0;
+        const next = document.getElementById('btnRefundNextPage');
+        if (next) next.disabled = end >= refundState.total;
+      }
+
       async function loadRefunds() {
         const tbody = document.getElementById('refundsTableBody');
-        empty(tbody);
-        tbody.appendChild(el('tr', {}, [el('td', { colSpan: '10', style: { textAlign: 'center', padding: '24px' }, textContent: 'Loading refund requests...' })]));
+        showRefundTableMessage(tbody, 'Loading refund requests...');
 
         const params = new URLSearchParams({
           status: refundState.status,
@@ -2263,68 +2349,60 @@
 
         try {
           const data = await apiRequest('/api/v1/admin/refunds?' + params.toString());
-          empty(tbody);
+          refundState.total = data.total || (data.requests ? data.requests.length : 0);
+          updateRefundPagination();
 
           if (!data.requests || data.requests.length === 0) {
-            tbody.appendChild(el('tr', {}, [
-              el('td', { colSpan: '10', style: { textAlign: 'center', padding: '32px', color: '#64748b' }, textContent: 'No refund requests found' })
-            ]));
+            showRefundTableMessage(tbody, 'No refund requests match the current filters.');
             return;
           }
 
-          data.requests.forEach(ref => {
-            const actionCell = el('td', {});
-            if (ref.status === 'requested' || ref.status === 'under_review') {
-              const btnApprove = el('button', { className: 'btn-row-action', style: { background: '#dcfce7', color: '#15803d', borderColor: '#bbf7d0' }, textContent: 'Authorize' });
-              btnApprove.addEventListener('click', () => openApproveModal(ref));
-              actionCell.appendChild(btnApprove);
+          const mapped = data.requests.map(ref => ({
+            id: ref.id,
+            requestNumber: ref.request_number,
+            requestType: ref.request_type,
+            customerName: ref.customer_name,
+            customerPhone: ref.customer_phone,
+            customerEmail: ref.customer_email,
+            orderNumber: ref.order_number,
+            subscriptionId: ref.subscription_id,
+            requestedAmount: (ref.requested_amount_paise || 0) / 100,
+            approvedAmount: ref.approved_amount_paise ? ref.approved_amount_paise / 100 : null,
+            reasonCategory: ref.reason_category,
+            status: ref.status,
+            createdAt: ref.created_at,
+            reviewerName: ref.reviewer_name,
+            paymentId: ref.payment_id,
+            calculatedEligibleAmountPaise: ref.calculated_eligible_amount_paise,
+            requestedAmountPaise: ref.requested_amount_paise,
+            approvedAmountPaise: ref.approved_amount_paise
+          }));
 
-              const btnReject = el('button', { className: 'btn-row-action btn-danger', textContent: 'Reject' });
-              btnReject.addEventListener('click', () => openRejectModal(ref));
-              actionCell.appendChild(btnReject);
-            }
-
-            const tr = el('tr', {}, [
-              el('td', {}, [el('strong', { textContent: ref.request_number })]),
-              el('td', {}, [el('span', { className: 'badge', textContent: ref.request_type })]),
-              el('td', {}, [
-                el('div', { style: { fontWeight: '600' }, textContent: ref.customer_name || 'Customer #' + ref.customer_id }),
-                el('div', { style: { fontSize: '0.75rem', color: '#64748b' }, textContent: ref.customer_phone || '' })
-              ]),
-              el('td', { textContent: ref.order_number || ('Sub #' + ref.subscription_id) || '—' }),
-              el('td', { textContent: formatINR(ref.requested_amount_paise) }),
-              el('td', { textContent: formatINR(ref.calculated_eligible_amount_paise) }),
-              el('td', { textContent: ref.approved_amount_paise ? formatINR(ref.approved_amount_paise) : '—' }),
-              el('td', {}, [el('span', { className: 'badge badge-' + ref.status, textContent: ref.status })]),
-              el('td', { textContent: formatIST(ref.created_at) }),
-              actionCell
-            ]);
-            tbody.appendChild(tr);
-          });
+          renderRefundsTable(mapped);
         } catch (err) {
-          empty(tbody);
-          tbody.appendChild(el('tr', {}, [
-            el('td', { colSpan: '10', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading refunds: ' + err.message })
-          ]));
+          showRefundTableMessage(tbody, 'Error loading refunds: ' + err.message, true);
         }
       }
 
       function openApproveModal(ref) {
         document.getElementById('approveRefundId').value = ref.id;
-        document.getElementById('approveModalRef').textContent = ref.request_number + ' (' + (ref.order_number || ('Sub #' + ref.subscription_id)) + ')';
-        document.getElementById('approveModalCustomer').textContent = ref.customer_name || 'Customer';
-        document.getElementById('approveModalContact').textContent = ref.customer_phone || ref.customer_email || '—';
-        document.getElementById('approveModalPaymentId').textContent = ref.payment_id || '—';
-        document.getElementById('approveModalRequestedAmt').textContent = formatINR(ref.requested_amount_paise);
-        document.getElementById('approveAmountInput').value = ((ref.calculated_eligible_amount_paise || ref.requested_amount_paise) / 100).toFixed(2);
+        document.getElementById('approveModalRef').textContent = (ref.requestNumber || ref.request_number) + ' (' + (ref.orderNumber || ref.order_number || ('Sub #' + (ref.subscriptionId || ref.subscription_id))) + ')';
+        document.getElementById('approveModalCustomer').textContent = ref.customerName || ref.customer_name || 'Customer';
+        document.getElementById('approveModalContact').textContent = ref.customerPhone || ref.customer_phone || ref.customerEmail || ref.customer_email || '—';
+        document.getElementById('approveModalPaymentId').textContent = ref.paymentId || ref.payment_id || '—';
+        const reqPaise = ref.requestedAmountPaise != null ? ref.requestedAmountPaise : (ref.requestedAmount ? ref.requestedAmount * 100 : 0);
+        const eligPaise = ref.calculatedEligibleAmountPaise != null ? ref.calculatedEligibleAmountPaise : reqPaise;
+        document.getElementById('approveModalRequestedAmt').textContent = formatINR(reqPaise);
+        document.getElementById('approveAmountInput').value = (eligPaise / 100).toFixed(2);
         document.getElementById('adminApproveModal').classList.remove('hidden');
       }
 
       function openRejectModal(ref) {
         document.getElementById('rejectRefundId').value = ref.id;
-        document.getElementById('rejectModalRef').textContent = ref.request_number;
-        document.getElementById('rejectModalCustomer').textContent = ref.customer_name || 'Customer';
-        document.getElementById('rejectModalRequestedAmt').textContent = formatINR(ref.requested_amount_paise);
+        document.getElementById('rejectModalRef').textContent = ref.requestNumber || ref.request_number;
+        document.getElementById('rejectModalCustomer').textContent = ref.customerName || ref.customer_name || 'Customer';
+        const reqPaise = ref.requestedAmountPaise != null ? ref.requestedAmountPaise : (ref.requestedAmount ? ref.requestedAmount * 100 : 0);
+        document.getElementById('rejectModalRequestedAmt').textContent = formatINR(reqPaise);
         document.getElementById('rejectAdminNotes').value = '';
         document.getElementById('adminRejectModal').classList.remove('hidden');
       }
@@ -2518,7 +2596,8 @@
           document.getElementById('repRefundAmt').textContent = formatINR(rev.totalRefundedPaise);
           document.getElementById('repNetRev').textContent = formatINR(rev.netCollectedRevenuePaise);
 
-          document.getElementById('repDelRate').textContent = (dels.successRatePct || 100) + '%';
+          const rateDisplay = (dels.total > 0 && dels.successRatePct != null) ? dels.successRatePct + '%' : '0%';
+          document.getElementById('repDelRate').textContent = rateDisplay;
           document.getElementById('repDelSuccess').textContent = String(dels.delivered || 0);
           document.getElementById('repDelTotal').textContent = String(dels.total || 0);
 

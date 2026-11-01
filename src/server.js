@@ -4001,9 +4001,9 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
     `, [selectedDate]).catch(() => ({ rows: [{}] })),
     pool.query(`
       SELECT
-        COUNT(*) FILTER (WHERE status IN ('requested', 'under_review')) AS pending_refunds_count,
-        COALESCE(SUM(requested_amount_paise) FILTER (WHERE status IN ('requested', 'under_review')), 0) AS pending_refunds_amount_paise,
-        COALESCE(SUM(approved_amount_paise) FILTER (WHERE status IN ('approved', 'processing', 'processed')), 0) AS total_refunded_paise
+        COUNT(*) FILTER (WHERE status IN ('pending', 'requested', 'under_review', 'approved', 'processing')) AS pending_refunds_count,
+        COALESCE(SUM(requested_amount_paise) FILTER (WHERE status IN ('pending', 'requested', 'under_review', 'approved', 'processing')), 0) AS pending_refunds_amount_paise,
+        COALESCE(SUM(approved_amount_paise) FILTER (WHERE status = 'processed'), 0) AS total_refunded_paise
       FROM refund_requests
     `).catch(() => ({ rows: [{}] }))
   ]);
@@ -4107,6 +4107,40 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
   };
 });
 
+/**
+ * Authoritative Milk Volume Parser in Litres
+ * Supports 500ml, 1L, 1.5L, 2L, etc., normalized with quantityNum
+ */
+export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1) {
+  const qNum = Math.max(1, Number(quantityNum) || 1);
+  if (!quantityStr || typeof quantityStr !== 'string') return 0.5 * qNum;
+  const str = quantityStr.trim().toLowerCase();
+
+  // 1. Millilitres (e.g., 500ml, 1000ml, 1500ml, 2000ml)
+  const mlMatch = str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
+  if (mlMatch) {
+    const ml = parseFloat(mlMatch[1]);
+    if (!isNaN(ml) && ml > 0) return (ml / 1000) * qNum;
+  }
+
+  // 2. Litres (e.g., 1L, 1.5L, 2 Litres, 0.5 Litre)
+  const lMatch = str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
+  if (lMatch) {
+    const l = parseFloat(lMatch[1]);
+    if (!isNaN(l) && l > 0) return l * qNum;
+  }
+
+  // 3. Raw numbers
+  const numMatch = str.match(/^(\d+(?:\.\d+)?)$/);
+  if (numMatch) {
+    const val = parseFloat(numMatch[1]);
+    if (val >= 100) return (val / 1000) * qNum;
+    if (val > 0) return val * qNum;
+  }
+
+  return 0.5 * qNum;
+}
+
 // ---------- Admin Customer Management ----------
 app.get('/api/v1/admin/customers', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
@@ -4133,22 +4167,32 @@ app.get('/api/v1/admin/customers', { preHandler: app.requireAdmin }, async (requ
 
   const { rows } = await pool.query(
     `SELECT c.id, c.full_name, c.email, c.phone, c.created_at, c.email_verified, c.phone_verified_at, c.is_admin,
-            COUNT(DISTINCT cs.id) FILTER (WHERE cs.status = 'active') AS active_subscriptions_count,
-            COUNT(DISTINCT co.id) AS total_orders_count,
-            COALESCE(SUM(DISTINCT co.total_paise) FILTER (WHERE co.payment_status = 'paid'), 0) +
-            COALESCE(SUM(DISTINCT (
-              CASE
-                WHEN (cs.notes->>'authType' = 'recurring_charge' OR cs.notes->>'lastPaymentId' IS NOT NULL)
-                 AND (cs.notes->>'authAmountPaise') ~ '^[0-9]+$'
-                THEN (cs.notes->>'authAmountPaise')::bigint
-                ELSE 0
-              END
-            )), 0) AS total_spend_paise
+            COALESCE(sub_stats.active_subscriptions_count, 0) AS active_subscriptions_count,
+            COALESCE(order_stats.total_orders_count, 0) AS total_orders_count,
+            (COALESCE(order_stats.paid_orders_spend_paise, 0) + COALESCE(sub_stats.collected_subscription_spend_paise, 0)) AS total_spend_paise
      FROM customers c
-     LEFT JOIN customer_subscriptions cs ON cs.customer_id = c.id
-     LEFT JOIN customer_orders co ON co.customer_id = c.id
+     LEFT JOIN (
+       SELECT customer_id,
+              COUNT(*) FILTER (WHERE status = 'active') AS active_subscriptions_count,
+              COALESCE(SUM(
+                CASE
+                  WHEN (notes->>'authType' = 'recurring_charge' OR notes->>'lastPaymentId' IS NOT NULL)
+                   AND (notes->>'authAmountPaise') ~ '^[0-9]+$'
+                  THEN (notes->>'authAmountPaise')::bigint
+                  ELSE 0
+                END
+              ), 0) AS collected_subscription_spend_paise
+       FROM customer_subscriptions
+       GROUP BY customer_id
+     ) sub_stats ON sub_stats.customer_id = c.id
+     LEFT JOIN (
+       SELECT customer_id,
+              COUNT(*) AS total_orders_count,
+              COALESCE(SUM(total_paise) FILTER (WHERE payment_status = 'paid'), 0) AS paid_orders_spend_paise
+       FROM customer_orders
+       GROUP BY customer_id
+     ) order_stats ON order_stats.customer_id = c.id
      ${whereClause}
-     GROUP BY c.id, c.full_name, c.email, c.phone, c.created_at, c.email_verified, c.phone_verified_at, c.is_admin
      ORDER BY c.created_at DESC
      LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
     queryParams
@@ -4266,13 +4310,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     for (const ord of orders) {
       const pName = (ord.product_name || '').toLowerCase();
       const qNum = Number(ord.quantity_num) || 1;
-      const qText = (ord.quantity || '').toLowerCase();
-      let volumeL = 0.5 * qNum;
-      if (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) {
-        volumeL = 1.0 * qNum;
-      } else if (qText.includes('500')) {
-        volumeL = 0.5 * qNum;
-      }
+      const volumeL = parseMilkVolumeInLitres(ord.quantity, qNum);
 
       if (pName.includes('cow')) {
         cowLitres += volumeL;
@@ -4303,13 +4341,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     for (const sub of preview.eligibleSubscriptions) {
       const pName = (sub.productName || '').toLowerCase();
       const qNum = sub.quantityNum || 1;
-      const qText = (sub.quantity || '').toLowerCase();
-      let volumeL = 0.5 * qNum;
-      if (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) {
-        volumeL = 1.0 * qNum;
-      } else if (qText.includes('500')) {
-        volumeL = 0.5 * qNum;
-      }
+      const volumeL = parseMilkVolumeInLitres(sub.quantity, qNum);
 
       if (pName.includes('cow')) {
         cowLitres += volumeL;
@@ -4369,27 +4401,25 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
   if (orders.length > 0) {
     for (const ord of orders) {
       const qNum = Number(ord.quantity_num) || 1;
-      const qText = (ord.quantity || '').toLowerCase();
-      const volumePerUnit = (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) ? 1.0 : 0.5;
+      const totalVolume = parseMilkVolumeInLitres(ord.quantity, qNum);
       const packKey = `${ord.product_name} - ${ord.quantity || '500ml'}`;
       if (!packBreakdown[packKey]) {
         packBreakdown[packKey] = { product: ord.product_name, packSize: ord.quantity || '500ml', units: 0, totalLitres: 0 };
       }
       packBreakdown[packKey].units += qNum;
-      packBreakdown[packKey].totalLitres += (volumePerUnit * qNum);
+      packBreakdown[packKey].totalLitres += totalVolume;
     }
   } else {
     const preview = await previewDailyDeliveries(pool, targetDate);
     for (const sub of preview.eligibleSubscriptions) {
       const qNum = sub.quantityNum || 1;
-      const qText = (sub.quantity || '').toLowerCase();
-      const volumePerUnit = (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) ? 1.0 : 0.5;
+      const totalVolume = parseMilkVolumeInLitres(sub.quantity, qNum);
       const packKey = `${sub.productName} - ${sub.quantity || '500ml'}`;
       if (!packBreakdown[packKey]) {
         packBreakdown[packKey] = { product: sub.productName, packSize: sub.quantity || '500ml', units: 0, totalLitres: 0 };
       }
       packBreakdown[packKey].units += qNum;
-      packBreakdown[packKey].totalLitres += (volumePerUnit * qNum);
+      packBreakdown[packKey].totalLitres += totalVolume;
     }
   }
 
@@ -4506,7 +4536,7 @@ app.get('/api/v1/admin/reports', { preHandler: app.requireAdmin }, async (reques
       failed: Number(deliveryRes.rows[0]?.failed_count || 0),
       cancelled: Number(deliveryRes.rows[0]?.cancelled_count || 0),
       inProgress: Number(deliveryRes.rows[0]?.in_progress_count || 0),
-      successRatePct: totalDels > 0 ? Number(((deliveredDels / totalDels) * 100).toFixed(1)) : 100
+      successRatePct: totalDels > 0 ? Number(((deliveredDels / totalDels) * 100).toFixed(1)) : 0
     },
     subscriptions: {
       total: Number(subRes.rows[0]?.total_subscriptions || 0),
@@ -5106,8 +5136,9 @@ app.get('/api/v1/operations/deliveries/generate-preview', { preHandler: app.requ
     const preview = await previewDailyDeliveries(pool, targetDate);
     return reply.send(preview);
   } catch (err) {
+    const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
     request.log.error({ err }, 'Operations: failed to preview daily deliveries');
-    return reply.code(500).send({ error: 'delivery_preview_failed', message: err.message });
+    return reply.code(code).send({ error: err.message || 'delivery_preview_failed', message: err.message });
   }
 });
 
@@ -5182,11 +5213,12 @@ app.post('/api/v1/operations/deliveries/generate', { preHandler: app.requireAdmi
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { targetDate } = request.body || {};
   try {
-    const result = await generateDailyDeliveries(pool, targetDate);
+    const result = await generateDailyDeliveries(pool, targetDate, { rejectPastDates: true });
     return reply.send(result);
   } catch (err) {
+    const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
     request.log.error({ err }, 'Operations: failed to generate daily deliveries');
-    return reply.code(500).send({ error: 'delivery_generation_failed', message: err.message });
+    return reply.code(code).send({ error: err.message || 'delivery_generation_failed', message: err.message });
   }
 });
 
