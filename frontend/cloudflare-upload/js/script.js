@@ -2814,7 +2814,7 @@ async function beginCheckout(form) {
       : (Number(order?.amount) || expectedTotalPaise);
 
     const checkout = new window.Razorpay({
-      key: order.keyId || window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX',
+      key: order.keyId || window.RAZORPAY_KEY_ID || (['milvanta.in', 'www.milvanta.in'].includes((window.location.hostname || '').toLowerCase()) ? '' : 'rzp_test_TMT4s342RfwceX'),
       amount: razorpayAmount,
       currency: order.currency || 'INR',
       name: 'Milvanta',
