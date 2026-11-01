@@ -126,6 +126,15 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
 
       customerId = res.rows[0].id;
       assert.ok(customerId);
+      await client.query(`
+        INSERT INTO customer_addresses (
+          customer_id, address_fingerprint, recipient_name, phone,
+          house, building, street, city, state, pincode, is_default
+        ) VALUES (
+          $1, 'fp_acceptance_1', 'Acceptance Tester', $2,
+          'Villa 5', 'Palm Grove', 'Jubilee Hills Road 36', 'Hyderabad', 'Telangana', '500033', TRUE
+        )
+      `, [customerId, customerPhone]);
       assert.equal(res.rows[0].email, customerEmail);
     } else {
       customerId = 999;
@@ -231,7 +240,11 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
       await client.query(`
         UPDATE customer_subscriptions
         SET status = 'active',
-            notes = jsonb_set(COALESCE(notes, '{}'::jsonb), '{lastPaymentId}', to_jsonb($2::text)),
+            notes = jsonb_set(
+              jsonb_set(COALESCE(notes, '{}'::jsonb), '{lastPaymentId}', to_jsonb($2::text)),
+              '{fulfillmentEntitled}',
+              'true'::jsonb
+            ),
             updated_at = NOW()
         WHERE id = $1
       `, [cowSubId, mockPaymentId]);
@@ -277,7 +290,7 @@ describe('STAGE C — Complete Customer Acceptance Tests (All 20 Scenarios)', ()
           $1, 'Pure Buffalo Milk', '0.5 Litre', '6:00 AM – 7:00 AM', 'Daily (Every Morning)',
           6500, 195000, 'active', 'Tomorrow, 6:00 AM',
           'month', '1 Month (30 Days)',
-          '{"lastPaymentId":"pay_buf_acceptance","paidCount":1}'::jsonb
+          '{"lastPaymentId":"pay_buf_acceptance","paidCount":1,"fulfillmentEntitled":true}'::jsonb
         ) RETURNING id
       `, [customerId]);
 

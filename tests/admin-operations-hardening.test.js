@@ -24,6 +24,7 @@ const { app, parseMilkVolumeInLitres } = await import('../src/server.js');
 const {
   generateDailyDeliveries,
   previewDailyDeliveries,
+  evaluateSubscriptionDeliveryEligibility,
   validateDeliveryTargetDate,
   extractValidDeliveryAddress,
   getTomorrowDeliveryDateYMD
@@ -207,6 +208,76 @@ describe('Milvanta Operations Hardening & PostgreSQL Regression Suite', () => {
       const foundInPreview = preview.eligibleSubscriptions.some(s => s.subscriptionId === subId);
       assert.strictEqual(foundInPreview, false, 'Subscription without payment evidence must be skipped');
       assert.ok(preview.skippedBreakdown.noPaymentEvidence >= 1);
+
+      await pool.query('DELETE FROM customer_subscriptions WHERE id = $1', [subId]);
+    });
+    it('evaluateSubscriptionDeliveryEligibility strictly validates all gates and fails closed', async () => {
+      const tomorrow = getTomorrowDeliveryDateYMD();
+
+      // Gate 1: fulfillmentEntitled must be boolean true
+      const subNonBool = {
+        id: 991, customer_id: customerAId, full_name: 'Test', phone: '+919999900011',
+        status: 'active', notes: { fulfillmentEntitled: 'true', lastPaymentId: 'pay_1', startDate: '2026-01-01', paidThroughDate: '2027-12-31' }
+      };
+      const resNonBool = await evaluateSubscriptionDeliveryEligibility(pool, subNonBool, tomorrow);
+      assert.strictEqual(resNonBool.eligible, false);
+      assert.strictEqual(resNonBool.reason, 'noFulfillmentEntitlement');
+
+      // Gate 2: Captured payment proof required (not mandate_only)
+      const subMandate = {
+        id: 992, customer_id: customerAId, full_name: 'Test', phone: '+919999900011',
+        status: 'active', notes: { fulfillmentEntitled: true, authType: 'mandate_only', lastPaymentId: 'pay_1', startDate: '2026-01-01', paidThroughDate: '2027-12-31' }
+      };
+      const resMandate = await evaluateSubscriptionDeliveryEligibility(pool, subMandate, tomorrow);
+      assert.strictEqual(resMandate.eligible, false);
+      assert.strictEqual(resMandate.reason, 'noPaymentEvidence');
+
+      // Gate 3: Customer must have verified delivery address (no fabricated address)
+      const subNoAddr = {
+        id: 993, customer_id: customerBId, full_name: 'Customer Beta', phone: '+919999900012',
+        status: 'active', notes: { fulfillmentEntitled: true, lastPaymentId: 'pay_1', startDate: '2026-01-01', paidThroughDate: '2027-12-31' }
+      };
+      const resNoAddr = await evaluateSubscriptionDeliveryEligibility(pool, subNoAddr, tomorrow);
+      assert.strictEqual(resNoAddr.eligible, false);
+      assert.strictEqual(resNoAddr.reason, 'missingOrInvalidAddress');
+
+      // Gate 4: Valid customer with default address passes
+      const subValid = {
+        id: 994, customer_id: customerAId, full_name: 'Customer Alpha', phone: '+919999900011',
+        status: 'active', notes: { fulfillmentEntitled: true, lastPaymentId: 'pay_1', startDate: '2026-01-01', paidThroughDate: '2027-12-31' }
+      };
+      const resValid = await evaluateSubscriptionDeliveryEligibility(pool, subValid, tomorrow);
+      assert.strictEqual(resValid.eligible, true);
+      assert.ok(resValid.deliveryAddress);
+      assert.strictEqual(resValid.deliveryAddress.pincode, '500049');
+    });
+
+    it('previewDailyDeliveries returns structured excludedSubscriptions list with exclusion reasons and messages', async () => {
+      const tomorrow = getTomorrowDeliveryDateYMD();
+
+      // Create an ineligible subscription (Customer B has no address)
+      const subRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_id, product_name, quantity, quantity_num,
+           cost_per_day_paise, total_amount_paise, status, notes
+         ) VALUES ($1, 1, 'Pure Cow Milk', '1L', 1, 10500, 315000, 'active', $2)
+         RETURNING id`,
+        [customerBId, JSON.stringify({
+          fulfillmentEntitled: true,
+          lastPaymentId: 'pay_test_excl_1',
+          startDate: '2026-01-01',
+          paidThroughDate: '2027-12-31'
+        })]
+      );
+      const subId = subRes.rows[0].id;
+
+      const preview = await previewDailyDeliveries(pool, tomorrow);
+      assert.ok(Array.isArray(preview.excludedSubscriptions));
+      const excluded = preview.excludedSubscriptions.find(s => s.subscriptionId === subId);
+      assert.ok(excluded, 'Ineligible subscription must appear in excludedSubscriptions');
+      assert.strictEqual(excluded.reason, 'missingOrInvalidAddress');
+      assert.ok(excluded.exclusionMessage.includes('address'));
+      assert.strictEqual(excluded.customerId, customerBId);
 
       await pool.query('DELETE FROM customer_subscriptions WHERE id = $1', [subId]);
     });
@@ -397,6 +468,80 @@ describe('Milvanta Operations Hardening & PostgreSQL Regression Suite', () => {
       // Cleanup
       await pool.query('DELETE FROM subscription_delivery_orders WHERE delivery_date = $1', [tomorrow]);
       await pool.query('DELETE FROM customer_subscriptions WHERE id IN ($1, $2)', [sub15.rows[0].id, sub2L.rows[0].id]);
+    });
+    it('parseMilkVolumeInLitres flags unrecognized units and strict mode throws', () => {
+      // Recognized units
+      assert.strictEqual(parseMilkVolumeInLitres('250ml', 2), 0.5);
+      assert.strictEqual(parseMilkVolumeInLitres('3.5L', 1), 3.5);
+      assert.strictEqual(parseMilkVolumeInLitres('5L', 1), 5.0);
+
+      // Unrecognized units without strict mode return 0 (never silently assume 500ml)
+      assert.strictEqual(parseMilkVolumeInLitres('2 boxes', 1), 0);
+      assert.strictEqual(parseMilkVolumeInLitres('packet', 1), 0);
+
+      // Object mode returns recognized: false
+      const meta = parseMilkVolumeInLitres('unknown unit', 2, { returnMetadata: true });
+      assert.strictEqual(meta.litres, 0);
+      assert.strictEqual(meta.recognized, false);
+
+      // Strict mode throws
+      assert.throws(() => parseMilkVolumeInLitres('3 cartons', 1, { strict: true }), /unrecognized_milk_pack_format/);
+    });
+
+    it('GET /api/v1/admin/demand-forecast and /export flag orders with unrecognized units', async () => {
+      const tomorrow = getTomorrowDeliveryDateYMD();
+
+      // Clean existing orders for tomorrow
+      await pool.query('DELETE FROM subscription_delivery_orders WHERE delivery_date = $1', [tomorrow]);
+
+      // Create a test subscription
+      const subRes = await pool.query(
+        `INSERT INTO customer_subscriptions (
+           customer_id, product_id, product_name, quantity, quantity_num,
+           cost_per_day_paise, total_amount_paise, status, notes
+         ) VALUES ($1, 1, 'Milvanta Cow Milk', 'custom-box', 1, 10500, 315000, 'active', '{}')
+         RETURNING id`,
+        [customerAId]
+      );
+      const subId = subRes.rows[0].id;
+
+      // Insert an order with an unrecognized unit 'pack'
+      const { rows: orderRows } = await pool.query(
+        `INSERT INTO subscription_delivery_orders (
+           delivery_order_number, subscription_id, customer_id, delivery_date,
+           product_id, product_name, quantity, quantity_num, status, delivery_address
+         ) VALUES
+         ('MV-DEL-UNREC-1', $1, $2, $3, 1, 'Milvanta Cow Milk', 'custom-box', 1, 'scheduled', '{"street":"Test St","pincode":"500049"}')
+         RETURNING id`,
+        [subId, customerAId, tomorrow]
+      );
+
+      // Check GET /api/v1/admin/demand-forecast
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/demand-forecast?date=${tomorrow}`,
+        headers: getAuthHeaders(adminToken)
+      });
+      assert.strictEqual(res.statusCode, 200);
+      const json = res.json();
+      assert.strictEqual(json.hasUnrecognizedUnits, true);
+      assert.ok(json.unrecognizedUnits.length >= 1);
+      assert.strictEqual(json.unrecognizedUnits[0].quantity, 'custom-box');
+
+      // Check GET /api/v1/admin/demand-forecast/export CSV
+      const exportRes = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/demand-forecast/export?date=${tomorrow}`,
+        headers: getAuthHeaders(adminToken)
+      });
+      assert.strictEqual(exportRes.statusCode, 200);
+      const csv = exportRes.body;
+      assert.ok(csv.includes('Status'), 'CSV header must include Status column');
+      assert.ok(csv.includes('UNRECOGNIZED_UNIT'), 'CSV must flag the unrecognized order');
+
+      // Cleanup
+      await pool.query('DELETE FROM subscription_delivery_orders WHERE delivery_date = $1', [tomorrow]);
+      await pool.query('DELETE FROM customer_subscriptions WHERE id = $1', [subId]);
     });
   });
 

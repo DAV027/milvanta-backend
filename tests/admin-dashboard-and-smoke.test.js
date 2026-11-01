@@ -483,9 +483,10 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       assert.equal(row.children[2].firstChild.textContent, hostile);
       assert.equal(row.children[2].children[1].textContent, hostile);
       assert.equal(row.children[3].firstChild.textContent, 'Order #' + hostile);
-      assert.equal(row.children[4].firstChild.textContent, '\u20b9100');
-      assert.equal(row.children[5].firstChild.textContent, '\u20b950');
-      assert.equal(row.children[6].firstChild.textContent, hostile);
+      assert.equal(row.children[4].firstChild.textContent, '\u20b9100'); // Col 5: Requested
+      assert.equal(row.children[5].firstChild.textContent, '\u20b9100'); // Col 6: Calculated
+      assert.equal(row.children[6].firstChild.textContent, '\u20b950');  // Col 7: Approved
+      assert.equal(row.children[7].firstChild.textContent, 'pending');  // Col 8: Status
       const buttons = row.children[9].firstChild.children;
       assert.equal(buttons.length, 2);
       assert.equal(buttons[0].dataset.refId, refund.id);
@@ -499,6 +500,95 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       assert.match(tbody.firstChild.firstChild.textContent, /No refund requests/);
       context.showRefundTableMessage(tbody, 'Failed to load refunds: ' + hostile, true);
       assert.equal(tbody.firstChild.firstChild.textContent, 'Failed to load refunds: ' + hostile);
+    });
+
+    it('renders realistic refund API responses: orders, subscription cancellations, calculated eligible and approved columns', () => {
+      class Element {
+        constructor(tag) {
+          this.tagName = tag;
+          this.children = [];
+          this.style = {};
+          this.dataset = {};
+          this.textContent = '';
+        }
+        appendChild(child) { this.children.push(child); return child; }
+        replaceChildren(...children) { this.children = children; }
+        get firstChild() { return this.children[0]; }
+        set innerHTML(value) { throw new Error('Unsafe HTML assignment: ' + value); }
+      }
+      const tbody = new Element('tbody');
+      const document = {
+        getElementById(id) { assert.equal(id, 'refundsTableBody'); return tbody; },
+        createElement(tag) { return new Element(tag); }
+      };
+      const source = htmlContent.slice(htmlContent.indexOf('      function showRefundTableMessage('), htmlContent.indexOf('      function updateRefundPagination('));
+      const context = vm.createContext({ document });
+      vm.runInContext(source, context);
+
+      const realisticRefunds = [
+        {
+          id: 101,
+          requestNumber: 'REF-20261101-0001',
+          requestType: 'order',
+          customerName: 'Sita Devi',
+          customerPhone: '+919876543210',
+          customerEmail: 'sita@example.com',
+          orderNumber: 'MV-ORD-20261101-9988',
+          requestedAmount: 450,
+          calculatedEligibleAmount: 450,
+          approvedAmount: null,
+          status: 'pending',
+          createdAt: '2026-11-01T10:00:00Z',
+          reviewerName: null
+        },
+        {
+          id: 102,
+          requestNumber: 'REF-20261101-0002',
+          requestType: 'subscription_cancellation',
+          customerName: 'Ramesh Kumar',
+          customerPhone: '+919999900001',
+          customerEmail: 'ramesh@example.com',
+          subscriptionId: 42,
+          requestedAmount: 3150,
+          calculatedEligibleAmount: 2100,
+          approvedAmount: 2100,
+          status: 'processed',
+          createdAt: '2026-10-25T08:30:00Z',
+          reviewerName: 'Admin Operations'
+        }
+      ];
+
+      context.renderRefundsTable(realisticRefunds);
+      assert.equal(tbody.children.length, 2);
+
+      // Verify Row 1: Order Refund
+      const row1 = tbody.children[0];
+      assert.equal(row1.children.length, 10);
+      assert.equal(row1.children[0].firstChild.textContent, 'REF-20261101-0001'); // Col 1: Request ID
+      assert.equal(row1.children[1].firstChild.textContent, 'Order Item');        // Col 2: Type
+      assert.equal(row1.children[2].firstChild.textContent, 'Sita Devi');         // Col 3: Customer
+      assert.equal(row1.children[3].firstChild.textContent, 'Order #MV-ORD-20261101-9988'); // Col 4: Reference
+      assert.equal(row1.children[4].firstChild.textContent, '\u20b9450');        // Col 5: Requested
+      assert.equal(row1.children[5].firstChild.textContent, '\u20b9450');        // Col 6: Calculated
+      assert.equal(row1.children[6].firstChild.textContent, '—');                // Col 7: Approved (null)
+      assert.equal(row1.children[7].firstChild.textContent, 'pending');          // Col 8: Status
+      assert.match(row1.children[8].firstChild.textContent, /1 Nov/);            // Col 9: Requested At
+      const row1Actions = row1.children[9].firstChild.children;
+      assert.equal(row1Actions.length, 2); // Approve and Reject buttons
+
+      // Verify Row 2: Subscription Cancellation
+      const row2 = tbody.children[1];
+      assert.equal(row2.children.length, 10);
+      assert.equal(row2.children[0].firstChild.textContent, 'REF-20261101-0002'); // Col 1: Request ID
+      assert.equal(row2.children[1].firstChild.textContent, 'Subscription Cancellation'); // Col 2: Type recognized
+      assert.equal(row2.children[2].firstChild.textContent, 'Ramesh Kumar');      // Col 3: Customer
+      assert.equal(row2.children[3].firstChild.textContent, 'Sub #42');           // Col 4: Reference
+      assert.equal(row2.children[4].firstChild.textContent, '\u20b93,150');      // Col 5: Requested
+      assert.equal(row2.children[5].firstChild.textContent, '\u20b92,100');      // Col 6: Calculated
+      assert.equal(row2.children[6].firstChild.textContent, '\u20b92,100');      // Col 7: Approved
+      assert.equal(row2.children[7].firstChild.textContent, 'processed');        // Col 8: Status
+      assert.match(row2.children[8].firstChild.textContent, /25 Oct/);           // Col 9: Requested At
+      assert.equal(row2.children[9].firstChild.textContent, 'Reviewed by Admin Operations'); // Col 10: Reviewed By
     });
 
     it('verifies frontend/admin.html prefers sessionStorage for admin tokens and clears localStorage', () => {

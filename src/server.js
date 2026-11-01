@@ -4111,34 +4111,66 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
  * Authoritative Milk Volume Parser in Litres
  * Supports 500ml, 1L, 1.5L, 2L, etc., normalized with quantityNum
  */
-export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1) {
+export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1, options = {}) {
   const qNum = Math.max(1, Number(quantityNum) || 1);
-  if (!quantityStr || typeof quantityStr !== 'string') return 0.5 * qNum;
+  const returnObj = Boolean(options.returnObject || options.returnMetadata);
+  if (!quantityStr || typeof quantityStr !== 'string') {
+    if (options.strict) throw new Error('invalid_quantity_unit: empty or non-string quantity');
+    return returnObj ? { litres: 0, recognized: false, unit: quantityStr || '' } : 0;
+  }
+
   const str = quantityStr.trim().toLowerCase();
 
-  // 1. Millilitres (e.g., 500ml, 1000ml, 1500ml, 2000ml)
-  const mlMatch = str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
+  // 1. Millilitres (e.g., 250ml, 500ml, 1000ml, 1500ml)
+  const mlMatch = str.match(/^(\d+(?:\.\d+)?)\s*ml(?:\s*(?:pouch|bottle|pack))?$/i) ||
+                  str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
   if (mlMatch) {
     const ml = parseFloat(mlMatch[1]);
-    if (!isNaN(ml) && ml > 0) return (ml / 1000) * qNum;
+    if (!isNaN(ml) && ml > 0) {
+      const litres = (ml / 1000) * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
   }
 
-  // 2. Litres (e.g., 1L, 1.5L, 2 Litres, 0.5 Litre)
-  const lMatch = str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
+  // 2. Litres (e.g., 1L, 1.5L, 2 Litre, 2.5 Litres, 0.5 Litre, 5 Litre)
+  const lMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)(?:\s*(?:bottle|pouch|pack))?$/i) ||
+                 str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
   if (lMatch) {
     const l = parseFloat(lMatch[1]);
-    if (!isNaN(l) && l > 0) return l * qNum;
+    if (!isNaN(l) && l > 0) {
+      const litres = l * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
   }
 
-  // 3. Raw numbers
+  // 3. Known text fractions (e.g., "half litre", "1/2 litre")
+  if (str.includes('half') || str.includes('1/2')) {
+    const litres = 0.5 * qNum;
+    return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+  }
+
+  // 4. Raw numeric values
   const numMatch = str.match(/^(\d+(?:\.\d+)?)$/);
   if (numMatch) {
     const val = parseFloat(numMatch[1]);
-    if (val >= 100) return (val / 1000) * qNum;
-    if (val > 0) return val * qNum;
+    if (val >= 100) {
+      const litres = (val / 1000) * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
+    if (val > 0) {
+      const litres = val * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
   }
 
-  return 0.5 * qNum;
+  // Unrecognized unit: DO NOT silently assume 500ml!
+  if (options.strict) {
+    const err = new Error(`unrecognized_milk_pack_format / unit: "${quantityStr}"`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return returnObj ? { litres: 0, recognized: false, unit: quantityStr } : 0;
 }
 
 // ---------- Admin Customer Management ----------
@@ -4305,12 +4337,24 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
   const isPreGenerated = orders.length > 0;
   const itemsList = [];
 
+  const unrecognizedUnits = [];
+
   if (isPreGenerated) {
     totalDeliveries = orders.length;
     for (const ord of orders) {
       const pName = (ord.product_name || '').toLowerCase();
       const qNum = Number(ord.quantity_num) || 1;
-      const volumeL = parseMilkVolumeInLitres(ord.quantity, qNum);
+      const parsed = parseMilkVolumeInLitres(ord.quantity, qNum, { returnObject: true });
+      if (!parsed.recognized) {
+        unrecognizedUnits.push({
+          id: ord.id,
+          productName: ord.product_name,
+          quantity: ord.quantity,
+          customerName: ord.customer_name,
+          warning: `Unrecognized pack size "${ord.quantity}" excluded from volume calculation`
+        });
+      }
+      const volumeL = parsed.litres;
 
       if (pName.includes('cow')) {
         cowLitres += volumeL;
@@ -4320,7 +4364,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
         cowLitres += volumeL;
       }
 
-      const packKey = `${ord.product_name} (${ord.quantity || '500ml'})`;
+      const packKey = `${ord.product_name} (${ord.quantity || 'unspecified'})`;
       packBreakdown[packKey] = (packBreakdown[packKey] || 0) + qNum;
 
       itemsList.push({
@@ -4332,7 +4376,8 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
         quantityNum: qNum,
         volumeLitres: volumeL,
         status: ord.status,
-        address: ord.delivery_address?.street || ''
+        address: ord.delivery_address?.street || '',
+        recognizedUnit: parsed.recognized
       });
     }
   } else {
@@ -4341,7 +4386,17 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     for (const sub of preview.eligibleSubscriptions) {
       const pName = (sub.productName || '').toLowerCase();
       const qNum = sub.quantityNum || 1;
-      const volumeL = parseMilkVolumeInLitres(sub.quantity, qNum);
+      const parsed = parseMilkVolumeInLitres(sub.quantity, qNum, { returnObject: true });
+      if (!parsed.recognized) {
+        unrecognizedUnits.push({
+          subscriptionId: sub.subscriptionId,
+          productName: sub.productName,
+          quantity: sub.quantity,
+          customerName: sub.customerName,
+          warning: `Unrecognized pack size "${sub.quantity}" excluded from volume calculation`
+        });
+      }
+      const volumeL = parsed.litres;
 
       if (pName.includes('cow')) {
         cowLitres += volumeL;
@@ -4351,7 +4406,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
         cowLitres += volumeL;
       }
 
-      const packKey = `${sub.productName} (${sub.quantity || '500ml'})`;
+      const packKey = `${sub.productName} (${sub.quantity || 'unspecified'})`;
       packBreakdown[packKey] = (packBreakdown[packKey] || 0) + qNum;
 
       itemsList.push({
@@ -4363,7 +4418,8 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
         quantityNum: qNum,
         volumeLitres: volumeL,
         status: 'eligible_awaiting_generation',
-        address: ''
+        address: '',
+        recognizedUnit: parsed.recognized
       });
     }
   }
@@ -4376,6 +4432,8 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     totalLitres: Number((cowLitres + buffaloLitres).toFixed(2)),
     totalDeliveries,
     packBreakdown,
+    unrecognizedUnits,
+    hasUnrecognizedUnits: unrecognizedUnits.length > 0,
     items: itemsList
   });
 });
@@ -4401,10 +4459,11 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
   if (orders.length > 0) {
     for (const ord of orders) {
       const qNum = Number(ord.quantity_num) || 1;
-      const totalVolume = parseMilkVolumeInLitres(ord.quantity, qNum);
-      const packKey = `${ord.product_name} - ${ord.quantity || '500ml'}`;
+      const parsed = parseMilkVolumeInLitres(ord.quantity, qNum, { returnObject: true });
+      const totalVolume = parsed.litres;
+      const packKey = `${ord.product_name} - ${ord.quantity || 'unspecified'}`;
       if (!packBreakdown[packKey]) {
-        packBreakdown[packKey] = { product: ord.product_name, packSize: ord.quantity || '500ml', units: 0, totalLitres: 0 };
+        packBreakdown[packKey] = { product: ord.product_name, packSize: ord.quantity || 'unspecified', units: 0, totalLitres: 0, recognized: parsed.recognized };
       }
       packBreakdown[packKey].units += qNum;
       packBreakdown[packKey].totalLitres += totalVolume;
@@ -4413,17 +4472,18 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
     const preview = await previewDailyDeliveries(pool, targetDate);
     for (const sub of preview.eligibleSubscriptions) {
       const qNum = sub.quantityNum || 1;
-      const totalVolume = parseMilkVolumeInLitres(sub.quantity, qNum);
-      const packKey = `${sub.productName} - ${sub.quantity || '500ml'}`;
+      const parsed = parseMilkVolumeInLitres(sub.quantity, qNum, { returnObject: true });
+      const totalVolume = parsed.litres;
+      const packKey = `${sub.productName} - ${sub.quantity || 'unspecified'}`;
       if (!packBreakdown[packKey]) {
-        packBreakdown[packKey] = { product: sub.productName, packSize: sub.quantity || '500ml', units: 0, totalLitres: 0 };
+        packBreakdown[packKey] = { product: sub.productName, packSize: sub.quantity || 'unspecified', units: 0, totalLitres: 0, recognized: parsed.recognized };
       }
       packBreakdown[packKey].units += qNum;
       packBreakdown[packKey].totalLitres += totalVolume;
     }
   }
 
-  const headers = ['Product', 'Pack Size', 'Units Scheduled', 'Total Litres', 'Delivery Date'];
+  const headers = ['Product', 'Pack Size', 'Units Scheduled', 'Total Litres', 'Delivery Date', 'Status'];
   const csvRows = [headers.join(',')];
   for (const item of Object.values(packBreakdown)) {
     csvRows.push([
@@ -4431,7 +4491,8 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
       sanitizeCsvCell(item.packSize),
       sanitizeCsvCell(item.units),
       sanitizeCsvCell(item.totalLitres.toFixed(2)),
-      sanitizeCsvCell(targetDate)
+      sanitizeCsvCell(targetDate),
+      sanitizeCsvCell(item.recognized ? 'VALID' : 'UNRECOGNIZED_UNIT')
     ].join(','));
   }
 

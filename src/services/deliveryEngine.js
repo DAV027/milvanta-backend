@@ -129,8 +129,164 @@ export function extractValidDeliveryAddress(sub, defaultAddrRow, latestOrderAddr
 }
 
 /**
+ * Shared Authoritative Subscription Delivery Eligibility Evaluator
+ * Used by BOTH generateDailyDeliveries() and previewDailyDeliveries().
+ * 
+ * Rules:
+ * 1. Require explicit fulfillmentEntitled === true (boolean true only).
+ * 2. Require authoritative captured payment evidence:
+ *    - Valid payment reference (lastPaymentId or paymentId).
+ *    - Not a mandate-only authorization (authType !== 'mandate_only').
+ *    - A payment reference or paidCount alone without fulfillmentEntitled === true is rejected.
+ * 3. Enforce valid subscription start date (targetDate >= subStartDate).
+ * 4. Derive and enforce authenticated effective paid-through coverage date (targetDate <= paidThroughEndDate).
+ * 5. Exclude skipped dates.
+ * 6. Exclude vacation or pause periods (resumed_at IS NULL).
+ * 7. Require real verified delivery address (no fabricated fallbacks anywhere).
+ */
+export async function evaluateSubscriptionDeliveryEligibility(client, sub, targetDate) {
+  const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+
+  // 1. Explicit fulfillmentEntitled === true (boolean true only)
+  if (subNotes.fulfillmentEntitled !== true) {
+    return {
+      eligible: false,
+      reason: 'noFulfillmentEntitlement',
+      exclusionMessage: 'Fulfillment entitlement flag is not set to true',
+      paidThroughEndDate: null,
+      deliveryAddress: null
+    };
+  }
+
+  // 2. Authoritative captured payment evidence
+  const paymentId = (typeof subNotes.lastPaymentId === 'string' && subNotes.lastPaymentId.trim()) ||
+                    (typeof subNotes.paymentId === 'string' && subNotes.paymentId.trim()) ||
+                    null;
+  const isMandateOnly = subNotes.authType === 'mandate_only';
+
+  if (!paymentId || isMandateOnly) {
+    return {
+      eligible: false,
+      reason: 'noPaymentEvidence',
+      exclusionMessage: isMandateOnly
+        ? 'Subscription is mandate-only; recurring billing payment has not been captured'
+        : 'Missing authoritative captured payment proof',
+      paidThroughEndDate: null,
+      deliveryAddress: null
+    };
+  }
+
+  // 3. Enforce valid subscription start date
+  const subStartDate = subNotes.startDate || subNotes.start_date ||
+    (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+      ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+      : null) ||
+    (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
+
+  if (!subStartDate || targetDate < subStartDate) {
+    return {
+      eligible: false,
+      reason: 'beforeStartDate',
+      exclusionMessage: `Target delivery date ${targetDate} is before subscription start date ${subStartDate || 'unknown'}`,
+      paidThroughEndDate: null,
+      deliveryAddress: null
+    };
+  }
+
+  // 4. Derive and enforce authenticated paid-through end date
+  const paidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
+  if (!paidThroughEndDate) {
+    return {
+      eligible: false,
+      reason: 'noEntitlement',
+      exclusionMessage: 'Unable to derive authoritative paid-through coverage date',
+      paidThroughEndDate: null,
+      deliveryAddress: null
+    };
+  }
+
+  if (targetDate > paidThroughEndDate) {
+    return {
+      eligible: false,
+      reason: 'beyondEntitlement',
+      exclusionMessage: `Target delivery date ${targetDate} is beyond paid entitlement date ${paidThroughEndDate}`,
+      paidThroughEndDate,
+      deliveryAddress: null
+    };
+  }
+
+  // 5. Check if skipped for target date
+  const { rows: skipped } = await client.query(
+    'SELECT id FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',
+    [sub.id, targetDate]
+  );
+  if (skipped.length > 0) {
+    return {
+      eligible: false,
+      reason: 'skippedDate',
+      exclusionMessage: `Delivery date ${targetDate} was explicitly skipped by customer`,
+      paidThroughEndDate,
+      deliveryAddress: null
+    };
+  }
+
+  // 6. Check if in vacation or pause
+  const { rows: paused } = await client.query(
+    `SELECT id FROM subscription_delivery_pauses 
+     WHERE subscription_id = $1 
+       AND pause_start_date <= $2 
+       AND (pause_end_date IS NULL OR pause_end_date >= $2)
+       AND resumed_at IS NULL`,
+    [sub.id, targetDate]
+  );
+  if (paused.length > 0) {
+    return {
+      eligible: false,
+      reason: 'onVacationOrPause',
+      exclusionMessage: 'Subscription is in pause or vacation period',
+      paidThroughEndDate,
+      deliveryAddress: null
+    };
+  }
+
+  // 7. Fetch customer default delivery address and validate (no invented dummy fallbacks)
+  const { rows: addrRows } = await client.query(
+    `SELECT recipient_name, phone, house, building, street, landmark, city, state, pincode
+     FROM customer_addresses
+     WHERE customer_id = $1 AND is_default = TRUE
+     LIMIT 1`,
+    [sub.customer_id]
+  );
+
+  const { rows: orderAddr } = await client.query(
+    `SELECT address FROM customer_orders WHERE customer_id = $1 AND address IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+    [sub.customer_id]
+  );
+
+  const deliveryAddress = extractValidDeliveryAddress(sub, addrRows[0], orderAddr[0]);
+  if (!deliveryAddress) {
+    return {
+      eligible: false,
+      reason: 'missingOrInvalidAddress',
+      exclusionMessage: 'Customer has no verified delivery address with street and pincode',
+      paidThroughEndDate,
+      deliveryAddress: null
+    };
+  }
+
+  return {
+    eligible: true,
+    reason: null,
+    exclusionMessage: null,
+    paidThroughEndDate,
+    deliveryAddress
+  };
+}
+
+/**
  * GENERATE DAILY DELIVERY ORDERS
- * Idempotent: safe to run multiple times, uses ON CONFLICT DO NOTHING and pre-checks
+ * Idempotent: safe to run multiple times, uses ON CONFLICT DO NOTHING and pre-checks.
+ * Evaluates each subscription with shared evaluateSubscriptionDeliveryEligibility().
  */
 export async function generateDailyDeliveries(pool, targetDateYMD = null, options = {}) {
   if (!pool) throw new Error('Database pool required');
@@ -146,7 +302,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
   try {
     await client.query('BEGIN');
 
-    // 1. Fetch all currently active subscriptions with payment & schedule attributes
+    // Fetch all currently active subscriptions
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
               cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
@@ -158,114 +314,19 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     );
 
     for (const sub of activeSubs) {
-      const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-
-      // 1a. Require explicit fulfillment entitlement and valid captured payment evidence
-      if (subNotes.fulfillmentEntitled === false) {
+      const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
+      if (!evalRes.eligible) {
         skippedCount++;
         continue;
       }
+      const { deliveryAddress } = evalRes;
 
-      const hasPaymentEvidence = Boolean(
-        (subNotes.lastPaymentId || subNotes.paymentId || (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)) &&
-        subNotes.authType !== 'mandate_only'
-      );
-      if (!hasPaymentEvidence) {
-        skippedCount++;
-        continue;
-      }
-
-      // 1b. Enforce valid subscription start date
-      const subStartDate = subNotes.startDate || subNotes.start_date ||
-        (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
-          ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
-          : null) ||
-        (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
-
-      if (!subStartDate || targetDate < subStartDate) {
-        skippedCount++;
-        continue;
-      }
-
-      // 1c. Derive and enforce authenticated paid-through end date
-      const paidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
-
-      // Fail closed if paid-through entitlement cannot be established
-      if (!paidThroughEndDate) {
-        skippedCount++;
-        continue;
-      }
-
-      // Do not generate deliveries outside the paid entitlement
-      if (targetDate > paidThroughEndDate) {
-        skippedCount++;
-        continue;
-      }
-
-      // 2. Check if skipped for target date
-      const { rows: skipped } = await client.query(
-        'SELECT id FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',
-        [sub.id, targetDate]
-      );
-      if (skipped.length > 0) {
-        skippedCount++;
-        continue;
-      }
-
-      // 3. Check if in vacation or pause
-      const { rows: paused } = await client.query(
-        `SELECT id FROM subscription_delivery_pauses 
-         WHERE subscription_id = $1 
-           AND pause_start_date <= $2 
-           AND (pause_end_date IS NULL OR pause_end_date >= $2)
-           AND resumed_at IS NULL`,
-        [sub.id, targetDate]
-      );
-      if (paused.length > 0) {
-        skippedCount++;
-        continue;
-      }
-
-      // 4. Fetch customer default delivery address and validate (no invented dummy fallback)
-      const { rows: addrRows } = await client.query(
-        `SELECT recipient_name, phone, house, building, street, landmark, city, state, pincode
-         FROM customer_addresses
-         WHERE customer_id = $1 AND is_default = TRUE
-         LIMIT 1`,
-        [sub.customer_id]
-      );
-
-      const { rows: orderAddr } = await client.query(
-        `SELECT address FROM customer_orders WHERE customer_id = $1 AND address IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
-        [sub.customer_id]
-      );
-
-      let deliveryAddress = extractValidDeliveryAddress(sub, addrRows[0], orderAddr[0]);
-      if (!deliveryAddress) {
-        if (process.env.NODE_ENV === 'test' && (sub.phone || sub.full_name)) {
-          deliveryAddress = {
-            recipient_name: sub.full_name || 'Customer',
-            phone: sub.phone || '',
-            house: '',
-            building: '',
-            street: 'Registered Address',
-            landmark: '',
-            city: 'Hyderabad',
-            state: 'Telangana',
-            pincode: '500001'
-          };
-        } else {
-          skippedCount++;
-          continue;
-        }
-      }
-
-      // 5. Generate unique delivery order number: MV-DEL-YYYYMMDD-XXXXXX
+      // Generate unique delivery order number: MV-DEL-YYYYMMDD-XXXXXX
       const randHex = crypto.randomBytes(3).toString('hex').toUpperCase();
       const cleanDateTag = targetDate.replaceAll('-', '');
       const deliveryOrderNumber = `MV-DEL-${cleanDateTag}-${String(sub.id).padStart(4, '0')}-${randHex}`;
 
-      // 6. Insert with duplicate prevention via UNIQUE(subscription_id, delivery_date)
+      // Insert with duplicate prevention via UNIQUE(subscription_id, delivery_date)
       const insertRes = await client.query(
         `INSERT INTO subscription_delivery_orders (
            delivery_order_number, subscription_id, customer_id, delivery_date,
@@ -289,8 +350,8 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
       if (insertRes.rowCount > 0) {
         generatedCount++;
 
-        // Queue next-day reminder notification for 9:00 PM IST (if customer has phone)
-        if (sub.phone) {
+        // Only queue next-day reminder if customer phone exists AND WhatsApp messaging is enabled (freeze safeguard)
+        if (sub.phone && process.env.WHATSAPP_ENABLED === 'true') {
           const idempotencyKey = `sms_reminder_${sub.id}_${targetDate}`;
           await queueNotification(client, {
             customerId: sub.customer_id,
@@ -330,6 +391,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
 /**
  * PREVIEW DAILY DELIVERY ORDERS (DRY RUN)
  * Strictly read-only: does not insert any records.
+ * Uses shared evaluateSubscriptionDeliveryEligibility() for 100% parity with generation.
  */
 export async function previewDailyDeliveries(pool, targetDateYMD = null) {
   if (!pool) throw new Error('Database pool required');
@@ -361,90 +423,26 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
       missingOrInvalidAddress: 0
     };
     const eligibleList = [];
+    const excludedList = [];
 
     for (const sub of activeSubs) {
-      const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-
-      if (subNotes.fulfillmentEntitled === false) {
-        skippedBreakdown.noFulfillmentEntitlement++;
-        continue;
-      }
-      if (subNotes.fulfillmentEntitled !== true && !subNotes.lastPaymentId && !subNotes.paymentId) {
-        skippedBreakdown.noFulfillmentEntitlement++;
-        continue;
-      }
-
-      const hasPaymentEvidence = Boolean(
-        (subNotes.lastPaymentId || subNotes.paymentId || (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)) &&
-        subNotes.authType !== 'mandate_only'
-      );
-      if (!hasPaymentEvidence) {
-        skippedBreakdown.noPaymentEvidence++;
+      const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
+      if (!evalRes.eligible) {
+        if (skippedBreakdown[evalRes.reason] !== undefined) {
+          skippedBreakdown[evalRes.reason]++;
+        }
+        excludedList.push({
+          subscriptionId: sub.id,
+          customerId: sub.customer_id,
+          customerName: sub.full_name,
+          productName: sub.product_name,
+          reason: evalRes.reason,
+          exclusionMessage: evalRes.exclusionMessage
+        });
         continue;
       }
 
-      const subStartDate = subNotes.startDate || subNotes.start_date ||
-        (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
-          ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
-          : null) ||
-        (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null);
-
-      if (!subStartDate || targetDate < subStartDate) {
-        skippedBreakdown.beforeStartDate++;
-        continue;
-      }
-
-      const paidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
-      if (!paidThroughEndDate) {
-        skippedBreakdown.noEntitlement++;
-        continue;
-      }
-      if (targetDate > paidThroughEndDate) {
-        skippedBreakdown.beyondEntitlement++;
-        continue;
-      }
-
-      const { rows: skipped } = await client.query(
-        'SELECT id FROM subscription_skipped_dates WHERE subscription_id = $1 AND skip_date = $2',
-        [sub.id, targetDate]
-      );
-      if (skipped.length > 0) {
-        skippedBreakdown.skippedDate++;
-        continue;
-      }
-
-      const { rows: paused } = await client.query(
-        `SELECT id FROM subscription_delivery_pauses 
-         WHERE subscription_id = $1 
-           AND pause_start_date <= $2 
-           AND (pause_end_date IS NULL OR pause_end_date >= $2)
-           AND resumed_at IS NULL`,
-        [sub.id, targetDate]
-      );
-      if (paused.length > 0) {
-        skippedBreakdown.onVacationOrPause++;
-        continue;
-      }
-
-      const { rows: addrRows } = await client.query(
-        `SELECT recipient_name, phone, house, building, street, landmark, city, state, pincode
-         FROM customer_addresses
-         WHERE customer_id = $1 AND is_default = TRUE
-         LIMIT 1`,
-        [sub.customer_id]
-      );
-
-      const { rows: orderAddr } = await client.query(
-        `SELECT address FROM customer_orders WHERE customer_id = $1 AND address IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
-        [sub.customer_id]
-      );
-
-      const deliveryAddress = extractValidDeliveryAddress(sub, addrRows[0], orderAddr[0]);
-      if (!deliveryAddress) {
-        skippedBreakdown.missingOrInvalidAddress++;
-        continue;
-      }
-
+      const { deliveryAddress, paidThroughEndDate } = evalRes;
       eligibleCount++;
 
       // Check if already generated
@@ -484,7 +482,8 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
       alreadyGeneratedCount,
       toGenerateCount,
       skippedBreakdown,
-      eligibleSubscriptions: eligibleList
+      eligibleSubscriptions: eligibleList,
+      excludedSubscriptions: excludedList
     };
   } finally {
     release();

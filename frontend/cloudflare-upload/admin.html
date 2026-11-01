@@ -2281,21 +2281,41 @@
           const statusClass = r.status === 'processed' || r.status === 'approved' ? 'badge-active'
             : r.status === 'rejected' ? 'badge-cancelled'
             : r.status === 'failed' ? 'badge-expired' : 'badge-paused';
-          const targetRef = r.requestType === 'subscription'
+          const isSub = r.requestType === 'subscription' || r.requestType === 'subscription_cancellation';
+          const typeLabel = r.requestType === 'subscription_cancellation' ? 'Subscription Cancellation'
+            : r.requestType === 'subscription' ? 'Subscription'
+            : (r.requestType === 'order' ? 'Order Item' : (r.requestType || '—'));
+          const targetRef = isSub
             ? `Sub #${r.subscriptionId || '—'}`
             : `Order #${r.orderNumber || r.orderId || '—'}`;
+          const calcAmt = r.calculatedEligibleAmount != null
+            ? r.calculatedEligibleAmount
+            : (r.calculatedEligibleAmountPaise != null ? r.calculatedEligibleAmountPaise / 100 : (r.requestedAmount || 0));
+          const approvedText = r.approvedAmount != null
+            ? '₹' + Number(r.approvedAmount).toLocaleString('en-IN')
+            : (r.approvedAmountPaise != null ? '₹' + (r.approvedAmountPaise / 100).toLocaleString('en-IN') : '—');
+
+          // 1. Request ID
           addCell('strong', r.requestNumber || '');
-          addCell('span', r.requestType || '', `font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${r.requestType === 'subscription' ? '#0284c7' : '#059669'};`);
+          // 2. Type
+          addCell('span', typeLabel, `font-size:0.75rem; text-transform:uppercase; font-weight:700; color:${isSub ? '#0284c7' : '#059669'};`);
+          // 3. Customer
           const customerCell = addCell('div', r.customerName || '—', 'font-weight:600; color:#0f172a;');
           const contact = document.createElement('div');
           contact.style.cssText = 'font-size:0.75rem; color:#64748b;';
           contact.textContent = r.customerPhone || r.customerEmail || '—';
           customerCell.appendChild(contact);
+          // 4. Reference
           addCell('span', targetRef, 'font-weight:600; color:#334155;');
+          // 5. Requested
           addCell('strong', '₹' + (r.requestedAmount || 0).toLocaleString('en-IN'), 'color:#0f172a;');
-          addCell('strong', r.approvedAmount ? '₹' + r.approvedAmount.toLocaleString('en-IN') : '—', 'color:#059669;');
-          addCell('span', (r.reasonCategory || 'other').replace(/_/g, ' '), 'font-size:0.78rem; text-transform:capitalize;');
+          // 6. Calculated Eligible
+          addCell('strong', '₹' + Number(calcAmt).toLocaleString('en-IN'), 'color:#2563eb;');
+          // 7. Approved
+          addCell('strong', approvedText, 'color:#059669;');
+          // 8. Status
           addCell('span', r.status || '', '', `status-badge ${statusClass}`);
+          // 9. Requested At
           addCell('span', r.createdAt ? new Date(r.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : '—', 'font-size:0.78rem; color:#64748b;');
           if (r.status === 'pending' || r.status === 'requested' || r.status === 'under_review') {
             const actions = addCell('div', '', 'display:flex; gap:6px;');
@@ -2367,6 +2387,7 @@
             orderNumber: ref.order_number,
             subscriptionId: ref.subscription_id,
             requestedAmount: (ref.requested_amount_paise || 0) / 100,
+            calculatedEligibleAmount: (ref.calculated_eligible_amount_paise != null ? ref.calculated_eligible_amount_paise : ref.requested_amount_paise || 0) / 100,
             approvedAmount: ref.approved_amount_paise ? ref.approved_amount_paise / 100 : null,
             reasonCategory: ref.reason_category,
             status: ref.status,
