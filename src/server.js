@@ -44,6 +44,7 @@ import {
   calculateNextDeliveryDate,
   isDeliveryCutoffPassed,
   derivePaidThroughDate,
+  getEffectivePaidThroughDate,
   formatDateYMD
 } from './services/subscriptionService.js';
 import {
@@ -55,8 +56,10 @@ import {
 } from './services/refundService.js';
 import {
   generateDailyDeliveries,
+  previewDailyDeliveries,
   getDailyDeliveries,
-  updateDeliveryStatus
+  updateDeliveryStatus,
+  getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 
 const { Pool } = pg;
@@ -3651,7 +3654,7 @@ app.get('/api/v1/admin/subscriptions', { preHandler: app.requireAdmin }, async (
 
   const { rows } = await pool.query(
     `SELECT cs.id, cs.customer_id, c.full_name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
-            cs.product_name, cs.quantity, cs.frequency, cs.time_slot, cs.cost_per_day_paise,
+            cs.product_name, cs.quantity, cs.quantity_num, cs.frequency, cs.time_slot, cs.cost_per_day_paise,
             cs.status, cs.next_delivery, cs.plan_type, cs.duration_label, cs.total_amount_paise,
             cs.razorpay_subscription_id, cs.razorpay_plan_id, cs.notes, cs.created_at, cs.updated_at
      FROM customer_subscriptions cs
@@ -3667,7 +3670,38 @@ app.get('/api/v1/admin/subscriptions', { preHandler: app.requireAdmin }, async (
     queryParams.slice(0, -2)
   );
 
-  return { subscriptions: rows, total: Number(countRes.rows[0].total) };
+  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+
+  const enrichedRows = await Promise.all(
+    rows.map(async (sub) => {
+      let paidThrough = null;
+      let nextEligible = null;
+      let remainingDays = null;
+      try {
+        paidThrough = await getEffectivePaidThroughDate(pool, sub);
+        nextEligible = await calculateNextDeliveryDate(pool, sub.id);
+        if (paidThrough) {
+          if (paidThrough >= todayIST) {
+            const todayMs = new Date(`${todayIST}T00:00:00+05:30`).getTime();
+            const ptMs = new Date(`${paidThrough}T00:00:00+05:30`).getTime();
+            remainingDays = Math.max(0, Math.round((ptMs - todayMs) / (86400 * 1000)) + 1);
+          } else {
+            remainingDays = 0;
+          }
+        }
+      } catch (e) {
+        // Safe fallback
+      }
+      return {
+        ...sub,
+        effective_paid_through_date: paidThrough,
+        next_eligible_delivery: nextEligible,
+        remaining_eligible_days: remainingDays
+      };
+    })
+  );
+
+  return { subscriptions: enrichedRows, total: Number(countRes.rows[0].total) };
 });
 
 app.get('/api/v1/admin/subscriptions/export', { preHandler: app.requireAdmin }, async (request, reply) => {
@@ -3777,6 +3811,76 @@ app.get('/api/v1/admin/subscriptions/export', { preHandler: app.requireAdmin }, 
     .send(csvContent);
 });
 
+app.get('/api/v1/admin/subscriptions/:id/details', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const subId = Number(request.params.id);
+  if (!Number.isSafeInteger(subId) || subId <= 0) return reply.code(400).send({ error: 'invalid_subscription_id' });
+
+  const { rows: subRows } = await pool.query(
+    `SELECT cs.*, c.full_name AS customer_name, c.email AS customer_email, c.phone AS customer_phone, c.created_at AS customer_since
+     FROM customer_subscriptions cs
+     JOIN customers c ON c.id = cs.customer_id
+     WHERE cs.id = $1`,
+    [subId]
+  );
+  if (!subRows.length) return reply.code(404).send({ error: 'subscription_not_found' });
+  const sub = subRows[0];
+
+  const entitlement = await calculateSubscriptionEntitlement(pool, { subscriptionId: subId, customerId: sub.customer_id });
+  const paidThrough = await getEffectivePaidThroughDate(pool, sub);
+  const nextEligible = await calculateNextDeliveryDate(pool, subId);
+
+  const now = new Date();
+  const year = Number(request.query?.year) || now.getFullYear();
+  const month = request.query?.month !== undefined ? Number(request.query.month) : (now.getMonth() + 1);
+  const calendar = await getSubscriptionCalendar(pool, {
+    subscriptionId: subId,
+    customerId: sub.customer_id,
+    year,
+    month: month - 1
+  });
+
+  const { rows: pauses } = await pool.query(
+    'SELECT * FROM subscription_delivery_pauses WHERE subscription_id = $1 ORDER BY pause_start_date DESC',
+    [subId]
+  );
+
+  const { rows: skips } = await pool.query(
+    'SELECT * FROM subscription_skipped_dates WHERE subscription_id = $1 ORDER BY skip_date DESC',
+    [subId]
+  );
+
+  const { rows: ledger } = await pool.query(
+    'SELECT * FROM subscription_entitlement_ledger WHERE subscription_id = $1 ORDER BY created_at DESC',
+    [subId]
+  );
+
+  const { rows: deliveryOrders } = await pool.query(
+    'SELECT * FROM subscription_delivery_orders WHERE subscription_id = $1 ORDER BY delivery_date DESC LIMIT 50',
+    [subId]
+  );
+
+  const { rows: refunds } = await pool.query(
+    'SELECT * FROM refund_requests WHERE subscription_id = $1 ORDER BY created_at DESC',
+    [subId]
+  );
+
+  return reply.send({
+    subscription: {
+      ...sub,
+      effective_paid_through_date: paidThrough,
+      next_eligible_delivery: nextEligible
+    },
+    entitlement,
+    calendar,
+    pauses,
+    skips,
+    ledger,
+    deliveryOrders,
+    refunds
+  });
+});
+
 app.patch('/api/v1/admin/orders/:orderNumber/status', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { orderNumber } = request.params;
@@ -3835,12 +3939,49 @@ app.patch('/api/v1/admin/orders/:orderNumber/status', { preHandler: app.requireA
   }
 });
 
+app.get('/api/v1/admin/orders/:orderNumber/details', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { orderNumber } = request.params;
+  if (!orderNumber) return reply.code(400).send({ error: 'invalid_order_number' });
+
+  const { rows: orderRows } = await pool.query(
+    `SELECT co.*, c.full_name AS customer_name, c.email AS customer_email, c.phone AS customer_phone
+     FROM customer_orders co
+     LEFT JOIN customers c ON c.id = co.customer_id
+     WHERE co.order_number = $1`,
+    [orderNumber]
+  );
+  if (!orderRows.length) return reply.code(404).send({ error: 'order_not_found' });
+  const order = orderRows[0];
+
+  const { rows: history } = await pool.query(
+    'SELECT * FROM order_status_history WHERE order_number = $1 ORDER BY created_at ASC',
+    [orderNumber]
+  );
+
+  const { rows: refunds } = await pool.query(
+    'SELECT * FROM refund_requests WHERE order_number = $1 ORDER BY created_at DESC',
+    [orderNumber]
+  );
+
+  return reply.send({
+    order,
+    history,
+    refunds
+  });
+});
+
 app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
   reply.header('Pragma', 'no-cache');
 
-  const [ordersSummary, customerSummary, subSummary] = await Promise.all([
+  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const selectedDate = (request.query?.date && /^\d{4}-\d{2}-\d{2}$/.test(request.query.date))
+    ? request.query.date
+    : todayIST;
+
+  const [ordersSummary, customerSummary, subSummary, deliveryRes, refundsRes] = await Promise.all([
     pool.query(`
       SELECT
         COUNT(*) AS total_orders,
@@ -3869,15 +4010,74 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
           0
         ) AS collected_subscription_revenue_paise
       FROM customer_subscriptions
-    `)
+    `),
+    pool.query(`
+      SELECT
+        COUNT(*) AS total_for_date,
+        COUNT(*) FILTER (WHERE status = 'scheduled') AS scheduled_count,
+        COUNT(*) FILTER (WHERE status = 'packed') AS packed_count,
+        COUNT(*) FILTER (WHERE status = 'out_for_delivery') AS out_for_delivery_count,
+        COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_count,
+        COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
+        COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count
+      FROM subscription_delivery_orders
+      WHERE delivery_date = $1
+    `, [selectedDate]).catch(() => ({ rows: [{}] })),
+    pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status IN ('requested', 'under_review')) AS pending_refunds_count,
+        COALESCE(SUM(requested_amount_paise) FILTER (WHERE status IN ('requested', 'under_review')), 0) AS pending_refunds_amount_paise,
+        COALESCE(SUM(approved_amount_paise) FILTER (WHERE status IN ('approved', 'processing', 'processed')), 0) AS total_refunded_paise
+      FROM refund_requests
+    `).catch(() => ({ rows: [{}] }))
   ]);
 
   const orderRevenue = Number(ordersSummary.rows[0].total_revenue_paise);
   const activeContractValue = Number(subSummary.rows[0].active_contract_value_paise || 0);
   const collectedSubRevenue = Number(subSummary.rows[0].collected_subscription_revenue_paise || 0);
   const totalPaidRevenue = orderRevenue + collectedSubRevenue;
+  const refundedAmountPaise = Number(refundsRes.rows[0]?.total_refunded_paise || 0);
+  const netCollectedRevenuePaise = Math.max(0, totalPaidRevenue - refundedAmountPaise);
+
+  const dRow = deliveryRes.rows[0] || {};
+  const scheduledDeliveries = Number(dRow.scheduled_count || 0);
+  const packedDeliveries = Number(dRow.packed_count || 0);
+  const outForDeliveryDeliveries = Number(dRow.out_for_delivery_count || 0);
+  const deliveriesCompleted = Number(dRow.delivered_count || 0);
+  const failedDeliveries = Number(dRow.failed_count || 0);
+  const cancelledDeliveries = Number(dRow.cancelled_count || 0);
+  const pendingDispatch = scheduledDeliveries + packedDeliveries + outForDeliveryDeliveries;
+  const totalForDate = Number(dRow.total_for_date || 0);
+
+  const pendingRefundsCount = Number(refundsRes.rows[0]?.pending_refunds_count || 0);
+  const pendingRefundsAmountPaise = Number(refundsRes.rows[0]?.pending_refunds_amount_paise || 0);
+
+  const alerts = [];
+  const activeSubscriptionsCount = Number(subSummary.rows[0].active_subscriptions || 0);
+  if (totalForDate === 0 && activeSubscriptionsCount > 0 && selectedDate >= todayIST) {
+    alerts.push({
+      type: 'warning',
+      code: 'MISSING_DELIVERY_GENERATION',
+      message: `Daily delivery orders have not yet been generated for ${selectedDate}. ${activeSubscriptionsCount} active subscription(s) found.`
+    });
+  }
+  if (failedDeliveries > 0) {
+    alerts.push({
+      type: 'danger',
+      code: 'FAILED_DELIVERIES',
+      message: `${failedDeliveries} delivery failure(s) recorded for ${selectedDate}. Immediate operational attention required.`
+    });
+  }
+  if (pendingRefundsCount > 0) {
+    alerts.push({
+      type: 'info',
+      code: 'PENDING_REFUNDS',
+      message: `${pendingRefundsCount} customer refund request(s) awaiting administrative review (₹${(pendingRefundsAmountPaise / 100).toFixed(2)}).`
+    });
+  }
 
   return {
+    selectedDate,
     totalOrders: Number(ordersSummary.rows[0].total_orders),
     activeOrders: Number(ordersSummary.rows[0].active_orders),
     deliveredOrders: Number(ordersSummary.rows[0].delivered_orders),
@@ -3887,12 +4087,502 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
     activeSubscriptionContractValuePaise: activeContractValue,
     subscriptionRevenuePaise: activeContractValue,
     combinedRevenuePaise: totalPaidRevenue,
+    refundedAmountPaise,
+    netCollectedRevenuePaise,
     totalCustomers: Number(customerSummary.rows[0].total_customers),
     totalSubscriptions: Number(subSummary.rows[0].total_subscriptions),
-    activeSubscriptions: Number(subSummary.rows[0].active_subscriptions),
+    activeSubscriptions: activeSubscriptionsCount,
     pendingSubscriptions: Number(subSummary.rows[0].pending_subscriptions),
-    pausedSubscriptions: Number(subSummary.rows[0].paused_subscriptions)
+    pausedSubscriptions: Number(subSummary.rows[0].paused_subscriptions),
+    // Deliveries overview metrics
+    scheduledDeliveries,
+    packedDeliveries,
+    outForDeliveryDeliveries,
+    deliveriesCompleted,
+    failedDeliveries,
+    cancelledDeliveries,
+    pendingDispatch,
+    totalDeliveriesForDate: totalForDate,
+    // Refunds summary
+    pendingRefundsCount,
+    pendingRefundsAmountPaise,
+    // Financials object
+    financials: {
+      paidStorefrontRevenuePaise: orderRevenue,
+      collectedSubscriptionRevenuePaise: collectedSubRevenue,
+      subscriptionContractValuePaise: activeContractValue,
+      refundedAmountPaise,
+      netCollectedRevenuePaise
+    },
+    // Deliveries object
+    deliveriesForDate: {
+      date: selectedDate,
+      scheduled: scheduledDeliveries,
+      packed: packedDeliveries,
+      outForDelivery: outForDeliveryDeliveries,
+      delivered: deliveriesCompleted,
+      failed: failedDeliveries,
+      cancelled: cancelledDeliveries,
+      pendingDispatch,
+      total: totalForDate
+    },
+    // Alerts
+    alerts
   };
+});
+
+// ---------- Admin Customer Management ----------
+app.get('/api/v1/admin/customers', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+  const { search, limit = 50, offset = 0 } = request.query || {};
+  const queryParams = [];
+  const conditions = [];
+
+  if (search && search.trim()) {
+    queryParams.push(`%${search.trim().toLowerCase()}%`);
+    conditions.push(`(
+      LOWER(c.full_name) LIKE $${queryParams.length} OR
+      LOWER(c.email) LIKE $${queryParams.length} OR
+      LOWER(COALESCE(c.phone, '')) LIKE $${queryParams.length} OR
+      c.id::text LIKE $${queryParams.length}
+    )`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const parsedLimit = Math.min(100, Math.max(1, Number(limit) || 50));
+  const parsedOffset = Math.max(0, Number(offset) || 0);
+  queryParams.push(parsedLimit, parsedOffset);
+
+  const { rows } = await pool.query(
+    `SELECT c.id, c.full_name, c.email, c.phone, c.created_at, c.email_verified, c.phone_verified_at, c.is_admin,
+            COUNT(DISTINCT cs.id) FILTER (WHERE cs.status = 'active') AS active_subscriptions_count,
+            COUNT(DISTINCT co.id) AS total_orders_count,
+            COALESCE(SUM(DISTINCT co.total_paise) FILTER (WHERE co.payment_status = 'paid'), 0) +
+            COALESCE(SUM(DISTINCT (
+              CASE
+                WHEN (cs.notes->>'authType' = 'recurring_charge' OR cs.notes->>'lastPaymentId' IS NOT NULL)
+                 AND (cs.notes->>'authAmountPaise') ~ '^[0-9]+$'
+                THEN (cs.notes->>'authAmountPaise')::bigint
+                ELSE 0
+              END
+            )), 0) AS total_spend_paise
+     FROM customers c
+     LEFT JOIN customer_subscriptions cs ON cs.customer_id = c.id
+     LEFT JOIN customer_orders co ON co.customer_id = c.id
+     ${whereClause}
+     GROUP BY c.id, c.full_name, c.email, c.phone, c.created_at, c.email_verified, c.phone_verified_at, c.is_admin
+     ORDER BY c.created_at DESC
+     LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
+    queryParams
+  );
+
+  const countRes = await pool.query(
+    `SELECT COUNT(*) AS total FROM customers c ${whereClause}`,
+    queryParams.slice(0, -2)
+  );
+
+  return reply.send({
+    customers: rows,
+    total: Number(countRes.rows[0].total)
+  });
+});
+
+app.get('/api/v1/admin/customers/:id/details', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const customerId = Number(request.params.id);
+  if (!Number.isSafeInteger(customerId) || customerId <= 0) {
+    return reply.code(400).send({ error: 'invalid_customer_id' });
+  }
+
+  const { rows: custRows } = await pool.query(
+    `SELECT id, full_name, email, phone, created_at, email_verified, phone_verified_at, is_admin, sms_notifications_enabled
+     FROM customers
+     WHERE id = $1`,
+    [customerId]
+  );
+  if (!custRows.length) return reply.code(404).send({ error: 'customer_not_found' });
+  const customer = custRows[0];
+
+  const { rows: orders } = await pool.query(
+    `SELECT id, order_number, total_paise, order_status, payment_status, created_at, address, items
+     FROM customer_orders
+     WHERE customer_id = $1
+     ORDER BY created_at DESC`,
+    [customerId]
+  );
+
+  const { rows: subscriptions } = await pool.query(
+    `SELECT id, product_name, quantity, status, cost_per_day_paise, total_amount_paise, next_delivery, notes, created_at
+     FROM customer_subscriptions
+     WHERE customer_id = $1
+     ORDER BY created_at DESC`,
+    [customerId]
+  );
+
+  const { rows: refunds } = await pool.query(
+    `SELECT id, request_number, request_type, order_number, subscription_id, requested_amount_paise, approved_amount_paise, status, created_at
+     FROM refund_requests
+     WHERE customer_id = $1
+     ORDER BY created_at DESC`,
+    [customerId]
+  );
+
+  const addresses = [];
+  const seenAddr = new Set();
+  for (const o of orders) {
+    if (o.address && typeof o.address === 'object') {
+      const key = `${o.address.street || ''}-${o.address.pincode || ''}`;
+      if (!seenAddr.has(key)) {
+        seenAddr.add(key);
+        addresses.push(o.address);
+      }
+    }
+  }
+  for (const s of subscriptions) {
+    const addr = s.notes?.address || s.notes?.deliveryAddress;
+    if (addr && typeof addr === 'object') {
+      const key = `${addr.street || ''}-${addr.pincode || ''}`;
+      if (!seenAddr.has(key)) {
+        seenAddr.add(key);
+        addresses.push(addr);
+      }
+    }
+  }
+
+  return reply.send({
+    customer,
+    addresses,
+    orders,
+    subscriptions,
+    refunds
+  });
+});
+
+// ---------- Admin Demand Forecast ----------
+app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const tomorrowIST = getTomorrowDeliveryDateYMD();
+  const targetDate = (request.query?.date && /^\d{4}-\d{2}-\d{2}$/.test(request.query.date))
+    ? request.query.date
+    : tomorrowIST;
+
+  const { rows: orders } = await pool.query(
+    `SELECT sdo.id, sdo.product_name, sdo.quantity, sdo.quantity_num, sdo.status, sdo.delivery_address,
+            c.full_name AS customer_name, c.phone AS customer_phone
+     FROM subscription_delivery_orders sdo
+     JOIN customers c ON c.id = sdo.customer_id
+     WHERE sdo.delivery_date = $1 AND sdo.status NOT IN ('cancelled', 'failed')
+     ORDER BY sdo.id ASC`,
+    [targetDate]
+  );
+
+  let cowLitres = 0;
+  let buffaloLitres = 0;
+  const packBreakdown = {};
+  let totalDeliveries = 0;
+  const isPreGenerated = orders.length > 0;
+  const itemsList = [];
+
+  if (isPreGenerated) {
+    totalDeliveries = orders.length;
+    for (const ord of orders) {
+      const pName = (ord.product_name || '').toLowerCase();
+      const qNum = Number(ord.quantity_num) || 1;
+      const qText = (ord.quantity || '').toLowerCase();
+      let volumeL = 0.5 * qNum;
+      if (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) {
+        volumeL = 1.0 * qNum;
+      } else if (qText.includes('500')) {
+        volumeL = 0.5 * qNum;
+      }
+
+      if (pName.includes('cow')) {
+        cowLitres += volumeL;
+      } else if (pName.includes('buffalo')) {
+        buffaloLitres += volumeL;
+      } else {
+        cowLitres += volumeL;
+      }
+
+      const packKey = `${ord.product_name} (${ord.quantity || '500ml'})`;
+      packBreakdown[packKey] = (packBreakdown[packKey] || 0) + qNum;
+
+      itemsList.push({
+        id: ord.id,
+        customerName: ord.customer_name,
+        customerPhone: ord.customer_phone,
+        productName: ord.product_name,
+        quantity: ord.quantity,
+        quantityNum: qNum,
+        volumeLitres: volumeL,
+        status: ord.status,
+        address: ord.delivery_address?.street || ''
+      });
+    }
+  } else {
+    const preview = await previewDailyDeliveries(pool, targetDate);
+    totalDeliveries = preview.eligibleCount;
+    for (const sub of preview.eligibleSubscriptions) {
+      const pName = (sub.productName || '').toLowerCase();
+      const qNum = sub.quantityNum || 1;
+      const qText = (sub.quantity || '').toLowerCase();
+      let volumeL = 0.5 * qNum;
+      if (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) {
+        volumeL = 1.0 * qNum;
+      } else if (qText.includes('500')) {
+        volumeL = 0.5 * qNum;
+      }
+
+      if (pName.includes('cow')) {
+        cowLitres += volumeL;
+      } else if (pName.includes('buffalo')) {
+        buffaloLitres += volumeL;
+      } else {
+        cowLitres += volumeL;
+      }
+
+      const packKey = `${sub.productName} (${sub.quantity || '500ml'})`;
+      packBreakdown[packKey] = (packBreakdown[packKey] || 0) + qNum;
+
+      itemsList.push({
+        id: sub.subscriptionId,
+        customerName: sub.customerName,
+        customerPhone: sub.customerPhone,
+        productName: sub.productName,
+        quantity: sub.quantity,
+        quantityNum: qNum,
+        volumeLitres: volumeL,
+        status: 'eligible_awaiting_generation',
+        address: ''
+      });
+    }
+  }
+
+  return reply.send({
+    date: targetDate,
+    isPreGenerated,
+    cowMilkLitres: Number(cowLitres.toFixed(2)),
+    buffaloMilkLitres: Number(buffaloLitres.toFixed(2)),
+    totalLitres: Number((cowLitres + buffaloLitres).toFixed(2)),
+    totalDeliveries,
+    packBreakdown,
+    items: itemsList
+  });
+});
+
+app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const tomorrowIST = getTomorrowDeliveryDateYMD();
+  const targetDate = (request.query?.date && /^\d{4}-\d{2}-\d{2}$/.test(request.query.date))
+    ? request.query.date
+    : tomorrowIST;
+
+  const { rows: orders } = await pool.query(
+    `SELECT sdo.id, sdo.product_name, sdo.quantity, sdo.quantity_num, sdo.status, sdo.delivery_address,
+            c.full_name AS customer_name, c.phone AS customer_phone
+     FROM subscription_delivery_orders sdo
+     JOIN customers c ON c.id = sdo.customer_id
+     WHERE sdo.delivery_date = $1 AND sdo.status NOT IN ('cancelled', 'failed')
+     ORDER BY sdo.id ASC`,
+    [targetDate]
+  );
+
+  const packBreakdown = {};
+  if (orders.length > 0) {
+    for (const ord of orders) {
+      const qNum = Number(ord.quantity_num) || 1;
+      const qText = (ord.quantity || '').toLowerCase();
+      const volumePerUnit = (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) ? 1.0 : 0.5;
+      const packKey = `${ord.product_name} - ${ord.quantity || '500ml'}`;
+      if (!packBreakdown[packKey]) {
+        packBreakdown[packKey] = { product: ord.product_name, packSize: ord.quantity || '500ml', units: 0, totalLitres: 0 };
+      }
+      packBreakdown[packKey].units += qNum;
+      packBreakdown[packKey].totalLitres += (volumePerUnit * qNum);
+    }
+  } else {
+    const preview = await previewDailyDeliveries(pool, targetDate);
+    for (const sub of preview.eligibleSubscriptions) {
+      const qNum = sub.quantityNum || 1;
+      const qText = (sub.quantity || '').toLowerCase();
+      const volumePerUnit = (qText.includes('1000') || qText.includes('1 l') || qText.includes('1l') || qText.includes('1 litre')) ? 1.0 : 0.5;
+      const packKey = `${sub.productName} - ${sub.quantity || '500ml'}`;
+      if (!packBreakdown[packKey]) {
+        packBreakdown[packKey] = { product: sub.productName, packSize: sub.quantity || '500ml', units: 0, totalLitres: 0 };
+      }
+      packBreakdown[packKey].units += qNum;
+      packBreakdown[packKey].totalLitres += (volumePerUnit * qNum);
+    }
+  }
+
+  const headers = ['Product', 'Pack Size', 'Units Scheduled', 'Total Litres', 'Delivery Date'];
+  const csvRows = [headers.join(',')];
+  for (const item of Object.values(packBreakdown)) {
+    csvRows.push([
+      sanitizeCsvCell(item.product),
+      sanitizeCsvCell(item.packSize),
+      sanitizeCsvCell(item.units),
+      sanitizeCsvCell(item.totalLitres.toFixed(2)),
+      sanitizeCsvCell(targetDate)
+    ].join(','));
+  }
+
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="milvanta-demand-forecast-${targetDate}.csv"`)
+    .send(csvRows.join('\r\n'));
+});
+
+// ---------- Admin Business Reports ----------
+app.get('/api/v1/admin/reports', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const from = (request.query?.from && /^\d{4}-\d{2}-\d{2}$/.test(request.query.from)) ? request.query.from : '2026-01-01';
+  const to = (request.query?.to && /^\d{4}-\d{2}-\d{2}$/.test(request.query.to)) ? request.query.to : todayIST;
+  const reportType = request.query?.type || 'overview';
+
+  const [revenueRes, refundsRes, deliveryRes, subRes, custRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         COALESCE(SUM(co.total_paise) FILTER (WHERE co.payment_status = 'paid'), 0) AS storefront_revenue_paise,
+         COUNT(co.id) FILTER (WHERE co.payment_status = 'paid') AS storefront_orders_paid
+       FROM customer_orders co
+       WHERE co.created_at >= $1::date AND co.created_at <= ($2::date + interval '1 day')`,
+      [from, to]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS total_refund_requests,
+         COUNT(*) FILTER (WHERE status = 'processed') AS processed_refunds,
+         COALESCE(SUM(approved_amount_paise) FILTER (WHERE status = 'processed'), 0) AS total_refunded_paise
+       FROM refund_requests
+       WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`,
+      [from, to]
+    ).catch(() => ({ rows: [{}] })),
+    pool.query(
+      `SELECT
+         COUNT(*) AS total_deliveries,
+         COUNT(*) FILTER (WHERE status = 'delivered') AS delivered_count,
+         COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
+         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count,
+         COUNT(*) FILTER (WHERE status IN ('scheduled', 'packed', 'out_for_delivery')) AS in_progress_count
+       FROM subscription_delivery_orders
+       WHERE delivery_date >= $1::date AND delivery_date <= $2::date`,
+      [from, to]
+    ).catch(() => ({ rows: [{}] })),
+    pool.query(
+      `SELECT
+         COUNT(*) AS total_subscriptions,
+         COUNT(*) FILTER (WHERE status = 'active') AS active_count,
+         COUNT(*) FILTER (WHERE status = 'paused') AS paused_count,
+         COUNT(*) FILTER (WHERE status = 'cancelled') AS cancelled_count,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN (notes->>'authType' = 'recurring_charge' OR notes->>'lastPaymentId' IS NOT NULL)
+                AND (notes->>'authAmountPaise') ~ '^[0-9]+$'
+               THEN (notes->>'authAmountPaise')::bigint
+               ELSE 0
+             END
+           ),
+           0
+         ) AS subscription_revenue_paise
+       FROM customer_subscriptions
+       WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`,
+      [from, to]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS total_registered,
+         COUNT(*) FILTER (WHERE email_verified = true) AS verified_email,
+         COUNT(*) FILTER (WHERE phone_verified_at IS NOT NULL) AS verified_phone
+       FROM customers
+       WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`,
+      [from, to]
+    )
+  ]);
+
+  const sfRev = Number(revenueRes.rows[0]?.storefront_revenue_paise || 0);
+  const subRev = Number(subRes.rows[0]?.subscription_revenue_paise || 0);
+  const refAmt = Number(refundsRes.rows[0]?.total_refunded_paise || 0);
+  const totalRev = sfRev + subRev;
+  const netRev = Math.max(0, totalRev - refAmt);
+  const totalDels = Number(deliveryRes.rows[0]?.total_deliveries || 0);
+  const deliveredDels = Number(deliveryRes.rows[0]?.delivered_count || 0);
+
+  return reply.send({
+    from,
+    to,
+    type: reportType,
+    revenue: {
+      storefrontRevenuePaise: sfRev,
+      storefrontOrdersCount: Number(revenueRes.rows[0]?.storefront_orders_paid || 0),
+      subscriptionRevenuePaise: subRev,
+      totalPaidRevenuePaise: totalRev,
+      totalRefundedPaise: refAmt,
+      netCollectedRevenuePaise: netRev
+    },
+    deliveries: {
+      total: totalDels,
+      delivered: deliveredDels,
+      failed: Number(deliveryRes.rows[0]?.failed_count || 0),
+      cancelled: Number(deliveryRes.rows[0]?.cancelled_count || 0),
+      inProgress: Number(deliveryRes.rows[0]?.in_progress_count || 0),
+      successRatePct: totalDels > 0 ? Number(((deliveredDels / totalDels) * 100).toFixed(1)) : 100
+    },
+    subscriptions: {
+      total: Number(subRes.rows[0]?.total_subscriptions || 0),
+      active: Number(subRes.rows[0]?.active_count || 0),
+      paused: Number(subRes.rows[0]?.paused_count || 0),
+      cancelled: Number(subRes.rows[0]?.cancelled_count || 0)
+    },
+    customers: {
+      totalRegistered: Number(custRes.rows[0]?.total_registered || 0),
+      verifiedEmail: Number(custRes.rows[0]?.verified_email || 0),
+      verifiedPhone: Number(custRes.rows[0]?.verified_phone || 0)
+    }
+  });
+});
+
+app.get('/api/v1/admin/reports/export', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const todayIST = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const from = (request.query?.from && /^\d{4}-\d{2}-\d{2}$/.test(request.query.from)) ? request.query.from : '2026-01-01';
+  const to = (request.query?.to && /^\d{4}-\d{2}-\d{2}$/.test(request.query.to)) ? request.query.to : todayIST;
+
+  const headers = ['Metric Category', 'Metric Name', 'Value', 'Unit', 'Period'];
+  const csvRows = [headers.join(',')];
+
+  const [ordersRes, subsRes, deliveryRes, custRes, refundRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*) AS count, COALESCE(SUM(total_paise) FILTER (WHERE payment_status = 'paid'), 0) AS rev FROM customer_orders WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`, [from, to]),
+    pool.query(`SELECT COUNT(*) AS count, COUNT(*) FILTER (WHERE status = 'active') AS active FROM customer_subscriptions WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`, [from, to]),
+    pool.query(`SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE status = 'delivered') AS delivered, COUNT(*) FILTER (WHERE status = 'failed') AS failed FROM subscription_delivery_orders WHERE delivery_date >= $1::date AND delivery_date <= $2::date`, [from, to]).catch(() => ({ rows: [{}] })),
+    pool.query(`SELECT COUNT(*) AS count FROM customers WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`, [from, to]),
+    pool.query(`SELECT COALESCE(SUM(approved_amount_paise) FILTER (WHERE status = 'processed'), 0) AS refunded FROM refund_requests WHERE created_at >= $1::date AND created_at <= ($2::date + interval '1 day')`, [from, to]).catch(() => ({ rows: [{}] }))
+  ]);
+
+  const periodStr = `${from} to ${to}`;
+  const rowsData = [
+    ['Revenue', 'Storefront Paid Orders Revenue', (Number(ordersRes.rows[0]?.rev || 0) / 100).toFixed(2), 'INR', periodStr],
+    ['Revenue', 'Total Refunded', (Number(refundRes.rows[0]?.refunded || 0) / 100).toFixed(2), 'INR', periodStr],
+    ['Subscriptions', 'Total New Subscriptions', String(subsRes.rows[0]?.count || 0), 'Count', periodStr],
+    ['Subscriptions', 'Active Subscriptions', String(subsRes.rows[0]?.active || 0), 'Count', periodStr],
+    ['Deliveries', 'Total Scheduled Deliveries', String(deliveryRes.rows[0]?.total || 0), 'Count', periodStr],
+    ['Deliveries', 'Delivered Successfully', String(deliveryRes.rows[0]?.delivered || 0), 'Count', periodStr],
+    ['Deliveries', 'Delivery Failures', String(deliveryRes.rows[0]?.failed || 0), 'Count', periodStr],
+    ['Customers', 'New Customer Registrations', String(custRes.rows[0]?.count || 0), 'Count', periodStr]
+  ];
+
+  for (const r of rowsData) {
+    csvRows.push(r.map(sanitizeCsvCell).join(','));
+  }
+
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="milvanta-report-${from}-to-${to}.csv"`)
+    .send(csvRows.join('\r\n'));
 });
 
 async function dispatchOrderPaidSms(pool, customerOrderId) {
@@ -4408,14 +5098,94 @@ app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.auth
 // ---------- Internal Operations & Dispatch APIs (Admin Protected) ----------
 app.get('/api/v1/operations/deliveries', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const { date, status, limit, offset } = request.query || {};
+  const { date, status, search, limit, offset } = request.query || {};
   const data = await getDailyDeliveries(pool, {
     date,
     status,
+    search,
     limit: Number(limit) || 100,
     offset: Number(offset) || 0
   });
   return reply.send(data);
+});
+
+app.get('/api/v1/operations/deliveries/generate-preview', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { targetDate } = request.query || {};
+  try {
+    const preview = await previewDailyDeliveries(pool, targetDate);
+    return reply.send(preview);
+  } catch (err) {
+    request.log.error({ err }, 'Operations: failed to preview daily deliveries');
+    return reply.code(500).send({ error: 'delivery_preview_failed', message: err.message });
+  }
+});
+
+app.get('/api/v1/operations/deliveries/export', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const targetDate = request.query?.date || getTomorrowDeliveryDateYMD();
+  const status = request.query?.status || null;
+
+  let query = `
+    SELECT sdo.*, c.full_name AS customer_name, c.phone AS customer_phone
+    FROM subscription_delivery_orders sdo
+    JOIN customers c ON c.id = sdo.customer_id
+    WHERE sdo.delivery_date = $1
+  `;
+  const params = [targetDate];
+  if (status && status !== 'all') {
+    params.push(status);
+    query += ` AND sdo.status = $${params.length}`;
+  }
+  query += ' ORDER BY sdo.id ASC';
+
+  const { rows } = await pool.query(query, params);
+  const headers = [
+    'Delivery Order Number',
+    'Delivery Date',
+    'Status',
+    'Customer Name',
+    'Customer Phone',
+    'Product Name',
+    'Quantity',
+    'Recipient Name',
+    'Delivery Phone',
+    'Street Address',
+    'City',
+    'Pincode',
+    'Driver Notes',
+    'Failed Reason',
+    'Dispatched At (IST)',
+    'Delivered At (IST)',
+    'Created At (IST)'
+  ];
+  const csvRows = [headers.join(',')];
+  for (const r of rows) {
+    const addr = r.delivery_address || {};
+    csvRows.push([
+      sanitizeCsvCell(r.delivery_order_number),
+      sanitizeCsvCell(r.delivery_date),
+      sanitizeCsvCell(r.status),
+      sanitizeCsvCell(r.customer_name),
+      sanitizeCsvCell(r.customer_phone),
+      sanitizeCsvCell(r.product_name),
+      sanitizeCsvCell(r.quantity),
+      sanitizeCsvCell(addr.recipient_name || r.customer_name),
+      sanitizeCsvCell(addr.phone || r.customer_phone),
+      sanitizeCsvCell(addr.street || ''),
+      sanitizeCsvCell(addr.city || ''),
+      sanitizeCsvCell(addr.pincode || ''),
+      sanitizeCsvCell(r.driver_notes || ''),
+      sanitizeCsvCell(r.failed_reason || ''),
+      sanitizeCsvCell(formatISTDateTime(r.dispatched_at)),
+      sanitizeCsvCell(formatISTDateTime(r.delivered_at)),
+      sanitizeCsvCell(formatISTDateTime(r.created_at))
+    ].join(','));
+  }
+  return reply
+    .header('Content-Type', 'text/csv; charset=utf-8')
+    .header('Content-Disposition', `attachment; filename="milvanta-deliveries-${targetDate}.csv"`)
+    .send(csvRows.join('\r\n'));
 });
 
 app.post('/api/v1/operations/deliveries/generate', { preHandler: app.requireAdmin }, async (request, reply) => {
