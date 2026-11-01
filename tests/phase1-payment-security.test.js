@@ -1,5 +1,5 @@
-import './helpers/testDbGuard.js';
-import { describe, it } from 'node:test';
+import { setupDisposableTestSchema, cleanupDisposableTestSchema } from './helpers/testDbGuard.js';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
@@ -11,7 +11,24 @@ process.env.RAZORPAY_KEY_ID = 'rzp_test_placeholder';
 process.env.RAZORPAY_KEY_SECRET = 'test_razorpay_secret_key_milvanta_secure';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'test_webhook_secret_key_milvanta_secure';
 
-const { app } = await import('../src/server.js');
+// Create and migrate the isolated schema before the server opens its pool.
+const fixture = await setupDisposableTestSchema();
+const { app, pool, razorpay } = await import('../src/server.js');
+after(async () => {
+  await app.close();
+  await pool.end();
+  await cleanupDisposableTestSchema(fixture.pool, fixture.schemaName);
+});
+const { rows: [customer] } = await fixture.pool.query(
+  `INSERT INTO customers (full_name, phone, email, password_salt, password_hash, phone_verified_at)
+   VALUES ('Security Fixture', '9876543210', 'security-fixture@milvanta.test', 'fixture', 'fixture', NOW()) RETURNING id, email`
+);
+const token = app.jwt.sign({ sub: String(customer.id), email: customer.email });
+await fixture.pool.query(
+  `INSERT INTO customer_sessions (token_hash, customer_id, csrf_hash, expires_at)
+   VALUES ($1, $2, 'fixture', NOW() + INTERVAL '1 hour')`,
+  [crypto.createHash('sha256').update(token).digest('hex'), customer.id]
+);
 const {
   resolveItemPricing,
   getMilkDailySubscriptionRatePaise,
@@ -39,8 +56,6 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
     });
 
     it('rejects POST /api/v1/subscriptions if paymentId is missing with 400', async () => {
-      // Mock authenticated session token
-      const token = app.jwt.sign({ sub: '1', email: 'verified_user@milvanta.in' });
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/subscriptions',
@@ -51,16 +66,13 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
           // No paymentId provided!
         }
       });
-      // 400 payment_id_required, 401 (session not found in db), or 503 if db unconfigured
-      assert.ok([400, 401, 503].includes(res.statusCode));
-      if (res.statusCode === 400) {
-        const data = JSON.parse(res.payload);
-        assert.equal(data.error, 'payment_id_required');
-      }
+      assert.equal(res.statusCode, 400, res.payload);
+      assert.equal(res.json().error, 'payment_id_required');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM customer_subscriptions')).rows[0].count, '0');
     });
 
-    it('rejects POST /api/v1/subscriptions if paymentId cannot be verified with 400/402', async () => {
-      const token = app.jwt.sign({ sub: '1', email: 'verified_user@milvanta.in' });
+    it('rejects POST /api/v1/subscriptions if paymentId cannot be verified with 400', async (t) => {
+      t.mock.method(razorpay.payments, 'fetch', async (id) => { assert.equal(id, 'pay_unverified_fake_123'); throw new Error('Fixture: unknown payment'); });
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/subscriptions',
@@ -71,12 +83,9 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
           paymentId: 'pay_unverified_fake_123'
         }
       });
-      // 400 invalid_payment_proof, 402 payment_not_captured, 401 (session not found in db), or 503
-      assert.ok([400, 401, 402, 503].includes(res.statusCode));
-      if ([400, 402].includes(res.statusCode)) {
-        const data = JSON.parse(res.payload);
-        assert.ok(['invalid_payment_proof', 'payment_not_captured'].includes(data.error));
-      }
+      assert.equal(res.statusCode, 400, res.payload);
+      assert.equal(res.json().error, 'invalid_payment_proof');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM customer_subscriptions')).rows[0].count, '0');
     });
 
     it('blocks unauthenticated access to POST /api/v1/subscriptions/razorpay-checkout with 401', async () => {
@@ -273,6 +282,11 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
     });
 
     it('safely handles subscription.halted as paused (recoverable, NOT cancelled)', async () => {
+      await fixture.pool.query(
+        `INSERT INTO customer_subscriptions (customer_id, product_name, status, razorpay_subscription_id, notes)
+         VALUES ($1, 'Fixture Cow Milk', $2, $3, '{}'::jsonb)`,
+        [customer.id, 'active', 'sub_valid_halted_123']
+      );
       const webhookPayload = JSON.stringify({
         event: 'subscription.halted',
         payload: {
@@ -297,14 +311,22 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
         payload: webhookPayload
       });
 
-      assert.ok([200, 503].includes(res.statusCode));
-      if (res.statusCode === 200) {
-        const body = JSON.parse(res.payload);
-        assert.equal(body.received, true);
-      }
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(res.json().received, true);
+      const { rows: [stored] } = await fixture.pool.query(
+        'SELECT status, notes, updated_at FROM customer_subscriptions WHERE razorpay_subscription_id = $1', ['sub_valid_halted_123']
+      );
+      assert.equal(stored.status, 'paused');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM payment_webhook_events WHERE event_id = $1', ['evt_test_halted_002'])).rows[0].count, '1');
+
     });
 
     it('safely handles subscription.resumed back to active', async () => {
+      await fixture.pool.query(
+        `INSERT INTO customer_subscriptions (customer_id, product_name, status, razorpay_subscription_id, notes)
+         VALUES ($1, 'Fixture Cow Milk', $2, $3, '{}'::jsonb)`,
+        [customer.id, 'paused', 'sub_valid_resumed_123']
+      );
       const webhookPayload = JSON.stringify({
         event: 'subscription.resumed',
         payload: {
@@ -329,10 +351,22 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
         payload: webhookPayload
       });
 
-      assert.ok([200, 503].includes(res.statusCode));
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(res.json().received, true);
+      const { rows: [stored] } = await fixture.pool.query(
+        'SELECT status, notes, updated_at FROM customer_subscriptions WHERE razorpay_subscription_id = $1', ['sub_valid_resumed_123']
+      );
+      assert.equal(stored.status, 'active');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM payment_webhook_events WHERE event_id = $1', ['evt_test_resumed_003'])).rows[0].count, '1');
+
     });
 
     it('safely handles subscription.completed as expired', async () => {
+      await fixture.pool.query(
+        `INSERT INTO customer_subscriptions (customer_id, product_name, status, razorpay_subscription_id, notes)
+         VALUES ($1, 'Fixture Cow Milk', $2, $3, '{}'::jsonb)`,
+        [customer.id, 'active', 'sub_valid_completed_123']
+      );
       const webhookPayload = JSON.stringify({
         event: 'subscription.completed',
         payload: {
@@ -357,10 +391,22 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
         payload: webhookPayload
       });
 
-      assert.ok([200, 503].includes(res.statusCode));
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(res.json().received, true);
+      const { rows: [stored] } = await fixture.pool.query(
+        'SELECT status, notes, updated_at FROM customer_subscriptions WHERE razorpay_subscription_id = $1', ['sub_valid_completed_123']
+      );
+      assert.equal(stored.status, 'expired');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM payment_webhook_events WHERE event_id = $1', ['evt_test_completed_004'])).rows[0].count, '1');
+
     });
 
     it('handles idempotent duplicate webhooks gracefully', async () => {
+      await fixture.pool.query(
+        `INSERT INTO customer_subscriptions (customer_id, product_name, status, razorpay_subscription_id, notes)
+         VALUES ($1, 'Fixture Cow Milk', $2, $3, '{}'::jsonb)`,
+        [customer.id, 'paused', 'sub_valid_dup_123']
+      );
       const webhookPayload = JSON.stringify({
         event: 'subscription.authenticated',
         payload: {
@@ -383,7 +429,24 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
         payload: webhookPayload
       });
 
-      assert.ok([200, 503].includes(res.statusCode));
+      assert.equal(res.statusCode, 200, res.payload);
+      assert.equal(res.json().received, true);
+      const { rows: [stored] } = await fixture.pool.query(
+        'SELECT status, notes, updated_at FROM customer_subscriptions WHERE razorpay_subscription_id = $1', ['sub_valid_dup_123']
+      );
+      assert.equal(stored.status, 'paused');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM payment_webhook_events WHERE event_id = $1', ['evt_test_dup_005'])).rows[0].count, '1');
+      const duplicate = await app.inject({ method: 'POST', url: '/api/v1/payments/webhook', headers: {
+        'content-type': 'application/json', 'x-razorpay-signature': signature, 'x-razorpay-event-id': 'evt_test_dup_005'
+      }, payload: webhookPayload });
+      assert.equal(duplicate.statusCode, 200, duplicate.payload);
+      assert.equal(duplicate.json().duplicate, true);
+      const { rows: [afterReplay] } = await fixture.pool.query(
+        'SELECT status, notes, updated_at FROM customer_subscriptions WHERE razorpay_subscription_id = $1', ['sub_valid_dup_123']
+      );
+      assert.deepEqual(afterReplay, stored, 'Replay must not mutate subscription state');
+      assert.equal((await fixture.pool.query("SELECT count(*) FROM payment_webhook_events WHERE event_id = 'evt_test_dup_005'")).rows[0].count, '1');
+
     });
   });
 
@@ -430,7 +493,6 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
     });
 
     it('rejects order with outside-Hyderabad pincode (422)', async () => {
-      const token = app.jwt.sign({ sub: '1', email: 'test@milvanta.in' });
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/orders',
@@ -452,12 +514,9 @@ describe('Milvanta Phase 1: Comprehensive Security, Pricing & Checkout Suite', (
           items: [{ productId: 1, quantity: 1 }]
         }
       });
-      // 401 (if session not in DB) or 422 (outside_hyderabad) or 503
-      assert.ok([401, 422, 503].includes(res.statusCode));
-      if (res.statusCode === 422) {
-        const body = JSON.parse(res.payload);
-        assert.equal(body.error, 'outside_hyderabad');
-      }
+      assert.equal(res.statusCode, 422, res.payload);
+      assert.equal(res.json().error, 'outside_hyderabad');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM customer_orders')).rows[0].count, '0');
     });
 
     it('blocks unauthenticated access to POST /api/v1/payments/verify with 401', async () => {

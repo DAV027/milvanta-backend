@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 
 // Enforce test environment variables
 process.env.NODE_ENV = 'test';
@@ -443,6 +444,61 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       const innerHtmlRegex = /\.innerHTML\s*=/g;
       const innerHtmlMatches = scriptCode.match(innerHtmlRegex) || [];
       assert.equal(innerHtmlMatches.length, 0, 'No innerHTML assignments should exist in admin script');
+    });
+
+    it('renders actual refund rows, actions and error messages without interpreting hostile data as HTML', () => {
+      class Element {
+        constructor(tag) {
+          this.tagName = tag;
+          this.children = [];
+          this.style = {};
+          this.dataset = {};
+          this.textContent = '';
+        }
+        appendChild(child) { this.children.push(child); return child; }
+        replaceChildren(...children) { this.children = children; }
+        get firstChild() { return this.children[0]; }
+        set innerHTML(value) { throw new Error('Unsafe HTML assignment: ' + value); }
+      }
+      const tbody = new Element('tbody');
+      const document = {
+        getElementById(id) { assert.equal(id, 'refundsTableBody'); return tbody; },
+        createElement(tag) { return new Element(tag); }
+      };
+      const source = htmlContent.slice(htmlContent.indexOf('      function showRefundTableMessage('), htmlContent.indexOf('      function updateRefundPagination('));
+      const context = vm.createContext({ document });
+      vm.runInContext(source, context);
+      const hostile = '<img src=x onerror="alert(1)">';
+      const refund = {
+        id: '1" onclick="alert(1)', requestNumber: hostile, requestType: hostile,
+        customerName: hostile, customerPhone: hostile, orderNumber: hostile,
+        requestedAmount: 100, approvedAmount: 50, reasonCategory: hostile,
+        status: 'pending', createdAt: '2026-10-01', reviewerName: hostile
+      };
+      context.renderRefundsTable([refund]);
+      const row = tbody.firstChild;
+      assert.equal(row.children.length, 10);
+      assert.equal(row.children[0].firstChild.textContent, hostile);
+      assert.equal(row.children[1].firstChild.textContent, hostile);
+      assert.equal(row.children[2].firstChild.textContent, hostile);
+      assert.equal(row.children[2].children[1].textContent, hostile);
+      assert.equal(row.children[3].firstChild.textContent, 'Order #' + hostile);
+      assert.equal(row.children[4].firstChild.textContent, '\u20b9100');
+      assert.equal(row.children[5].firstChild.textContent, '\u20b950');
+      assert.equal(row.children[6].firstChild.textContent, hostile);
+      const buttons = row.children[9].firstChild.children;
+      assert.equal(buttons.length, 2);
+      assert.equal(buttons[0].dataset.refId, refund.id);
+      assert.equal(buttons[0].className, 'btn-update-order btn-approve-refund');
+      assert.equal(buttons[1].className, 'btn-reset btn-reject-refund');
+      context.renderRefundsTable([{ ...refund, status: hostile }]);
+      assert.equal(tbody.firstChild.children[7].firstChild.textContent, hostile);
+      assert.equal(tbody.firstChild.children[9].firstChild.textContent, 'Reviewed by ' + hostile);
+      context.renderRefundsTable([]);
+      assert.equal(tbody.firstChild.firstChild.colSpan, 10);
+      assert.match(tbody.firstChild.firstChild.textContent, /No refund requests/);
+      context.showRefundTableMessage(tbody, 'Failed to load refunds: ' + hostile, true);
+      assert.equal(tbody.firstChild.firstChild.textContent, 'Failed to load refunds: ' + hostile);
     });
 
     it('verifies frontend/admin.html prefers sessionStorage for admin tokens and clears localStorage', () => {

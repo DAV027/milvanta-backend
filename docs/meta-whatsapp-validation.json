@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-22",
+  "base": "a6aac72ecd8ae093e28021a1eb4ba7fb0677d02f",
+  "branch": "feature/whatsapp-only-final",
+  "phone_messaging_channel": "whatsapp",
+  "provider_selector": false,
+  "fallback": false,
+  "full_suite": {
+    "pass": 324,
+    "fail": 0,
+    "skip": 0
+  },
+  "guarded_integration_runner": {
+    "pass": 38,
+    "fail": 0,
+    "skip": 0
+  },
+  "previous_failures_investigated": 12,
+  "previous_failures_remaining": 0,
+  "sql_migration_changes": [],
+  "preserved_015": true,
+  "historical_sms_replay": false,
+  "production_readiness": "BLOCKED",
+  "live_messages_sent": 0,
+  "production_deployed": false,
+  "mobile": {
+    "viewport": "390x844",
+    "otp": true,
+    "resend": true,
+    "failed_send": true,
+    "registration": true,
+    "signup_consent": true,
+    "opt_out": true,
+    "mandatory_skip_hidden": true,
+    "page_errors": [],
+    "horizontal_overflow": false
+  }
+}

@@ -1,5 +1,5 @@
-import './helpers/testDbGuard.js';
-import { describe, it } from 'node:test';
+import { setupDisposableTestSchema, cleanupDisposableTestSchema } from './helpers/testDbGuard.js';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
@@ -9,7 +9,24 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test_secret_for_milvanta_ecommerce_suite_32_characters';
 process.env.ADMIN_API_KEY = 'test_admin_secret_key_12345';
 
-const { app } = await import('../src/server.js');
+// Create and migrate the isolated schema before the server opens its pool.
+const fixture = await setupDisposableTestSchema();
+const { app, pool } = await import('../src/server.js');
+after(async () => {
+  await app.close();
+  await pool.end();
+  await cleanupDisposableTestSchema(fixture.pool, fixture.schemaName);
+});
+const { rows: [customer] } = await fixture.pool.query(
+  `INSERT INTO customers (full_name, phone, email, password_salt, password_hash, phone_verified_at)
+   VALUES ('Security Fixture', '9876543210', 'security-fixture@milvanta.test', 'fixture', 'fixture', NOW()) RETURNING id, email`
+);
+const token = app.jwt.sign({ sub: String(customer.id), email: customer.email });
+await fixture.pool.query(
+  `INSERT INTO customer_sessions (token_hash, customer_id, csrf_hash, expires_at)
+   VALUES ($1, $2, 'fixture', NOW() + INTERVAL '1 hour')`,
+  [crypto.createHash('sha256').update(token).digest('hex'), customer.id]
+);
 const scrypt = promisify(crypto.scrypt);
 
 async function hashPassword(password) {
@@ -50,9 +67,23 @@ describe('MILVANTA API & Security Suite', () => {
         method: 'GET',
         url: '/health'
       });
-      assert.ok([200, 503].includes(res.statusCode));
+      // The health endpoint explicitly inspects public tables. This suite migrates
+      // only its disposable schema; assert that exact readiness contract.
+      const { rows: [tables] } = await fixture.pool.query(`SELECT
+        to_regclass('public.customers') AS customers,
+        to_regclass('public.customer_sessions') AS sessions,
+        to_regclass('public.products') AS products,
+        to_regclass('public.customer_addresses') AS addresses,
+        to_regclass('public.customer_orders') AS orders,
+        to_regclass('public.payment_orders') AS payments,
+        to_regclass('public.payment_webhook_events') AS events,
+        to_regclass('public.order_status_history') AS history`);
+      const ready = Object.values(tables).every(Boolean);
+      assert.equal(res.statusCode, ready ? 200 : 503, res.payload);
       const body = JSON.parse(res.payload);
       assert.equal(body.service, 'milvanta-api');
+      assert.equal(body.database, 'connected');
+      assert.equal(body.schema, ready ? 'ready' : 'not_ready');
     });
   });
 
@@ -184,15 +215,12 @@ describe('MILVANTA API & Security Suite', () => {
           'x-admin-key': 'test_admin_secret_key_12345'
         }
       });
-      // Should not be 401 or 403; returns 200 (or 503 if remote db not reachable)
-      assert.ok([200, 503].includes(res.statusCode));
+      assert.equal(res.statusCode, 200, res.payload);
     });
   });
 
   describe('Checkout Input Validation', () => {
     it('rejects order checkout with invalid idempotency key', async () => {
-      // Generate a mock JWT for syntax checking
-      const token = app.jwt.sign({ sub: '1', email: 'test@milvanta.in' });
       const res = await app.inject({
         method: 'POST',
         url: '/api/v1/orders',
@@ -214,8 +242,9 @@ describe('MILVANTA API & Security Suite', () => {
           items: [{ productId: 101, quantity: 2 }]
         }
       });
-      // Either 401 (token session not found in mock db) or 400 (missing/invalid idempotency key)
-      assert.ok([400, 401, 503].includes(res.statusCode));
+      assert.equal(res.statusCode, 400, res.payload);
+      assert.equal(res.json().error, 'missing_idempotency_key');
+      assert.equal((await fixture.pool.query('SELECT count(*) FROM customer_orders')).rows[0].count, '0');
     });
   });
 

@@ -28,9 +28,9 @@ import {
   verifyPhoneOtp,
   queueNotification,
   processNotificationOutbox,
-  handleTwilioStatusCallback,
-  validateTwilioWebhookSignature
-} from './services/twilioService.js';
+  queuePaidSubscriptionActivation
+} from './services/notificationService.js';
+import { verifyWhatsAppWebhookSignature, handleWhatsAppWebhook, getWhatsAppPreferences, setWhatsAppPreferences } from './services/whatsappService.js';
 import {
   pauseSubscription,
   resumeSubscription,
@@ -78,7 +78,15 @@ if (JWT_SECRET.length < 32) {
   throw new Error('FATAL SECURITY ERROR: JWT_SECRET must be at least 32 characters long');
 }
 
-const app = Fastify({ logger: process.env.NODE_ENV !== 'test', trustProxy: true, bodyLimit: 1_048_576 });
+const app = Fastify({
+  logger: process.env.NODE_ENV === 'test' ? false : {
+    serializers: { req: request => ({ method: request.method, url: request.url?.replace(/([?&]hub\.verify_token=)[^&]*/g, '$1[REDACTED]') }) },
+    redact: ['req.headers.authorization', 'req.headers.cookie']
+  },
+  trustProxy: true, bodyLimit: 1_048_576
+});
+// Explicit test injection; live server never uses an injected Meta transport.
+app.decorate('whatsappFetch', null);
 app.removeContentTypeParser('application/json');
 app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (request, body, done) => {
   request.rawBody = body;
@@ -260,7 +268,7 @@ app.decorate('authenticate', async (request, reply) => {
   try {
     const res = await pool.query(
       `SELECT c.id, c.full_name, c.email, c.phone, COALESCE(c.is_admin, FALSE) AS is_admin,
-              c.phone_verified_at, COALESCE(c.sms_notifications_enabled, TRUE) AS sms_notifications_enabled
+              c.phone_verified_at
        FROM customers c
        JOIN customer_sessions s ON s.customer_id = c.id
        WHERE c.id = $1 AND s.token_hash = $2 AND s.expires_at > NOW()`,
@@ -307,7 +315,6 @@ const publicUser = (u) => ({
   phone: u.phone,
   phone_verified: Boolean(u.phone_verified_at),
   phone_verified_at: u.phone_verified_at || null,
-  sms_notifications_enabled: u.sms_notifications_enabled !== false,
   is_admin: Boolean(u.is_admin)
 });
 const isPhoneVerificationMandatory = () => process.env.MANDATORY_PHONE_VERIFICATION === 'true';
@@ -749,9 +756,13 @@ app.post('/api/v1/auth/forgot-password/reset', {
   };
 });
 
-// ---------- Twilio Phone OTP Verification ----------
+// ---------- WhatsApp Phone OTP Verification ----------
+app.get('/api/v1/auth/phone/config', async () => ({
+  channel: 'whatsapp', mandatory: isPhoneVerificationMandatory()
+}));
 app.post('/api/v1/auth/phone/send-otp', {
   ...authLimit,
+  preHandler: app.authenticate,
   schema: {
     body: {
       type: 'object',
@@ -764,21 +775,13 @@ app.post('/api/v1/auth/phone/send-otp', {
   }
 }, async (request, reply) => {
   const { phone } = request.body;
-  const authHeader = request.headers.authorization;
-  let customerId = null;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    try {
-      const decoded = app.jwt.verify(authHeader.slice(7));
-      customerId = decoded?.sub ? Number(decoded.sub) : null;
-    } catch {}
-  }
-
   const result = await sendPhoneOtp({
     phone,
     ip: request.ip,
-    customerId,
+    customerId: request.customer.id,
+    sessionHash: request.authToken ? digest(request.authToken) : null,
     pool
-  });
+  }, process.env.NODE_ENV === 'test' ? {fetchImpl:app.whatsappFetch || undefined} : undefined);
 
   if (!result.success) {
     const code = result.statusCode || (result.error === 'cooldown_active' ? 429 : 400);
@@ -790,6 +793,7 @@ app.post('/api/v1/auth/phone/send-otp', {
 
 app.post('/api/v1/auth/phone/verify-otp', {
   ...authLimit,
+  preHandler: app.authenticate,
   schema: {
     body: {
       type: 'object',
@@ -797,25 +801,17 @@ app.post('/api/v1/auth/phone/verify-otp', {
       additionalProperties: false,
       properties: {
         phone: { type: 'string', minLength: 10, maxLength: 16 },
-        code: { type: 'string', minLength: 4, maxLength: 8 }
+        code: { type: 'string', pattern: '^[0-9]{6}$' }
       }
     }
   }
 }, async (request, reply) => {
   const { phone, code } = request.body;
-  const authHeader = request.headers.authorization;
-  let customerId = null;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    try {
-      const decoded = app.jwt.verify(authHeader.slice(7));
-      customerId = decoded?.sub ? Number(decoded.sub) : null;
-    } catch {}
-  }
-
   const result = await verifyPhoneOtp({
     phone,
     code,
-    customerId,
+    customerId: request.customer.id,
+    sessionHash: request.authToken ? digest(request.authToken) : null,
     pool
   });
 
@@ -827,30 +823,28 @@ app.post('/api/v1/auth/phone/verify-otp', {
   return reply.send(result);
 });
 
-// ---------- Customer Notification Preferences ----------
-app.get('/api/v1/customers/notifications/preferences', { preHandler: app.authenticate }, async (request, reply) => {
-  return reply.send({
-    sms_notifications_enabled: request.customer.sms_notifications_enabled !== false,
-    phone: request.customer.phone,
-    phone_verified: Boolean(request.customer.phone_verified_at)
-  });
+// Meta handshake and exact-raw-body signed event ingress.
+app.get('/api/v1/webhooks/whatsapp', async(request,reply)=>{
+  const q=request.query || {}, token=process.env.WHATSAPP_VERIFY_TOKEN;
+  const supplied=typeof q['hub.verify_token']==='string'?q['hub.verify_token']:'';
+  const a=Buffer.from(token || ''), b=Buffer.from(supplied);
+  if(!token || q['hub.mode']!=='subscribe' || a.length!==b.length || !crypto.timingSafeEqual(a,b) || typeof q['hub.challenge']!=='string') return reply.code(403).send({error:'invalid_webhook_challenge'});
+  return reply.type('text/plain').send(q['hub.challenge']);
+});
+app.post('/api/v1/webhooks/whatsapp', async(request,reply)=>{
+  if(!verifyWhatsAppWebhookSignature({rawBody:request.rawBody,signature:request.headers['x-hub-signature-256']})) return reply.code(403).send({error:'invalid_webhook_signature'});
+  if(!pool) return reply.code(503).send({error:'database_not_configured'});
+  await handleWhatsAppWebhook(pool,request.body);
+  return {received:true};
 });
 
-app.patch('/api/v1/customers/notifications/preferences', { preHandler: app.authenticate }, async (request, reply) => {
-  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const { enabled } = request.body || {};
-  const isEnabled = enabled !== false;
-
-  await pool.query(
-    'UPDATE customers SET sms_notifications_enabled = $1, updated_at = NOW() WHERE id = $2',
-    [isEnabled, request.customer.id]
-  );
-
-  return reply.send({
-    success: true,
-    sms_notifications_enabled: isEnabled,
-    message: isEnabled ? 'SMS delivery alerts enabled.' : 'SMS delivery alerts muted.'
-  });
+// ---------- WhatsApp Notification Preferences ----------
+app.get('/api/v1/customers/notifications/preferences', {preHandler:app.authenticate}, async(request,reply)=>
+  reply.send({channel:'whatsapp',...(await getWhatsAppPreferences(pool,request.customer.id)),phone:request.customer.phone,phone_verified:Boolean(request.customer.phone_verified_at)})
+);
+app.patch('/api/v1/customers/notifications/preferences', {preHandler:app.authenticate}, async(request,reply)=>{
+  try { return reply.send({success:true,channel:'whatsapp',...(await setWhatsAppPreferences(pool,request.customer,request.body || {}))}); }
+  catch(error) { return reply.code(error.statusCode || 503).send({error:error.code || 'preferences_unavailable'}); }
 });
 
 app.get('/api/v1/products', async (_request, reply) => {
@@ -1644,7 +1638,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     `SELECT cs.id, cs.customer_id, cs.status, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
             cs.frequency, cs.time_slot, cs.cost_per_day_paise, cs.plan_type, cs.duration_label,
             cs.total_amount_paise, cs.notes, cs.next_delivery, cs.razorpay_subscription_id, cs.razorpay_plan_id, cs.created_at,
-            c.phone, c.sms_notifications_enabled
+            c.phone
      FROM customer_subscriptions cs
      LEFT JOIN customers c ON c.id = cs.customer_id
      WHERE (cs.razorpay_subscription_id = $1 
@@ -2128,31 +2122,13 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
   // 10. Authoritative Start Date derivation
   const startDate = await deriveAuthoritativeSubscriptionStartDate(pool, subRow, gatewaySub);
 
-  // 11. Send confirmation email and queue SMS ONLY if newly transitioned to active (Requirement 6)
+  // 11. Send confirmation email and queue WhatsApp ONLY if newly transitioned to active (Requirement 6)
   if (isNewlyActivated) {
     sendSubscriptionConfirmationEmails(pool, { subscriptionId: subId, paymentId }).catch((err) => {
       app.log.error({ err }, '[Email] Failed to send subscription confirmation email on verify');
     });
 
-    const targetPhone = subRow.phone || request.customer.phone;
-    const notificationsEnabled = subRow.sms_notifications_enabled !== undefined
-      ? subRow.sms_notifications_enabled
-      : request.customer.sms_notifications_enabled;
-
-    if (targetPhone && notificationsEnabled !== false) {
-      queueNotification(pool, {
-        customerId: request.customer.id,
-        phone: targetPhone,
-        templateKey: 'SUBSCRIPTION_ACTIVATED',
-        params: {
-          productName: subRow.product_name || gatewaySub?.notes?.productName || 'Milk',
-          quantity: subRow.quantity || gatewaySub?.notes?.size || '1 Litre',
-          startDate: startDate || 'tomorrow'
-        },
-        idempotencyKey: `sms_sub_activated_${subRow.id || subId}`
-      }).catch(() => {});
-      setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
-    }
+    await queuePaidSubscriptionActivation(pool,subRow.id);
   }
 
   const finalNotes = typeof subRow.notes === 'object' && subRow.notes !== null ? subRow.notes : {};
@@ -4585,17 +4561,17 @@ app.get('/api/v1/admin/reports/export', { preHandler: app.requireAdmin }, async 
     .send(csvRows.join('\r\n'));
 });
 
-async function dispatchOrderPaidSms(pool, customerOrderId) {
+async function dispatchOrderPaidNotification(pool, customerOrderId, processNow = true) {
   if (!pool || !customerOrderId) return;
   try {
     const { rows } = await pool.query(
-      `SELECT co.id, co.order_number, co.total_paise, co.address, co.customer_id, c.phone, c.sms_notifications_enabled
+      `SELECT co.id, co.order_number, co.total_paise, co.address, co.customer_id, c.phone
        FROM customer_orders co
        LEFT JOIN customers c ON c.id = co.customer_id
-       WHERE co.id = $1`,
+       WHERE co.id = $1 AND co.payment_status='paid' AND co.order_status='confirmed'`,
       [customerOrderId]
     );
-    if (!rows[0] || rows[0].sms_notifications_enabled === false) return;
+    if (!rows[0]) return;
     const ord = rows[0];
     let addr = {};
     if (ord.address && typeof ord.address === 'object') {
@@ -4603,7 +4579,7 @@ async function dispatchOrderPaidSms(pool, customerOrderId) {
     } else if (typeof ord.address === 'string') {
       try { addr = JSON.parse(ord.address); } catch {}
     }
-    const targetPhone = addr.phone || ord.phone;
+    const targetPhone = ord.phone;
     if (!targetPhone) return;
 
     await queueNotification(pool, {
@@ -4614,13 +4590,17 @@ async function dispatchOrderPaidSms(pool, customerOrderId) {
         orderNumber: ord.order_number,
         amount: (Number(ord.total_paise || 0) / 100).toFixed(0),
         area: addr.area || addr.city || 'Hyderabad',
-        deliveryDate: addr.delivery_date || addr.deliveryDate || 'tomorrow'
+        deliveryDate: addr.delivery_date || addr.deliveryDate || 'tomorrow',
+        orderLink: 'https://milvanta.in/profile.html?order=' + encodeURIComponent(ord.order_number)
       },
       idempotencyKey: `sms_order_paid_${ord.id}`
-    }).catch(() => {});
-    setImmediate(() => processNotificationOutbox(pool, 10).catch(() => {}));
+    });
+    if (processNow) setImmediate(() => processNotificationOutbox(pool, 10, process.env.NODE_ENV==='test' ? {fetchImpl:app.whatsappFetch || undefined} : undefined).catch(() => {}));
   } catch (err) {
-    app.log.warn({ err: err?.message || err }, 'Failed to dispatch order paid SMS');
+    // A failed SQL statement aborts a shared webhook transaction. Propagate so the
+    // gateway gets a retryable failure instead of acknowledging a rolled-back payment.
+    if (!processNow) throw err;
+    app.log.warn({ code: err?.code || 'notification_error' }, 'Failed to queue order notification');
   }
 }
 
@@ -4663,7 +4643,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
         sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
           app.log.error({ err }, '[Resend] Failed to send order emails on payment verify');
         });
-        dispatchOrderPaidSms(pool, customerOrderId).catch(() => {});
+        await dispatchOrderPaidNotification(pool, customerOrderId);
       }
     }
 
@@ -4746,7 +4726,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               sendOrderPaidEmails(pool, orderId, entity.id).catch((err) => {
                 app.log.error({ err }, '[Resend] Failed to send order emails on webhook capture');
               });
-              dispatchOrderPaidSms(pool, orderId).catch(() => {});
+              await dispatchOrderPaidNotification(client, orderId, false);
             }
           }
         }
@@ -5071,6 +5051,16 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         }
       }
     }
+    if (seen.rowCount && subEntity?.id) {
+      const {rows: notificationSubs}=await client.query(`SELECT s.*,c.phone FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id WHERE s.razorpay_subscription_id=$1 OR s.notes->>'subscriptionId'=$1 OR s.notes->>'razorpay_subscription_id'=$1`,[subEntity.id]);
+      for(const s of notificationSubs) {
+        if(['subscription.activated','subscription.charged'].includes(eventName)) await queuePaidSubscriptionActivation(client,s.id);
+        else {
+          const templateKey=({'subscription.cancelled':'SUBSCRIPTION_CANCELLED','subscription.paused':'SUBSCRIPTION_PAUSED','subscription.resumed':'SUBSCRIPTION_RESUMED','subscription.halted':'BILLING_ISSUE','subscription.pending':'BILLING_ISSUE'})[eventName];
+          if(templateKey) await queueNotification(client,{customerId:s.customer_id,phone:s.phone,templateKey,params:{productName:s.product_name,dueDate:s.notes?.paidThroughDate},idempotencyKey:templateKey==='SUBSCRIPTION_CANCELLED'?`sms_sub_cancel_${s.id}`:`gateway_${eventName}_${s.id}_${eventId}`});
+        }
+      }
+    }
     await client.query('COMMIT');
     return { received: true, duplicate: !seen.rowCount };
   } catch (error) {
@@ -5231,37 +5221,6 @@ app.post('/api/v1/operations/notifications/process', { preHandler: app.requireAd
   } catch (err) {
     return reply.code(500).send({ error: 'notification_processing_failed', message: err.message });
   }
-});
-
-// ---------- Twilio SMS Status Webhook Callback ----------
-app.post('/api/v1/notifications/twilio-callback', async (request, reply) => {
-  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-
-  const signature = request.headers['x-twilio-signature'] || request.headers['X-Twilio-Signature'];
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const protocol = request.headers['x-forwarded-proto'] || 'https';
-  const host = request.headers['x-forwarded-host'] || request.headers.host || 'milvanta-backend.onrender.com';
-  const fullUrl = `${protocol}://${host}${request.raw.url}`;
-
-  // In production, strictly require valid Twilio signature
-  if (process.env.NODE_ENV === 'production') {
-    if (!authToken) {
-      return reply.code(503).send({ error: 'twilio_service_unavailable' });
-    }
-    const isValid = validateTwilioWebhookSignature({
-      authToken,
-      signature,
-      url: fullUrl,
-      params: request.body
-    });
-    if (!isValid) {
-      return reply.code(403).send({ error: 'invalid_twilio_signature' });
-    }
-  }
-
-  const payload = request.body || {};
-  const result = await handleTwilioStatusCallback(pool, payload);
-  return reply.send(result);
 });
 
 app.setErrorHandler((error, request, reply) => {

@@ -503,7 +503,7 @@
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="step1Phone">Mobile Number (for Morning Delivery SMS) <span style="color:#dc2626;">*</span></label>
+            <label class="form-label" for="step1Phone">Mobile Number (for WhatsApp delivery updates) <span style="color:#dc2626;">*</span></label>
             <input type="tel" class="form-input" id="step1Phone" name="phone" value="${escapeHtml(userPhone)}" placeholder="10-digit mobile number" maxlength="10" inputmode="numeric" required autocomplete="tel" />
           </div>
 
