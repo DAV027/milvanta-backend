@@ -591,18 +591,14 @@ describe('Milvanta Admin Dashboard, Reporting & Smoke Test Suite', () => {
       assert.equal(row2.children[9].firstChild.textContent, 'Reviewed by Admin Operations'); // Col 10: Reviewed By
     });
 
-    it('verifies frontend/admin.html prefers sessionStorage for admin tokens and clears localStorage', () => {
+    it('isolates the admin session from an independent customer session', () => {
+      assert.ok(htmlContent.includes("const ADMIN_TOKEN_KEY = 'milvanta-admin-token'"));
+      assert.ok(htmlContent.includes('sessionStorage.getItem(ADMIN_TOKEN_KEY)'));
+      assert.ok(htmlContent.includes('sessionStorage.setItem(ADMIN_TOKEN_KEY, currentToken)'));
+      assert.ok(htmlContent.includes('revokeAdminSessionBestEffort(tokenToRevoke)'));
       assert.ok(
-        htmlContent.includes("sessionStorage.getItem('milvanta-admin-token')"),
-        'Must check sessionStorage for milvanta-admin-token'
-      );
-      assert.ok(
-        htmlContent.includes("sessionStorage.setItem('milvanta-admin-token'"),
-        'Must store token in sessionStorage on login'
-      );
-      assert.ok(
-        htmlContent.includes("localStorage.removeItem('milvanta-auth-token')"),
-        'Must remove admin token from persistent localStorage'
+        !htmlContent.includes("localStorage.removeItem('milvanta-auth-token')"),
+        'Admin login/logout must not delete an independent storefront session'
       );
     });
 
