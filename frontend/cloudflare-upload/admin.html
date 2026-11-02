@@ -4231,6 +4231,9 @@
       // Run on DOM ready
       document.addEventListener('DOMContentLoaded', () => {
         setupListeners();
+        // Render Free may need a cold start. Wake the public health route as soon
+        // as the login page opens, without delaying controls or sending credentials.
+        void fetch(API_BASE + '/health', { cache: 'no-store' }).catch(() => {});
         checkAuthAndInit();
       });
     })();
