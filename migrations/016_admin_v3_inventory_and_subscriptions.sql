@@ -20,10 +20,13 @@ CREATE TABLE IF NOT EXISTS product_stock_ledger (
   new_reserved INTEGER NOT NULL DEFAULT 0,
   reason TEXT NOT NULL,
   admin_actor TEXT,
+  idempotency_key TEXT UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE product_stock_ledger ADD COLUMN IF NOT EXISTS idempotency_key TEXT UNIQUE;
 CREATE INDEX IF NOT EXISTS product_stock_ledger_prod_idx ON product_stock_ledger (product_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS product_stock_ledger_type_idx ON product_stock_ledger (adjustment_type, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS product_stock_ledger_idempotency_idx ON product_stock_ledger (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 -- 4. Subscription Delivery Orders Enhanced Confirmation & Operator Attribution
 ALTER TABLE subscription_delivery_orders ADD COLUMN IF NOT EXISTS proof_of_delivery TEXT;

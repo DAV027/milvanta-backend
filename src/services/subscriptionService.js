@@ -1436,7 +1436,7 @@ export function normalizeDeliveryAddress(candidate, fallbackRecipient = '', fall
       formatted_address: 'No address provided',
       formattedAddress: 'No address provided',
       is_complete: false,
-      missing_fields: ['recipient_name', 'phone', 'street', 'pincode'],
+      missing_fields: ['recipient_name', 'phone', 'street', 'city', 'pincode'],
       source: 'none'
     };
   }
@@ -1447,8 +1447,8 @@ export function normalizeDeliveryAddress(candidate, fallbackRecipient = '', fall
   const building = (candidate.building || candidate.apartment || candidate.society || '').trim();
   const street = (candidate.street || candidate.area || candidate.colony || candidate.address || candidate.line1 || '').trim();
   const landmark = (candidate.landmark || '').trim();
-  const city = (candidate.city || 'Hyderabad').trim();
-  const state = (candidate.state || 'Telangana').trim();
+  const city = (candidate.city || '').trim();
+  const state = (candidate.state || '').trim();
   const pincode = (candidate.pincode || candidate.postal_code || candidate.zip || '').toString().trim();
   const delivery_instructions = (candidate.delivery_instructions || candidate.instructions || candidate.driver_notes || candidate.notes || '').trim();
 
@@ -1456,7 +1456,9 @@ export function normalizeDeliveryAddress(candidate, fallbackRecipient = '', fall
   if (!recipient_name) missing_fields.push('recipient_name');
   if (!phone) missing_fields.push('phone');
   if (!street) missing_fields.push('street');
+  if (!city) missing_fields.push('city');
   if (!pincode) missing_fields.push('pincode');
+  else if (!/^\d{6}$/.test(pincode)) missing_fields.push('pincode');
 
   const parts = [];
   if (house) parts.push(house);
@@ -1504,11 +1506,12 @@ export async function resolveSubscriptionDeliveryAddress(pool, sub) {
 
   // 2. Explicit address_id linked to customer_addresses
   const explicitAddressId = sub.address_id || subNotes.addressId || subNotes.address_id;
-  if (explicitAddressId && pool) {
+  const customerId = sub.customer_id;
+  if (explicitAddressId && pool && customerId) {
     try {
       const { rows } = await pool.query(
-        'SELECT * FROM customer_addresses WHERE id = $1',
-        [explicitAddressId]
+        'SELECT * FROM customer_addresses WHERE id = $1 AND customer_id = $2',
+        [explicitAddressId, customerId]
       );
       if (rows[0]) {
         return normalizeDeliveryAddress(rows[0], sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'linked_customer_address');
@@ -1528,8 +1531,8 @@ export async function resolveSubscriptionDeliveryAddress(pool, sub) {
   if (sub.id && pool) {
     try {
       const { rows } = await pool.query(
-        'SELECT delivery_address FROM subscription_delivery_orders WHERE subscription_id = $1 AND delivery_address IS NOT NULL ORDER BY delivery_date DESC LIMIT 1',
-        [sub.id]
+        'SELECT delivery_address FROM subscription_delivery_orders WHERE subscription_id = $1 AND customer_id = $2 AND delivery_address IS NOT NULL ORDER BY delivery_date DESC LIMIT 1',
+        [sub.id, customerId]
       );
       if (rows[0]?.delivery_address && typeof rows[0].delivery_address === 'object') {
         return normalizeDeliveryAddress(rows[0].delivery_address, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'delivery_order');
@@ -1538,7 +1541,6 @@ export async function resolveSubscriptionDeliveryAddress(pool, sub) {
   }
 
   // 5. Default address for customer
-  const customerId = sub.customer_id;
   if (customerId && pool) {
     try {
       const { rows: defaultRows } = await pool.query(

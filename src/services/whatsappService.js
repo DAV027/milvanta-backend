@@ -100,6 +100,7 @@ async function hasConsent(pool, msg) {
 
 export async function queueWhatsAppNotification(pool, { customerId, phone, templateKey, params = {}, idempotencyKey, scheduledAt, deliveryOrderId }) {
   if (!pool) return { queued: false, error: 'database_not_available' };
+  if (process.env.WHATSAPP_ENABLED !== 'true') return { queued: false, skipped: true, reason: 'whatsapp_disabled' };
   const normalized = normalizeIndianPhoneNumber(phone);
   if (!normalized || !customerId || !idempotencyKey) return { queued: false, error: 'invalid_notification' };
   const template = resolveWhatsAppTemplate(templateKey, params);

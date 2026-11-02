@@ -27,8 +27,12 @@ import {
 } from '../src/services/subscriptionService.js';
 import {
   updateDeliveryStatus,
-  generateDailyDeliveries
+  generateDailyDeliveries,
+  previewDailyDeliveries
 } from '../src/services/deliveryEngine.js';
+import {
+  queueWhatsAppNotification
+} from '../src/services/whatsappService.js';
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'admin_security_v3_polish_secret_minimum_32_chars';
@@ -604,6 +608,399 @@ describe('Milvanta Admin V3 — Inventory, Delivery & Customer Management Suite'
 
       const onclickMatches = html.match(/\sonclick\s*=/gi) || [];
       assert.equal(onclickMatches.length, 0, 'No inline onclick attributes should exist in admin.html');
+    });
+  });
+
+  // =========================================================================
+  // 7. AUTHORITATIVE HARDENING & MERGE BLOCKERS REVIEW
+  // =========================================================================
+  describe('7. Authoritative Hardening & Edge Cases (Merge Blockers Review)', () => {
+    const futureDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + 3 * 86400000));
+
+    test('authoritative subscription delivery address takes precedence over customer default address in preview and generation', async () => {
+      // 1. Create Customer C
+      const charlieUser = await createTestCustomer('charlie.v3@milvanta.in', 'Charlie Chaplin', false);
+      const charlieId = charlieUser.customer.id;
+
+      // 2. Give Charlie a default address
+      await fixture.pool.query(`
+        INSERT INTO customer_addresses (customer_id, address_fingerprint, recipient_name, phone, house, building, street, landmark, city, state, pincode, is_default)
+        VALUES ($1, 'fp_charlie_def', 'Charlie Chaplin', '+919999900003', 'Flat 101', 'Default Residency', 'Main Rd', 'Near Clock', 'Hyderabad', 'Telangana', '500033', TRUE);
+      `, [charlieId]);
+
+      // 3. Create Subscription with EXPLICIT delivery_address
+      const subRes = await fixture.pool.query(`
+        INSERT INTO customer_subscriptions (
+          customer_id, product_name, quantity, time_slot, frequency,
+          cost_per_day_paise, total_amount_paise, status, delivery_address, notes
+        ) VALUES (
+          $1, 'Pure Cow Milk', '1L', 'morning', 'daily',
+          10500, 315000, 'active',
+          '{"recipient_name":"Charlie Chaplin","phone":"+919999900003","house":"Suite 99","building":"Explicit Tower","street":"Gachibowli Ring Rd","city":"Secunderabad","state":"Telangana","pincode":"500003"}'::jsonb,
+          $2::jsonb
+        ) RETURNING id;
+      `, [
+        charlieId,
+        JSON.stringify({
+          fulfillmentEntitled: true,
+          paymentId: 'pay_test_charlie_explicit',
+          lastPaymentId: 'pay_test_charlie_explicit',
+          startDate: futureDateStr,
+          effectivePaidThroughDate: futureDateStr,
+          paidThroughDate: '2027-12-31'
+        })
+      ]);
+      const subId = subRes.rows[0].id;
+
+      // 4. Test Preview
+      const preview = await previewDailyDeliveries(fixture.pool, futureDateStr);
+      const previewItem = preview.eligibleSubscriptions.find(s => String(s.subscriptionId) === String(subId));
+      if (!previewItem) {
+        throw new Error(`Charlie subId ${subId} not found in preview. Eligible: ${JSON.stringify(preview.eligibleSubscriptions)}, Excluded: ${JSON.stringify(preview.excludedSubscriptions)}`);
+      }
+      assert.ok(previewItem, 'Charlie subscription must be eligible in preview');
+      assert.equal(previewItem.deliveryAddress.street, 'Gachibowli Ring Rd');
+      assert.equal(previewItem.deliveryAddress.building, 'Explicit Tower');
+      assert.equal(previewItem.deliveryAddress.city, 'Secunderabad');
+      assert.equal(previewItem.deliveryAddress.pincode, '500003');
+      assert.equal(previewItem.deliveryAddress.source, 'explicit_subscription');
+
+      // 5. Test Actual Generation
+      const genRes = await generateDailyDeliveries(fixture.pool, futureDateStr, 'charlie_test');
+      assert.ok(genRes.generatedCount >= 1);
+
+      const orderRow = await fixture.pool.query(`
+        SELECT delivery_address FROM subscription_delivery_orders
+        WHERE subscription_id = $1 AND delivery_date = $2;
+      `, [subId, futureDateStr]);
+      assert.ok(orderRow.rows.length >= 1);
+      const generatedAddress = orderRow.rows[0].delivery_address;
+      assert.equal(generatedAddress.street, 'Gachibowli Ring Rd');
+      assert.equal(generatedAddress.building, 'Explicit Tower');
+      assert.equal(generatedAddress.city, 'Secunderabad');
+      assert.equal(generatedAddress.pincode, '500003');
+    });
+
+    test('cross-customer linked address: address belonging to another customer is rejected and not resolved', async () => {
+      // Create Customer D
+      const davidUser = await createTestCustomer('david.v3@milvanta.in', 'David Copperfield', false);
+      const davidId = davidUser.customer.id;
+
+      // Find an address belonging to regularCustomerId (NOT David)
+      const { rows: [radhaAddr] } = await fixture.pool.query(
+        `SELECT id FROM customer_addresses WHERE customer_id = $1 LIMIT 1;`,
+        [regularCustomerId]
+      );
+      assert.ok(radhaAddr);
+
+      // David tries to reference Radha's address
+      const subWithForeignAddress = {
+        id: '9905',
+        customer_id: davidId,
+        address_id: radhaAddr.id
+      };
+
+      const resolved = await resolveSubscriptionDeliveryAddress(fixture.pool, subWithForeignAddress);
+      // Because David has no addresses of his own, and foreign address is rejected, resolved source must be 'none'
+      assert.notEqual(resolved.source, 'linked_customer_address');
+      assert.equal(resolved.is_complete, false);
+      assert.equal(resolved.street, '');
+    });
+
+    test('fails closed on incomplete delivery address and does not invent Hyderabad/Telangana defaults', async () => {
+      const incompleteCandidate = {
+        house: 'House 55',
+        landmark: 'Opp Park'
+        // Missing street, city, pincode, recipient_name, phone
+      };
+      const norm = normalizeDeliveryAddress(incompleteCandidate, '', '', 'partial_candidate');
+      assert.equal(norm.is_complete, false);
+      assert.ok(norm.missing_fields.includes('street'));
+      assert.ok(norm.missing_fields.includes('city'));
+      assert.ok(norm.missing_fields.includes('pincode'));
+      assert.equal(norm.city, '', 'City must NOT default to Hyderabad');
+      assert.equal(norm.state, '', 'State must NOT default to Telangana');
+
+      // Verify that in delivery preview, an active subscription with incomplete address is excluded
+      const testDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + 4 * 86400000));
+      const incompleteUser = await createTestCustomer('incomplete.addr@milvanta.in', 'Incomplete User', false);
+      const subRes = await fixture.pool.query(`
+        INSERT INTO customer_subscriptions (
+          customer_id, product_name, quantity, time_slot, frequency,
+          cost_per_day_paise, total_amount_paise, status, delivery_address, notes
+        ) VALUES (
+          $1, 'Pure Cow Milk', '1L', 'morning', 'daily',
+          10500, 315000, 'active',
+          '{"house":"House 55"}'::jsonb,
+          $2::jsonb
+        ) RETURNING id;
+      `, [
+        incompleteUser.customer.id,
+        JSON.stringify({
+          fulfillmentEntitled: true,
+          paymentId: 'pay_test_incomplete_addr',
+          lastPaymentId: 'pay_test_incomplete_addr',
+          startDate: testDate,
+          effectivePaidThroughDate: testDate,
+          paidThroughDate: '2027-12-31'
+        })
+      ]);
+
+      const preview = await previewDailyDeliveries(fixture.pool, testDate);
+      const excluded = preview.excludedSubscriptions.find(s => String(s.subscriptionId) === String(subRes.rows[0].id));
+      assert.ok(excluded, 'Incomplete address subscription must be excluded from preview');
+      assert.equal(excluded.reason, 'missingOrInvalidAddress');
+      assert.ok(excluded.exclusionMessage.includes('incomplete'));
+    });
+
+    test('customer financial summary: captured revenue requires verified payments; refunds require gateway confirmation', async () => {
+      const finUser = await createTestCustomer('financial.summary@milvanta.in', 'Financial Customer', false);
+      const finId = finUser.customer.id;
+
+      // 1. Subscription with contract total but NO payment evidence
+      await fixture.pool.query(`
+        INSERT INTO customer_subscriptions (
+          customer_id, product_name, quantity, time_slot, frequency,
+          cost_per_day_paise, total_amount_paise, status, notes
+        ) VALUES (
+          $1, 'Pure Cow Milk', '1L', 'morning', 'daily',
+          10500, 450000, 'active',
+          '{"fulfillmentEntitled":false}'::jsonb
+        );
+      `, [finId]);
+
+      // 2. Paid Order (₹500 = 50000 paise)
+      await fixture.pool.query(`
+        INSERT INTO customer_orders (customer_id, order_number, idempotency_key, subtotal_paise, total_paise, order_status, payment_status, address, items)
+        VALUES ($1, 'ORD-FIN-01', 'idem_fin_01', 50000, 50000, 'confirmed', 'paid', '{}'::jsonb, '[]'::jsonb);
+      `, [finId]);
+
+      // 3. Unpaid Order (₹300 = 30000 paise)
+      await fixture.pool.query(`
+        INSERT INTO customer_orders (customer_id, order_number, idempotency_key, subtotal_paise, total_paise, order_status, payment_status, address, items)
+        VALUES ($1, 'ORD-FIN-02', 'idem_fin_02', 30000, 30000, 'pending', 'pending', '{}'::jsonb, '[]'::jsonb);
+      `, [finId]);
+
+      // 4. Refund: pending (₹100 = 10000 paise)
+      await fixture.pool.query(`
+        INSERT INTO refund_requests (customer_id, request_number, request_type, reason_category, payment_id, idempotency_key, requested_amount_paise, status)
+        VALUES ($1, 'REF-FIN-01', 'order', 'cancellation', 'pay_fin_ref_1', 'idem_ref_01', 10000, 'pending');
+      `, [finId]);
+
+      // 5. Refund: approved (₹150 = 15000 paise) - NOT yet gateway processed
+      await fixture.pool.query(`
+        INSERT INTO refund_requests (customer_id, request_number, request_type, reason_category, payment_id, idempotency_key, requested_amount_paise, approved_amount_paise, status)
+        VALUES ($1, 'REF-FIN-02', 'order', 'cancellation', 'pay_fin_ref_2', 'idem_ref_02', 15000, 15000, 'approved');
+      `, [finId]);
+
+      // 6. Refund: processed (₹200 = 20000 paise) - Gateway confirmed
+      await fixture.pool.query(`
+        INSERT INTO refund_requests (customer_id, request_number, request_type, reason_category, payment_id, idempotency_key, requested_amount_paise, approved_amount_paise, status)
+        VALUES ($1, 'REF-FIN-03', 'order', 'cancellation', 'pay_fin_ref_3', 'idem_ref_03', 20000, 20000, 'processed');
+      `, [finId]);
+
+      // Fetch customer details via Admin API
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/admin/customers/${finId}/details`,
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.body);
+      const sum = data.paymentSummary;
+
+      // Order spending: only paid orders
+      assert.equal(sum.orderSpendingPaise, 50000);
+      // Subscription spending: contract without payment is 0
+      assert.equal(sum.subscriptionSpendingPaise, 0);
+      assert.equal(sum.total_subscription_contract_paise, 450000);
+      // Verified captured paise: orders paid (50000) + subs captured (0) = 50000
+      assert.equal(sum.verifiedCapturedPaise, 50000);
+      // Completed refunds: ONLY processed refund (20000)
+      assert.equal(sum.completedRefundsPaise, 20000);
+      assert.equal(sum.total_refunded_paise, 20000);
+      // Approved refunds: approved + processed (15000 + 20000 = 35000)
+      assert.equal(sum.approvedRefundsPaise, 35000);
+      // Net paid: captured (50000) - completed refunds (20000) = 30000
+      assert.equal(sum.net_paid_paise, 30000);
+    });
+
+    test('stock adjustment direction validation & idempotency replay', async () => {
+      // 1. Create a test product
+      const prodRes = await fixture.pool.query(`
+        INSERT INTO products (name, category, price_paise, selling_unit, stock_quantity, low_stock_threshold)
+        VALUES ('Test Organic Butter (250g)', 'dairy', 25000, '250g jar', 50, 10)
+        RETURNING id;
+      `);
+      const prodId = prodRes.rows[0].id;
+
+      // 2. Reject negative restock
+      const negRestock = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}` },
+        payload: { adjustmentType: 'restock', quantityChange: -5, reason: 'Invalid restock' }
+      });
+      assert.equal(negRestock.statusCode, 400);
+      assert.equal(JSON.parse(negRestock.body).error, 'invalid_direction');
+
+      // 3. Reject negative return
+      const negReturn = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}` },
+        payload: { adjustmentType: 'return', quantityChange: -2, reason: 'Invalid return' }
+      });
+      assert.equal(negReturn.statusCode, 400);
+      assert.equal(JSON.parse(negReturn.body).error, 'invalid_direction');
+
+      // 4. Reject positive damage
+      const posDamage = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}` },
+        payload: { adjustmentType: 'damage', quantityChange: 5, reason: 'Invalid damage' }
+      });
+      assert.equal(posDamage.statusCode, 400);
+      assert.equal(JSON.parse(posDamage.body).error, 'invalid_direction');
+
+      // 5. Reject positive loss
+      const posLoss = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}` },
+        payload: { adjustmentType: 'loss', quantityChange: 3, reason: 'Invalid loss' }
+      });
+      assert.equal(posLoss.statusCode, 400);
+      assert.equal(JSON.parse(posLoss.body).error, 'invalid_direction');
+
+      // 6. Valid adjustment with Idempotency-Key
+      const testKey = 'idem_key_butter_' + Date.now();
+      const firstAdj = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}`, 'Idempotency-Key': testKey },
+        payload: { adjustmentType: 'restock', quantityChange: 20, reason: 'Morning dairy delivery batch' }
+      });
+      assert.equal(firstAdj.statusCode, 200);
+      const firstData = JSON.parse(firstAdj.body);
+      assert.equal(firstData.product.stock_quantity, 70); // 50 + 20
+      assert.equal(firstData.idempotent_replayed, undefined);
+
+      // 7. Duplicate request with identical Idempotency-Key
+      const replayedAdj = await app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/inventory/${prodId}/adjust`,
+        headers: { Authorization: `Bearer ${adminToken}`, 'Idempotency-Key': testKey },
+        payload: { adjustmentType: 'restock', quantityChange: 20, reason: 'Morning dairy delivery batch' }
+      });
+      assert.equal(replayedAdj.statusCode, 200);
+      const replayedData = JSON.parse(replayedAdj.body);
+      assert.equal(replayedData.idempotent_replayed, true);
+      assert.equal(replayedData.product.stock_quantity, 70, 'Stock must not be incremented a second time');
+
+      // 8. Concurrent requests with same idempotency key
+      const concurrentKey = 'idem_concurrent_' + Date.now();
+      const [res1, res2] = await Promise.all([
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/admin/inventory/${prodId}/adjust`,
+          headers: { Authorization: `Bearer ${adminToken}`, 'Idempotency-Key': concurrentKey },
+          payload: { adjustmentType: 'damage', quantityChange: -4, reason: 'Crushed cartons' }
+        }),
+        app.inject({
+          method: 'POST',
+          url: `/api/v1/admin/inventory/${prodId}/adjust`,
+          headers: { Authorization: `Bearer ${adminToken}`, 'Idempotency-Key': concurrentKey },
+          payload: { adjustmentType: 'damage', quantityChange: -4, reason: 'Crushed cartons' }
+        })
+      ]);
+      assert.equal(res1.statusCode, 200);
+      assert.equal(res2.statusCode, 200);
+      // Final stock should be 70 - 4 = 66, not 70 - 8 = 62
+      const finalProd = await fixture.pool.query('SELECT stock_quantity FROM products WHERE id = $1', [prodId]);
+      assert.equal(finalProd.rows[0].stock_quantity, 66);
+    });
+
+    test('strict milk-volume parsing in inventory and demand calculation', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/inventory',
+        headers: { Authorization: `Bearer ${adminToken}` }
+      });
+      assert.equal(res.statusCode, 200);
+      const data = JSON.parse(res.body);
+      assert.ok(data.milkRequirements);
+      assert.ok(data.milkRequirements.today);
+      assert.ok(data.milkRequirements.tomorrow);
+      assert.equal(typeof data.milkRequirements.today.cowLitres, 'number');
+      assert.equal(typeof data.milkRequirements.today.buffaloLitres, 'number');
+      assert.equal(typeof data.milkRequirements.today.totalLitres, 'number');
+      assert.equal(
+        data.milkRequirements.today.totalLitres,
+        Number((data.milkRequirements.today.cowLitres + data.milkRequirements.today.buffaloLitres).toFixed(2))
+      );
+    });
+
+    test('whatsapp freeze: no notifications queued or dispatched during status transitions', async () => {
+      const prevEnv = process.env.WHATSAPP_ENABLED;
+      process.env.WHATSAPP_ENABLED = 'false';
+
+      try {
+        const outboxBefore = await fixture.pool.query('SELECT COUNT(*) AS count FROM notification_outbox');
+        const countBefore = parseInt(outboxBefore.rows[0].count, 10);
+
+        // Direct queue attempt must be skipped
+        const queueRes = await queueWhatsAppNotification(fixture.pool, {
+          customerId: regularCustomerId,
+          phone: '+919999900002',
+          templateKey: 'NEXT_DAY_REMINDER',
+          params: { productName: 'Pure Cow Milk', quantity: '1L' },
+          idempotencyKey: 'whatsapp_hold_test_1'
+        });
+        assert.equal(queueRes.queued, false);
+        assert.equal(queueRes.reason, 'whatsapp_disabled');
+
+        // Check delivery status transition does not insert into notification_outbox
+        const testDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + 5 * 86400000));
+        const delRow = await fixture.pool.query(`
+          INSERT INTO subscription_delivery_orders (
+            delivery_order_number, subscription_id, customer_id, delivery_date,
+            product_name, quantity, status, delivery_address
+          ) VALUES (
+            'MV-DEL-HOLD-TEST', (SELECT id FROM customer_subscriptions LIMIT 1), $1, $2,
+            'Pure Cow Milk', '1L', 'scheduled',
+            '{"house":"1","street":"Rd","pincode":"500033"}'::jsonb
+          ) RETURNING id;
+        `, [regularCustomerId, testDate]);
+        const dId = delRow.rows[0].id;
+
+        // Transition through lifecycle
+        await app.inject({
+          method: 'POST',
+          url: `/api/v1/operations/deliveries/${dId}/status`,
+          headers: { Authorization: `Bearer ${adminToken}` },
+          payload: { status: 'packed' }
+        });
+        await app.inject({
+          method: 'POST',
+          url: `/api/v1/operations/deliveries/${dId}/status`,
+          headers: { Authorization: `Bearer ${adminToken}` },
+          payload: { status: 'out_for_delivery' }
+        });
+        await app.inject({
+          method: 'POST',
+          url: `/api/v1/operations/deliveries/${dId}/status`,
+          headers: { Authorization: `Bearer ${adminToken}` },
+          payload: { status: 'delivered', proofOfDelivery: 'Doorstep box' }
+        });
+
+        const outboxAfter = await fixture.pool.query('SELECT COUNT(*) AS count FROM notification_outbox');
+        const countAfter = parseInt(outboxAfter.rows[0].count, 10);
+        assert.equal(countAfter, countBefore, 'Zero rows should be added to notification_outbox while WhatsApp is on hold');
+      } finally {
+        process.env.WHATSAPP_ENABLED = prevEnv;
+      }
     });
   });
 });

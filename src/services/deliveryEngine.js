@@ -11,7 +11,8 @@ import {
   DAILY_DELIVERY_CUTOFF_HOUR_IST,
   acquireClient,
   derivePaidThroughDate,
-  getEffectivePaidThroughDate
+  getEffectivePaidThroughDate,
+  resolveSubscriptionDeliveryAddress
 } from './subscriptionService.js';
 import { queueNotification } from './notificationService.js';
 
@@ -126,8 +127,8 @@ export function extractValidDeliveryAddress(sub, defaultAddrRow, latestOrderAddr
     building: (candidate.building || '').trim(),
     street,
     landmark: (candidate.landmark || '').trim(),
-    city: (candidate.city || 'Hyderabad').trim(),
-    state: (candidate.state || 'Telangana').trim(),
+    city: (candidate.city || '').trim(),
+    state: (candidate.state || '').trim(),
     pincode
   };
 }
@@ -253,26 +254,15 @@ export async function evaluateSubscriptionDeliveryEligibility(client, sub, targe
     };
   }
 
-  // 7. Fetch customer default delivery address and validate (no invented dummy fallbacks)
-  const { rows: addrRows } = await client.query(
-    `SELECT recipient_name, phone, house, building, street, landmark, city, state, pincode
-     FROM customer_addresses
-     WHERE customer_id = $1 AND is_default = TRUE
-     LIMIT 1`,
-    [sub.customer_id]
-  );
-
-  const { rows: orderAddr } = await client.query(
-    `SELECT address FROM customer_orders WHERE customer_id = $1 AND address IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
-    [sub.customer_id]
-  );
-
-  const deliveryAddress = extractValidDeliveryAddress(sub, addrRows[0], orderAddr[0]);
-  if (!deliveryAddress) {
+  // 7. Authoritatively resolve subscription delivery address (subscription-specific address takes precedence over default)
+  const deliveryAddress = await resolveSubscriptionDeliveryAddress(client, sub);
+  if (!deliveryAddress || !deliveryAddress.is_complete) {
     return {
       eligible: false,
       reason: 'missingOrInvalidAddress',
-      exclusionMessage: 'Customer has no verified delivery address with street and pincode',
+      exclusionMessage: deliveryAddress?.missing_fields?.length
+        ? `Customer delivery address is incomplete (missing: ${deliveryAddress.missing_fields.join(', ')})`
+        : 'Customer has no verified delivery address with complete details',
       paidThroughEndDate,
       deliveryAddress: null
     };
@@ -310,6 +300,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
               cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.address_id, cs.delivery_address,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -406,6 +397,7 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
               cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.address_id, cs.delivery_address,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -472,6 +464,7 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
         quantityNum: Number(sub.quantity_num) || 1,
         paidThroughDate: paidThroughEndDate,
         address: deliveryAddress.street,
+        deliveryAddress,
         alreadyGenerated: isAlreadyGenerated,
         existingDeliveryOrderNumber: existing[0]?.delivery_order_number || null,
         existingStatus: existing[0]?.status || null
@@ -700,7 +693,7 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     }
 
     // Queue fulfillment notifications atomically with the transition
-    if (order.phone) {
+    if (order.phone && process.env.WHATSAPP_ENABLED === 'true') {
       if (status === 'out_for_delivery') {
         const idempotencyKey = `sms_ofd_${order.id}_${order.delivery_date}`;
         await queueNotification(client, {

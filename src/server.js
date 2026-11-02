@@ -4416,26 +4416,58 @@ app.get('/api/v1/admin/customers/:id/details', { preHandler: app.requireAdmin },
     }
   }
 
-  // 4. Financial & fulfillment summary
+    // 4. Financial & fulfillment summary
   const totalOrdersAmountPaise = orders
     .filter(o => o.payment_status === 'paid')
     .reduce((sum, o) => sum + (Number(o.total_paise) || 0), 0);
-  const totalSubAmountPaise = subscriptions
+
+  // Authoritative captured subscription revenue from verified payments (not raw contract value)
+  const totalSubContractPaise = subscriptions
     .reduce((sum, s) => sum + (Number(s.total_amount_paise) || 0), 0);
-  const totalRefundedPaise = refunds
-    .filter(r => r.status === 'processed' || r.status === 'approved')
+
+  const verifiedSubPaymentPaise = subscriptions.reduce((sum, s) => {
+    const notes = typeof s.notes === 'object' && s.notes !== null ? s.notes : {};
+    const hasCapturedPayment = Boolean(
+      (notes.lastPaymentId || notes.paymentId) &&
+      notes.authType !== 'mandate_only' &&
+      (notes.fulfillmentEntitled === true || notes.paymentStatus === 'paid' || s.status === 'active')
+    );
+    if (!hasCapturedPayment) return sum;
+    const authAmount = parseInt(notes.authAmountPaise, 10);
+    const amount = Number.isInteger(authAmount) && authAmount > 0
+      ? authAmount
+      : (parseInt(notes.amountPaise, 10) || Number(s.total_amount_paise) || 0);
+    return sum + amount;
+  }, 0);
+
+  // Count refunds as completed ONLY after gateway confirmation (status === 'processed')
+  const completedRefundsPaise = refunds
+    .filter(r => r.status === 'processed')
     .reduce((sum, r) => sum + (Number(r.approved_amount_paise || r.requested_amount_paise) || 0), 0);
+
+  const approvedRefundsPaise = refunds
+    .filter(r => r.status === 'approved' || r.status === 'processed')
+    .reduce((sum, r) => sum + (Number(r.approved_amount_paise || r.requested_amount_paise) || 0), 0);
+
+  const totalRefundedPaise = completedRefundsPaise;
+
   const deliveredCount = deliveryHistory.filter(d => d.status === 'delivered').length;
   const failedCount = deliveryHistory.filter(d => d.status === 'failed').length;
 
+  const totalVerifiedCapturedPaise = totalOrdersAmountPaise + verifiedSubPaymentPaise;
+  const netPaidPaise = Math.max(0, totalVerifiedCapturedPaise - totalRefundedPaise);
+
   const paymentSummary = {
-    verifiedCapturedPaise: totalOrdersAmountPaise + totalSubAmountPaise,
+    verifiedCapturedPaise: totalVerifiedCapturedPaise,
     orderSpendingPaise: totalOrdersAmountPaise,
-    approvedRefundsPaise: totalRefundedPaise,
+    subscriptionSpendingPaise: verifiedSubPaymentPaise,
+    approvedRefundsPaise: approvedRefundsPaise,
+    completedRefundsPaise: completedRefundsPaise,
     total_orders_paid_paise: totalOrdersAmountPaise,
-    total_subscription_contract_paise: totalSubAmountPaise,
+    total_subscription_paid_paise: verifiedSubPaymentPaise,
+    total_subscription_contract_paise: totalSubContractPaise,
     total_refunded_paise: totalRefundedPaise,
-    net_paid_paise: Math.max(0, (totalOrdersAmountPaise + totalSubAmountPaise) - totalRefundedPaise),
+    net_paid_paise: netPaidPaise,
     total_orders_count: orders.length,
     paid_orders_count: orders.filter(o => o.payment_status === 'paid').length,
     total_subscriptions_count: subscriptions.length,
@@ -5369,24 +5401,20 @@ app.get('/api/v1/admin/inventory', { preHandler: app.requireAdmin }, async (requ
 
     for (const r of demandRows) {
       const name = (r.product_name || '').toLowerCase();
-      const qtyStr = (r.quantity || '').toLowerCase();
-      let litres = 0;
-      if (qtyStr.includes('500ml')) litres = 0.5;
-      else if (qtyStr.includes('1.5l')) litres = 1.5;
-      else if (qtyStr.includes('2l')) litres = 2.0;
-      else if (qtyStr.includes('1l') || qtyStr.includes('litre')) litres = 1.0;
-      else {
-        const num = parseFloat(qtyStr);
-        litres = isNaN(num) ? 1.0 : num;
-      }
-
+      const litres = parseMilkVolumeInLitres(r.quantity, 1);
       if (name.includes('cow')) {
         cowLitres += litres;
       } else if (name.includes('buffalo')) {
         buffaloLitres += litres;
+      } else {
+        cowLitres += litres;
       }
     }
-    return { cowLitres, buffaloLitres, totalLitres: cowLitres + buffaloLitres };
+    return {
+      cowLitres: Number(cowLitres.toFixed(2)),
+      buffaloLitres: Number(buffaloLitres.toFixed(2)),
+      totalLitres: Number((cowLitres + buffaloLitres).toFixed(2))
+    };
   }
 
   const [todayDemand, tomorrowDemand] = await Promise.all([
@@ -5629,11 +5657,58 @@ app.post('/api/v1/admin/inventory/:productId/adjust', { preHandler: app.requireA
     });
   }
 
+  // Validate adjustment-type directions
+  if (['restock', 'return'].includes(adjustment_type) && qtyChange <= 0) {
+    return reply.code(400).send({
+      error: 'invalid_direction',
+      message: `${adjustment_type} adjustments must have a positive quantity change (increasing stock).`
+    });
+  }
+  if (['damage', 'loss'].includes(adjustment_type) && qtyChange >= 0) {
+    return reply.code(400).send({
+      error: 'invalid_direction',
+      message: `${adjustment_type} adjustments must have a negative quantity change (reducing stock).`
+    });
+  }
+
   if (!reason || typeof reason !== 'string' || !reason.trim()) {
     return reply.code(400).send({
       error: 'reason_required',
       message: 'An operational reason is required for any stock adjustment.'
     });
+  }
+
+  const idempotencyKey = (
+    request.headers['idempotency-key'] ||
+    body.idempotency_key ||
+    body.idempotencyKey ||
+    ''
+  ).trim();
+
+  // Fast pre-check for idempotency replay
+  if (idempotencyKey) {
+    const { rows: existingEntries } = await pool.query(
+      `SELECT psl.*, p.price_paise, p.stock_quantity, p.reserved_stock
+       FROM product_stock_ledger psl
+       JOIN products p ON p.id = psl.product_id
+       WHERE psl.idempotency_key = $1`,
+      [idempotencyKey]
+    );
+    if (existingEntries.length > 0) {
+      const entry = existingEntries[0];
+      return reply.send({
+        success: true,
+        product: {
+          id: entry.product_id,
+          price: (Number(entry.price_paise) / 100).toFixed(2),
+          stock_quantity: Number(entry.stock_quantity),
+          reserved_stock: Number(entry.reserved_stock),
+          available_stock: Number(entry.stock_quantity) - Number(entry.reserved_stock)
+        },
+        ledger_entry: entry,
+        idempotent_replayed: true
+      });
+    }
   }
 
   const adminActor = request.customer?.full_name || request.customer?.email || 'admin';
@@ -5642,7 +5717,7 @@ app.post('/api/v1/admin/inventory/:productId/adjust', { preHandler: app.requireA
     await client.query('BEGIN');
 
     const { rows: prodRows } = await client.query(
-      'SELECT id, name, stock_quantity, reserved_stock FROM products WHERE id = $1 FOR UPDATE',
+      'SELECT id, name, stock_quantity, reserved_stock, price_paise FROM products WHERE id = $1 FOR UPDATE',
       [productId]
     );
     if (!prodRows[0]) {
@@ -5677,34 +5752,84 @@ app.post('/api/v1/admin/inventory/:productId/adjust', { preHandler: app.requireA
     );
     const updatedProd = updatedRows[0];
 
-    const { rows: ledgerRows } = await client.query(
-      `INSERT INTO product_stock_ledger (
-         product_id, adjustment_type, quantity_change, previous_stock, new_stock,
-         previous_reserved, new_reserved, reason, admin_actor
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        productId,
-        adjustment_type,
-        qtyChange,
-        prevStock,
-        newStock,
-        prevReserved,
-        prevReserved,
-        reason.trim(),
-        adminActor
-      ]
-    );
+    let ledgerRow = null;
+    if (idempotencyKey) {
+      const { rows: ledgerRows } = await client.query(
+        `INSERT INTO product_stock_ledger (
+           product_id, adjustment_type, quantity_change, previous_stock, new_stock,
+           previous_reserved, new_reserved, reason, admin_actor, idempotency_key
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (idempotency_key) DO NOTHING
+         RETURNING *`,
+        [
+          productId,
+          adjustment_type,
+          qtyChange,
+          prevStock,
+          newStock,
+          prevReserved,
+          prevReserved,
+          reason.trim(),
+          adminActor,
+          idempotencyKey
+        ]
+      );
+
+      if (ledgerRows.length === 0) {
+        // Concurrent identical request already inserted this idempotency key
+        await client.query('ROLLBACK');
+        const { rows: existing } = await pool.query(
+          `SELECT psl.*, p.price_paise, p.stock_quantity, p.reserved_stock
+           FROM product_stock_ledger psl
+           JOIN products p ON p.id = psl.product_id
+           WHERE psl.idempotency_key = $1`,
+          [idempotencyKey]
+        );
+        return reply.send({
+          success: true,
+          product: {
+            id: existing[0].product_id,
+            price: (Number(existing[0].price_paise) / 100).toFixed(2),
+            stock_quantity: Number(existing[0].stock_quantity),
+            reserved_stock: Number(existing[0].reserved_stock),
+            available_stock: Number(existing[0].stock_quantity) - Number(existing[0].reserved_stock)
+          },
+          ledger_entry: existing[0],
+          idempotent_replayed: true
+        });
+      }
+      ledgerRow = ledgerRows[0];
+    } else {
+      const { rows: ledgerRows } = await client.query(
+        `INSERT INTO product_stock_ledger (
+           product_id, adjustment_type, quantity_change, previous_stock, new_stock,
+           previous_reserved, new_reserved, reason, admin_actor
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *`,
+        [
+          productId,
+          adjustment_type,
+          qtyChange,
+          prevStock,
+          newStock,
+          prevReserved,
+          prevReserved,
+          reason.trim(),
+          adminActor
+        ]
+      );
+      ledgerRow = ledgerRows[0];
+    }
 
     await client.query('COMMIT');
     return reply.send({
       success: true,
       product: {
         ...updatedProd,
-        price: Number(updatedProd.price_paise) / 100,
+        price: (Number(updatedProd.price_paise) / 100).toFixed(2),
         available_stock: Number(updatedProd.stock_quantity) - Number(updatedProd.reserved_stock)
       },
-      ledger_entry: ledgerRows[0]
+      ledger_entry: ledgerRow
     });
   } catch (err) {
     await client.query('ROLLBACK');
