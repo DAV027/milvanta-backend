@@ -2115,8 +2115,35 @@
   <script>
     (function() {
       const API_BASE = window.MILVANTA_API_URL || 'https://milvanta-backend.onrender.com';
-      // Prefer session-only storage for admin authentication tokens
-      let currentToken = sessionStorage.getItem('milvanta-admin-token') || sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || '';
+      // Keep admin sessions independent of the customer storefront.
+      const ADMIN_TOKEN_KEY = 'milvanta-admin-token';
+      let currentToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
+      // Upgrade older sessions that stored one admin bearer token in both slots.
+      // Never delete an independent customer token.
+      try {
+        const legacySharedToken = sessionStorage.getItem('milvanta-auth-token');
+        if (currentToken && legacySharedToken === currentToken) {
+          sessionStorage.removeItem('milvanta-auth-token');
+        }
+      } catch (_) {}
+      let adminLoginInFlight = false;
+      let adminLoginController = null;
+      const ADMIN_LOGIN_TIMEOUT_MS = 60000;
+
+      function revokeAdminSessionBestEffort(token) {
+        if (!token) return;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        void fetch(API_BASE + '/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token },
+          signal: controller.signal,
+          keepalive: true
+        }).catch(() => {
+          console.warn('Admin session revocation could not be confirmed; local credentials were cleared.');
+        }).finally(() => clearTimeout(timeout));
+      }
+
       let activeTab = 'overview';
       let isSidebarCollapsed = false;
 
@@ -2373,11 +2400,9 @@
             showAccessDenied(errData.customer?.email || 'Current Account');
             throw new Error('Access denied: administrator privileges required.');
           }
-          sessionStorage.removeItem('milvanta-admin-token');
-          sessionStorage.removeItem('milvanta-auth-token');
-          localStorage.removeItem('milvanta-auth-token');
+          sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
-          showLogin('Your session has expired. Please sign in again.');
+          showLogin('Your admin session has expired. Please sign in again.');
           throw new Error('Session expired. Please sign in again.');
         }
 
@@ -3564,43 +3589,73 @@
         function handleLogout() {
           closeAccountMenu();
           refreshManager.stop();
-          sessionStorage.removeItem('milvanta-admin-token');
-          sessionStorage.removeItem('milvanta-auth-token');
-          localStorage.removeItem('milvanta-auth-token');
+          // Show the signed-out screen immediately, without waiting for Render.
+          const tokenToRevoke = currentToken;
+          if (adminLoginController) adminLoginController.abort();
+          sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
+          const passwordInput = document.getElementById('adminPassword');
+          if (passwordInput) passwordInput.value = '';
           showLogin();
+          revokeAdminSessionBestEffort(tokenToRevoke);
         }
 
         document.getElementById('btnAdminLogout').addEventListener('click', handleLogout);
         document.getElementById('btnAccountSwitch').addEventListener('click', handleLogout);
         document.getElementById('btnSwitchAccount').addEventListener('click', handleLogout);
 
-        // Login form
+        // One in-flight sign-in per tab prevents repeated clicks from exhausting the login rate limit.
         document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
           e.preventDefault();
+          if (adminLoginInFlight) return;
           const email = document.getElementById('adminEmail').value.trim();
           const password = document.getElementById('adminPassword').value;
           const loginErrorMsg = document.getElementById('loginErrorMsg');
+          const submitButton = document.getElementById('btnSubmitLogin');
+          const previousText = submitButton.textContent;
           loginErrorMsg.style.display = 'none';
+          adminLoginInFlight = true;
+          submitButton.disabled = true;
+          submitButton.setAttribute('aria-busy', 'true');
+          submitButton.textContent = 'Signing in…';
+          const controller = new AbortController();
+          adminLoginController = controller;
+          const timeout = setTimeout(() => controller.abort(), ADMIN_LOGIN_TIMEOUT_MS);
+          const slowNotice = setTimeout(() => {
+            if (adminLoginInFlight) {
+              submitButton.textContent = 'Connecting to server…';
+            }
+          }, 5000);
 
           try {
             const res = await fetch(API_BASE + '/api/v1/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email, password })
+              body: JSON.stringify({ email, password }),
+              signal: controller.signal
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.message || data.error || 'Authentication failed');
-
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 429) {
+              const retryHeader = Number(res.headers.get('retry-after'));
+              const retrySeconds = Number.isFinite(retryHeader) && retryHeader > 0 ? Math.ceil(retryHeader) : 60;
+              throw new Error('Too many sign-in attempts. Please wait ' + retrySeconds + ' seconds and try once. Do not keep clicking.');
+            }
+            if (!res.ok) {
+              throw new Error(data.error === 'invalid_email_or_password'
+                ? 'Incorrect email or password.'
+                : (data.message || data.error || 'Unable to sign in.'));
+            }
+            if (!data.token || typeof data.token !== 'string') {
+              throw new Error('The server did not return a valid session. Please try again.');
+            }
             if (!data.customer?.is_admin && !data.user?.is_admin) {
               showAccessDenied(email);
               return;
             }
 
             currentToken = data.token;
-            sessionStorage.setItem('milvanta-admin-token', currentToken);
-            sessionStorage.setItem('milvanta-auth-token', currentToken);
-            localStorage.removeItem('milvanta-auth-token');
+            sessionStorage.setItem(ADMIN_TOKEN_KEY, currentToken);
+            document.getElementById('adminPassword').value = '';
 
             const adminUser = data.customer || data.user || {};
             document.getElementById('operatorLabel').textContent = adminUser.full_name || 'Admin';
@@ -3611,8 +3666,20 @@
             switchTab('overview');
             refreshManager.start();
           } catch (err) {
-            loginErrorMsg.textContent = err.message;
+            if (err.name === 'AbortError') {
+              loginErrorMsg.textContent = 'Connection timed out or sign-in was cancelled. Check connectivity and try again.';
+            } else {
+              loginErrorMsg.textContent = err.message || 'Unable to sign in.';
+            }
             loginErrorMsg.style.display = 'block';
+          } finally {
+            clearTimeout(timeout);
+            clearTimeout(slowNotice);
+            if (adminLoginController === controller) adminLoginController = null;
+            adminLoginInFlight = false;
+            submitButton.disabled = false;
+            submitButton.removeAttribute('aria-busy');
+            submitButton.textContent = previousText;
           }
         });
 
@@ -4126,11 +4193,9 @@
             headers: { 'Authorization': 'Bearer ' + currentToken }
           });
           if (meRes.status === 401) {
-            sessionStorage.removeItem('milvanta-admin-token');
-            sessionStorage.removeItem('milvanta-auth-token');
-            localStorage.removeItem('milvanta-auth-token');
+            sessionStorage.removeItem(ADMIN_TOKEN_KEY);
             currentToken = '';
-            showLogin('Your session has expired. Please sign in again.');
+            showLogin('Your admin session has expired. Please sign in again.');
             return;
           }
           if (!meRes.ok) {
@@ -4166,6 +4231,9 @@
       // Run on DOM ready
       document.addEventListener('DOMContentLoaded', () => {
         setupListeners();
+        // Render Free may need a cold start. Wake the public health route as soon
+        // as the login page opens, without delaying controls or sending credentials.
+        void fetch(API_BASE + '/health', { cache: 'no-store' }).catch(() => {});
         checkAuthAndInit();
       });
     })();
