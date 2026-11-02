@@ -1539,6 +1539,7 @@
           <div class="filter-group">
             <button type="button" class="btn-filter-preset active" id="btnDelDateToday">Today</button>
             <button type="button" class="btn-filter-preset" id="btnDelDateTomorrow">Tomorrow</button>
+            <button type="button" class="btn-filter-preset" id="btnDelFilterPendingAddress">Pending Address</button>
             <input type="date" class="filter-input" id="deliveryDatePicker" aria-label="Delivery target date" />
           </div>
 
@@ -1622,6 +1623,7 @@
                 <th>Daily Rate</th>
                 <th>Contract Total</th>
                 <th>Schedule</th>
+                <th style="min-width: 180px;">Delivery Address</th>
                 <th>Effective Paid-Through</th>
                 <th>Remaining</th>
                 <th>Status</th>
@@ -1791,6 +1793,79 @@
 
       <!-- SECTION 7: INVENTORY & DEMAND FORECAST -->
       <section id="demandSection" class="hidden">
+        <!-- Sub-Navigation: Store Products vs Milk Procurement Demand -->
+        <div class="sub-nav-bar" style="display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">
+          <button type="button" class="btn-sub-tab active" id="btnSubTabProducts" style="background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">📦 Store Products &amp; Stock</button>
+          <button type="button" class="btn-sub-tab" id="btnSubTabMilkDemand" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">🥛 Daily Milk Procurement Demand</button>
+        </div>
+
+        <!-- Sub-View 1: Store Products & Inventory Management -->
+        <div id="subViewStoreProducts">
+          <div class="kpi-grid" style="margin-bottom: 16px;">
+            <div class="kpi-card">
+              <div class="kpi-label">Total Store Products</div>
+              <div class="kpi-value" id="kpiTotalProducts">0</div>
+              <div class="kpi-sub">Active catalog items</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Low Stock Alerts</div>
+              <div class="kpi-value" id="kpiLowStockCount" style="color: var(--admin-amber);">0</div>
+              <div class="kpi-sub">At or below alert threshold</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Out of Stock</div>
+              <div class="kpi-value" id="kpiOutOfStockCount" style="color: var(--admin-red);">0</div>
+              <div class="kpi-sub">Zero available units</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Total Reserved Units</div>
+              <div class="kpi-value" id="kpiTotalReserved" style="color: var(--admin-blue);">0</div>
+              <div class="kpi-sub">Locked in active customer orders</div>
+            </div>
+          </div>
+
+          <div class="filter-bar">
+            <div class="filter-group" style="flex: 1; min-width: 200px;">
+              <input type="text" class="filter-input" id="productSearchInput" style="width: 100%;" placeholder="Search products by name, slug, category..." aria-label="Search store products" />
+            </div>
+            <div class="filter-group">
+              <select class="filter-select" id="productCategoryFilter" aria-label="Filter products by category">
+                <option value="all">All Categories</option>
+                <option value="dairy">Dairy &amp; Fresh</option>
+                <option value="ghee">Desi Ghee</option>
+                <option value="pickles">Artisan Pickles</option>
+                <option value="sweets">Traditional Sweets</option>
+                <option value="bakery">Bakery &amp; Snacks</option>
+              </select>
+            </div>
+            <button type="button" class="btn-reset" id="btnResetProductFilters">Reset</button>
+            <button type="button" class="btn-primary-ops" id="btnOpenAddProductModal">+ Add New Product</button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Product</th>
+                  <th>Category</th>
+                  <th>Price</th>
+                  <th>Selling Unit</th>
+                  <th>Physical Stock</th>
+                  <th>Reserved</th>
+                  <th>Available to Sell</th>
+                  <th>Low Stock Threshold</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="productsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Sub-View 2: Daily Milk Procurement Demand -->
+        <div id="subViewMilkDemand" class="hidden">
         <div class="filter-bar">
           <div class="filter-group">
             <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Forecast Target Date:</span>
@@ -1840,6 +1915,7 @@
             </thead>
             <tbody id="demandTableBody"></tbody>
           </table>
+        </div>
         </div>
       </section>
 
@@ -2076,6 +2152,241 @@
     </div>
   </div>
 
+<!-- Full Delivery Address Inspection Modal -->
+  <div class="modal-backdrop hidden" id="modalFullAddress">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3 id="modalFullAddressTitle">Complete Delivery Address</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseFullAddressModal">&times;</button>
+      </div>
+      <div id="modalFullAddressContent" style="padding: 16px 0;"></div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 14px;">
+        <button type="button" class="btn-reset" id="btnDismissFullAddressModal">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delivery Confirmation Modal -->
+  <div class="modal-backdrop hidden" id="modalDeliveryConfirm">
+    <div class="modal-content" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>Confirm Doorstep Delivery</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseConfirmModal">&times;</button>
+      </div>
+      <div style="padding: 14px 0;">
+        <p style="margin: 0 0 12px; color: #334155; font-size: 0.9rem;">
+          Are you sure you want to mark delivery order <strong id="confirmDeliveryOrderNum">#—</strong> as <strong>Delivered</strong>?
+        </p>
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 0.82rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Proof of Delivery / Delivery Note (Optional)</label>
+          <input type="text" id="inputDeliveryProof" class="form-input" style="width: 100%; box-sizing: border-box;" placeholder="e.g. Handed to customer / Placed in doorstep milk bag" />
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button type="button" class="btn-reset" id="btnCancelConfirmModal">Cancel</button>
+        <button type="button" class="btn-primary" id="btnSubmitConfirmDelivered" style="background: #15803d; border-color: #15803d; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: 700; cursor: pointer;">Confirm Delivered</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cancel Delivery Drop Modal -->
+  <div class="modal-backdrop hidden" id="modalDeliveryCancel">
+    <div class="modal-content" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3>Cancel Scheduled Delivery</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseCancelDeliveryModal">&times;</button>
+      </div>
+      <div style="padding: 14px 0;">
+        <p style="margin: 0 0 12px; color: #334155; font-size: 0.9rem;">
+          Cancel scheduled drop <strong id="cancelDeliveryOrderNum">#—</strong>. This will void the delivery drop for today.
+        </p>
+        <div style="margin-bottom: 12px;">
+          <label style="display: block; font-size: 0.82rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Cancellation Reason (Required)</label>
+          <select id="selectCancelDeliveryReason" class="filter-select" style="width: 100%; box-sizing: border-box;">
+            <option value="Customer request">Customer requested cancellation</option>
+            <option value="Severe weather / Route obstruction">Severe weather / Route obstruction</option>
+            <option value="Stock shortage at hub">Stock shortage at cold-chain hub</option>
+            <option value="Address unreachable / Missing address">Address unreachable / Missing physical address</option>
+            <option value="Operational cancellation">Other operational reason</option>
+          </select>
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button type="button" class="btn-reset" id="btnDismissCancelDeliveryModal">Dismiss</button>
+        <button type="button" class="btn-reset" id="btnSubmitCancelDelivery" style="background: #dc2626; color: #fff; border-color: #dc2626; padding: 8px 16px; border-radius: 6px; font-weight: 700; cursor: pointer;">Cancel Delivery</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Product Modal -->
+  <div class="modal-backdrop hidden" id="modalAddProduct">
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Add New Store Product</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseAddProductModal">&times;</button>
+      </div>
+      <div style="padding: 14px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div style="grid-column: 1 / -1;">
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Product Name *</label>
+          <input type="text" id="addProdName" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="e.g. Pure Desi Cow Ghee (500ml)" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Slug *</label>
+          <input type="text" id="addProdSlug" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="e.g. pure-cow-ghee-500ml" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Category *</label>
+          <select id="addProdCategory" class="filter-select" style="width:100%; box-sizing:border-box;">
+            <option value="dairy">Dairy &amp; Fresh</option>
+            <option value="ghee">Desi Ghee</option>
+            <option value="pickles">Artisan Pickles</option>
+            <option value="sweets">Traditional Sweets</option>
+            <option value="bakery">Bakery &amp; Snacks</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Price (INR) *</label>
+          <input type="number" step="0.5" id="addProdPrice" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="e.g. 450" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Selling Unit *</label>
+          <input type="text" id="addProdUnit" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="e.g. 500 ml jar, 250 g pack" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Initial Physical Stock *</label>
+          <input type="number" id="addProdStock" class="form-input" style="width:100%; box-sizing:border-box;" value="0" min="0" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Low Stock Alert Threshold *</label>
+          <input type="number" id="addProdThreshold" class="form-input" style="width:100%; box-sizing:border-box;" value="5" min="1" />
+        </div>
+      </div>
+      <div id="addProductError" style="color: #dc2626; font-size: 0.85rem; margin-bottom: 8px;"></div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button type="button" class="btn-reset" id="btnCancelAddProductModal">Cancel</button>
+        <button type="button" class="btn-primary" id="btnSubmitAddProduct" style="background:#0a3d66; color:#fff; padding:8px 16px; border-radius:6px; font-weight:700; border:none; cursor:pointer;">Create Product</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Product Modal -->
+  <div class="modal-backdrop hidden" id="modalEditProduct">
+    <div class="modal-content" style="max-width: 540px;">
+      <div class="modal-header">
+        <h3>Edit Store Product</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseEditProductModal">&times;</button>
+      </div>
+      <div style="padding: 14px 0; display: flex; flex-direction: column; gap: 12px;">
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Product Name</label>
+          <input type="text" id="editProdName" class="form-input" disabled style="width:100%; box-sizing:border-box; background: #f1f5f9;" />
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Price (INR) *</label>
+            <input type="number" step="0.5" id="editProdPrice" class="form-input" style="width:100%; box-sizing:border-box;" />
+          </div>
+          <div>
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Selling Unit *</label>
+            <input type="text" id="editProdUnit" class="form-input" style="width:100%; box-sizing:border-box;" />
+          </div>
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Low Stock Alert Threshold</label>
+          <input type="number" id="editProdThreshold" class="form-input" style="width:100%; box-sizing:border-box;" min="1" />
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+          <input type="checkbox" id="editProdActive" style="width: 18px; height: 18px;" />
+          <label for="editProdActive" style="font-weight: 600; color: #334155; font-size: 0.9rem;">Product is Active for Sale</label>
+        </div>
+      </div>
+      <div id="editProductError" style="color: #dc2626; font-size: 0.85rem; margin-bottom: 8px;"></div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button type="button" class="btn-reset" id="btnCancelEditProductModal">Cancel</button>
+        <button type="button" class="btn-primary" id="btnSubmitEditProduct" style="background:#0a3d66; color:#fff; padding:8px 16px; border-radius:6px; font-weight:700; border:none; cursor:pointer;">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Adjust Inventory Stock Modal -->
+  <div class="modal-backdrop hidden" id="modalAdjustStock">
+    <div class="modal-content" style="max-width: 540px;">
+      <div class="modal-header">
+        <h3>Adjust Inventory Stock</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseAdjustModal">&times;</button>
+      </div>
+      <div style="padding: 14px 0; display: flex; flex-direction: column; gap: 12px;">
+        <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px;">
+          <div style="font-weight: 700; color: #0a3d66; font-size: 1rem;" id="adjustProdTitle">—</div>
+          <div style="display: flex; gap: 16px; margin-top: 6px; font-size: 0.85rem; flex-wrap: wrap;">
+            <span>Current Physical: <strong id="adjustCurrentStock">0</strong></span>
+            <span>Reserved in Orders: <strong id="adjustReservedStock" style="color: #d97706;">0</strong></span>
+            <span>Available to Sell: <strong id="adjustAvailableStock" style="color: #15803d;">0</strong></span>
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Adjustment Reason Type *</label>
+            <select id="adjustTypeSelect" class="filter-select" style="width:100%; box-sizing:border-box;">
+              <option value="restock">📦 Supplier Restock (+)</option>
+              <option value="correction">⚙️ Inventory Count Correction (+/-)</option>
+              <option value="damage">💔 Damaged / Expired Goods (-)</option>
+              <option value="loss">🔍 Lost / Missing Stock (-)</option>
+              <option value="return">↩️ Customer Return (+)</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Quantity Change (+ or -) *</label>
+            <input type="number" id="adjustQuantityChange" class="form-input" style="width:100%; box-sizing:border-box;" placeholder="e.g. 20 or -5" />
+          </div>
+        </div>
+        <div style="background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 8px; padding: 10px 14px; font-size: 0.85rem; color: #0369a1;">
+          Resulting Stock: <strong id="adjustResultStock">0</strong> · Resulting Available: <strong id="adjustResultAvailable">0</strong>
+        </div>
+        <div>
+          <label style="display:block; font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:4px;">Detailed Reason Note (Required) *</label>
+          <textarea id="adjustReasonNote" class="form-input" rows="2" style="width:100%; box-sizing:border-box;" placeholder="e.g. PO-8841 Received 50 units from dairy facility"></textarea>
+        </div>
+      </div>
+      <div id="adjustStockError" style="color: #dc2626; font-size: 0.85rem; margin-bottom: 8px;"></div>
+      <div style="display: flex; gap: 10px; justify-content: flex-end;">
+        <button type="button" class="btn-reset" id="btnCancelAdjustModal">Cancel</button>
+        <button type="button" class="btn-primary" id="btnSubmitAdjustStock" style="background:#0a3d66; color:#fff; padding:8px 16px; border-radius:6px; font-weight:700; border:none; cursor:pointer;">Apply Stock Adjustment</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stock Movement History Ledger Modal -->
+  <div class="modal-backdrop hidden" id="modalStockHistory">
+    <div class="modal-content" style="max-width: 780px;">
+      <div class="modal-header">
+        <h3 id="stockHistoryTitle">Stock Movement Audit Ledger</h3>
+        <button type="button" class="btn-close-modal" id="btnCloseStockHistoryModal">&times;</button>
+      </div>
+      <div style="padding: 12px 0;">
+        <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp (IST)</th>
+                <th>Type</th>
+                <th>Change</th>
+                <th>Physical (Prev → New)</th>
+                <th>Reserved</th>
+                <th>Actor</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="stockHistoryTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+        <button type="button" class="btn-reset" id="btnDismissStockHistoryModal">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Refund Rejection Modal -->
   <div class="modal-backdrop hidden" id="adminRejectModal">
     <div class="modal-content">
@@ -2142,6 +2453,68 @@
         }).catch(() => {
           console.warn('Admin session revocation could not be confirmed; local credentials were cleared.');
         }).finally(() => clearTimeout(timeout));
+      }
+
+// Admin V3 State Variables
+      let pendingConfirmOrderId = null;
+      let pendingCancelOrderId = null;
+      let selectedAdjustProduct = null;
+      let selectedEditProduct = null;
+      let demandActiveSubTab = 'products';
+      let deliveryPendingAddressFilterActive = false;
+      const productState = {
+        search: '',
+        category: 'all',
+        products: [],
+        total: 0
+      };
+
+      function openFullAddressModal(addr, title) {
+        if (!addr || typeof addr !== 'object') addr = {};
+        document.getElementById('modalFullAddressTitle').textContent = title || 'Complete Delivery Address';
+        const content = document.getElementById('modalFullAddressContent');
+        empty(content);
+
+        const card = el('div', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px' } }, [
+          el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' } }, [
+            el('strong', { style: { color: '#0a3d66', fontSize: '1rem' }, textContent: addr.recipient_name || 'Customer' }),
+            el('span', { className: 'status-badge ' + (addr.is_complete !== false && addr.pincode ? 'badge-active' : 'badge-failed'), textContent: addr.is_complete !== false && addr.pincode ? '✅ Address Complete' : '⚠️ Incomplete / Missing PIN' })
+          ]),
+          el('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.85rem', color: '#334155' } }, [
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Contact Phone: ']), el('strong', { textContent: addr.phone || addr.mobile || '—' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Address Type: ']), el('span', { textContent: addr.type || 'home' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Flat / House No: ']), el('strong', { textContent: addr.house || '—' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Building / Society: ']), el('span', { textContent: addr.building || '—' })]),
+            el('div', { style: { gridColumn: '1 / -1' } }, [el('span', { style: { color: '#64748b' } }, ['Street / Road: ']), el('strong', { textContent: addr.street || '—' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Landmark: ']), el('span', { textContent: addr.landmark || '—' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['City & PIN: ']), el('strong', { textContent: (addr.city || 'Hyderabad') + ' - ' + (addr.pincode || '—') })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['State: ']), el('span', { textContent: addr.state || 'Telangana' })]),
+            el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Source: ']), el('span', { textContent: addr.source || 'subscription_address' })])
+          ]),
+          addr.delivery_instructions ? el('div', { style: { marginTop: '10px', padding: '8px 12px', background: '#e0f2fe', borderRadius: '6px', fontSize: '0.82rem', color: '#0369a1' } }, [
+            el('strong', { textContent: 'Delivery Instructions: ' }),
+            el('span', { textContent: addr.delivery_instructions })
+          ]) : null,
+          addr.formattedAddress ? el('div', { style: { marginTop: '10px', fontSize: '0.8rem', color: '#64748b', fontStyle: 'italic' } }, [
+            el('span', { textContent: 'Formatted: ' + addr.formattedAddress })
+          ]) : null
+        ].filter(Boolean));
+
+        content.appendChild(card);
+        document.getElementById('modalFullAddress').classList.remove('hidden');
+      }
+
+      function openConfirmDeliveryModal(orderId, orderNum) {
+        pendingConfirmOrderId = orderId;
+        document.getElementById('confirmDeliveryOrderNum').textContent = String(orderNum);
+        document.getElementById('inputDeliveryProof').value = '';
+        document.getElementById('modalDeliveryConfirm').classList.remove('hidden');
+      }
+
+      function openCancelDeliveryModal(orderId, orderNum) {
+        pendingCancelOrderId = orderId;
+        document.getElementById('cancelDeliveryOrderNum').textContent = String(orderNum);
+        document.getElementById('modalDeliveryCancel').classList.remove('hidden');
       }
 
       let activeTab = 'overview';
@@ -2506,7 +2879,10 @@
         else if (activeTab === 'orders') await loadOrders(signal);
         else if (activeTab === 'refunds') await loadRefunds(signal);
         else if (activeTab === 'customers') await loadCustomers(signal);
-        else if (activeTab === 'demand') await loadDemand(signal);
+        else if (activeTab === 'demand') {
+          if (demandActiveSubTab === 'products') await loadProducts(signal);
+          else await loadDemand(signal);
+        }
         else if (activeTab === 'reports') await loadReports(signal);
       }
 
@@ -2611,7 +2987,7 @@
           empty(tbody);
 
           // Update delivery summary metrics
-          const deliveries = data.deliveries || [];
+          let deliveries = data.deliveries || [];
           let scheduledCount = 0;
           let packedCount = 0;
           let outCount = 0;
@@ -2619,7 +2995,7 @@
           let failedCount = 0;
           let unaddressedCount = 0;
 
-          deliveries.forEach(d => {
+          (data.deliveries || []).forEach(d => {
             if (d.status === 'scheduled') scheduledCount++;
             else if (d.status === 'packed') packedCount++;
             else if (d.status === 'out_for_delivery') outCount++;
@@ -2629,6 +3005,13 @@
             const addr = d.delivery_address || {};
             if (!addr.street || !addr.pincode) unaddressedCount++;
           });
+
+          if (deliveryPendingAddressFilterActive) {
+            deliveries = deliveries.filter(d => {
+              const addr = d.delivery_address || {};
+              return !addr.street || !addr.pincode;
+            });
+          }
 
           document.getElementById('delMetricScheduled').textContent = String(data.total || 0);
           document.getElementById('delMetricPacked').textContent = String(packedCount);
@@ -2663,7 +3046,7 @@
                 el('div', { className: 'empty-state' }, [
                   el('div', { className: 'empty-icon' }, ['🚚']),
                   el('div', { className: 'empty-title' }, ['No deliveries found']),
-                  el('div', { className: 'empty-desc' }, ['No deliveries scheduled for ' + deliveryState.date + (deliveryState.status !== 'all' ? ' with status ' + deliveryState.status : '') + '. Click Preview & Generate to schedule tomorrow.'])
+                  el('div', { className: 'empty-desc' }, ['No deliveries scheduled for ' + deliveryState.date + (deliveryPendingAddressFilterActive ? ' with pending address verification' : (deliveryState.status !== 'all' ? ' with status ' + deliveryState.status : '')) + '. Click Preview & Generate to schedule tomorrow.'])
                 ])
               ])
             ]));
@@ -2674,6 +3057,7 @@
           deliveries.forEach(del => {
             const addr = del.delivery_address || {};
             const addrStr = [addr.house, addr.building, addr.street, addr.city, addr.pincode].filter(Boolean).join(', ') || 'No verified address on record';
+            const isAddrComplete = Boolean(addr.street && addr.pincode);
 
             const actionCell = el('td', { 'data-col': 'Actions' });
 
@@ -2681,24 +3065,42 @@
               const btnPack = el('button', { className: 'btn-row-action btn-accent', textContent: 'Pack' });
               btnPack.addEventListener('click', () => updateDeliveryStatus(del.id, 'packed'));
               actionCell.appendChild(btnPack);
+
+              const btnCancel = el('button', { className: 'btn-row-action btn-danger', textContent: 'Cancel Delivery' });
+              btnCancel.addEventListener('click', () => openCancelDeliveryModal(del.id, del.delivery_order_number || ('#' + del.id)));
+              actionCell.appendChild(btnCancel);
             } else if (del.status === 'packed') {
               const btnDispatch = el('button', { className: 'btn-row-action btn-accent', textContent: 'Dispatch' });
               btnDispatch.addEventListener('click', () => updateDeliveryStatus(del.id, 'out_for_delivery'));
               actionCell.appendChild(btnDispatch);
+
+              const btnCancel = el('button', { className: 'btn-row-action btn-danger', textContent: 'Cancel Delivery' });
+              btnCancel.addEventListener('click', () => openCancelDeliveryModal(del.id, del.delivery_order_number || ('#' + del.id)));
+              actionCell.appendChild(btnCancel);
             } else if (del.status === 'out_for_delivery') {
               const btnDelivered = el('button', { className: 'btn-row-action', style: { background: '#dcfce7', color: '#15803d', borderColor: '#bbf7d0' }, textContent: 'Mark Delivered' });
-              btnDelivered.addEventListener('click', () => updateDeliveryStatus(del.id, 'delivered'));
+              btnDelivered.addEventListener('click', () => openConfirmDeliveryModal(del.id, del.delivery_order_number || ('#' + del.id)));
               actionCell.appendChild(btnDelivered);
-            }
 
-            if (del.status !== 'delivered' && del.status !== 'cancelled' && del.status !== 'failed') {
               const btnFail = el('button', { className: 'btn-row-action btn-danger', textContent: 'Report Failure' });
               btnFail.addEventListener('click', () => openFailureModal(del.id));
               actionCell.appendChild(btnFail);
+            } else {
+              actionCell.appendChild(el('span', { style: { fontSize: '0.8rem', color: '#94a3b8' }, textContent: '—' }));
             }
 
             const tr = el('tr', {}, [
-              el('td', { 'data-col': 'Order #' }, [el('strong', { textContent: del.delivery_order_number || ('#' + del.id) })]),
+              el('td', { 'data-col': 'Order #' }, [
+                el('strong', { textContent: del.delivery_order_number || ('#' + del.id) }),
+                del.subscription_id ? el('div', { style: { fontSize: '0.75rem', marginTop: '3px' } }, [
+                  el('a', {
+                    href: '#',
+                    style: { color: '#0284c7', textDecoration: 'underline' },
+                    textContent: 'Sub #' + del.subscription_id,
+                    addEventListener: ['click', (e) => { e.preventDefault(); openSubDetails(del.subscription_id); }]
+                  })
+                ]) : null
+              ].filter(Boolean)),
               el('td', { 'data-col': 'Customer' }, [
                 el('div', { style: { fontWeight: '600' }, textContent: del.customer_name || 'Customer #' + del.customer_id }),
                 el('div', { style: { fontSize: '0.75rem', color: '#64748b' }, textContent: del.customer_phone || '' })
@@ -2707,8 +3109,16 @@
               el('td', { 'data-col': 'Quantity', textContent: del.quantity || (del.quantity_num + ' unit(s)') }),
               el('td', { 'data-col': 'Delivery Address', style: { maxWidth: '240px' } }, [
                 el('div', { style: { fontWeight: '500' }, textContent: addr.recipient_name || del.customer_name }),
-                el('div', { style: { fontSize: '0.75rem', color: addr.street ? '#64748b' : '#dc2626' }, textContent: addrStr })
-              ]),
+                el('div', { style: { fontSize: '0.75rem', color: isAddrComplete ? '#64748b' : '#dc2626' }, textContent: addrStr }),
+                !isAddrComplete ? el('span', { className: 'status-badge badge-failed', style: { fontSize: '0.68rem', padding: '1px 5px', marginTop: '2px', display: 'inline-block' }, textContent: '⚠️ Incomplete' }) : null,
+                el('button', {
+                  type: 'button',
+                  className: 'btn-row-action',
+                  style: { marginTop: '4px', fontSize: '0.72rem', padding: '2px 6px', display: 'block' },
+                  textContent: '🔍 View Full Address',
+                  addEventListener: ['click', () => openFullAddressModal(addr, 'Delivery Order #' + del.id)]
+                })
+              ].filter(Boolean)),
               el('td', { 'data-col': 'Slot', style: { fontSize: '0.75rem', color: '#64748b' }, textContent: del.delivery_slot || 'Morning (6:00 AM - 7:00 AM)' }),
               el('td', { 'data-col': 'Status' }, [
                 el('span', { className: 'status-badge badge-' + del.status, textContent: del.status })
@@ -2737,11 +3147,11 @@
         document.getElementById('btnDeliveryNextPage').disabled = end >= deliveryState.total;
       }
 
-      async function updateDeliveryStatus(orderId, status) {
+      async function updateDeliveryStatus(orderId, status, extra = {}) {
         try {
           await apiRequest('/api/v1/operations/deliveries/' + orderId + '/status', {
             method: 'POST',
-            body: { status, actor: 'admin_ops' }
+            body: { status, actor: 'admin_ops', ...extra }
           });
           await loadDeliveries();
           await loadOverview();
@@ -2760,7 +3170,7 @@
       async function loadSubscriptions(signal) {
         const tbody = document.getElementById('subscriptionsTableBody');
         empty(tbody);
-        tbody.appendChild(el('tr', {}, [el('td', { colSpan: '10', style: { textAlign: 'center', padding: '24px' }, textContent: 'Loading milk subscriptions...' })]));
+        tbody.appendChild(el('tr', {}, [el('td', { colSpan: '11', style: { textAlign: 'center', padding: '24px' }, textContent: 'Loading milk subscriptions...' })]));
 
         const params = new URLSearchParams({
           limit: subState.limit,
@@ -2776,7 +3186,7 @@
 
           if (!data.subscriptions || data.subscriptions.length === 0) {
             tbody.appendChild(el('tr', {}, [
-              el('td', { colSpan: '10', style: { padding: '0' } }, [
+              el('td', { colSpan: '11', style: { padding: '0' } }, [
                 el('div', { className: 'empty-state' }, [
                   el('div', { className: 'empty-icon' }, ['🥛']),
                   el('div', { className: 'empty-title' }, ['No subscriptions found']),
@@ -2802,6 +3212,22 @@
               el('td', { 'data-col': 'Daily Rate', textContent: formatINR(sub.cost_per_day_paise) }),
               el('td', { 'data-col': 'Contract Total', textContent: formatINR(sub.total_amount_paise) }),
               el('td', { 'data-col': 'Schedule', style: { fontSize: '0.75rem', color: '#475569' }, textContent: sub.frequency || 'Daily' }),
+              (() => {
+                const addr = sub.delivery_address || {};
+                const addrStr = addr.formattedAddress || [addr.house, addr.building, addr.street, addr.city, addr.pincode].filter(Boolean).join(', ') || 'No physical address';
+                const isAddrComplete = Boolean(addr.is_complete !== false && addr.pincode);
+                return el('td', { 'data-col': 'Delivery Address', style: { maxWidth: '220px' } }, [
+                  el('div', { style: { fontSize: '0.8rem', color: isAddrComplete ? '#334155' : '#dc2626' }, textContent: addrStr }),
+                  !isAddrComplete ? el('span', { className: 'status-badge badge-failed', style: { fontSize: '0.68rem', padding: '1px 5px', marginTop: '2px', display: 'inline-block' }, textContent: '⚠️ Incomplete' }) : null,
+                  el('button', {
+                    type: 'button',
+                    className: 'btn-row-action',
+                    style: { marginTop: '4px', fontSize: '0.72rem', padding: '2px 6px', display: 'block' },
+                    textContent: '🔍 View Full Address',
+                    addEventListener: ['click', () => openFullAddressModal(addr, 'Subscription #' + sub.id)]
+                  })
+                ].filter(Boolean));
+              })(),
               el('td', { 'data-col': 'Paid-Through', style: { fontSize: '0.8rem', fontWeight: '600' }, textContent: sub.effective_paid_through_date || '—' }),
               el('td', { 'data-col': 'Remaining', style: { fontSize: '0.8rem', fontWeight: '600' }, textContent: (sub.remaining_eligible_days != null ? sub.remaining_eligible_days : '—') + ' days' }),
               el('td', { 'data-col': 'Status' }, [
@@ -2825,7 +3251,7 @@
           if (err.name === 'AbortError') return;
           empty(tbody);
           tbody.appendChild(el('tr', {}, [
-            el('td', { colSpan: '10', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading subscriptions: ' + err.message })
+            el('td', { colSpan: '11', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading subscriptions: ' + err.message })
           ]));
         }
       }
@@ -2871,6 +3297,25 @@
             ])
           ]);
           container.appendChild(overviewCard);
+
+          // Structured Address Card
+          const subAddr = sub.delivery_address || {};
+          const isComplete = Boolean(subAddr.is_complete !== false && subAddr.pincode);
+          const addrCard = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '14px' } }, [
+            el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' } }, [
+              el('div', { style: { fontWeight: '700', color: '#0a3d66' }, textContent: '📍 Subscription Delivery Address' }),
+              el('span', { className: 'status-badge ' + (isComplete ? 'badge-active' : 'badge-failed'), textContent: isComplete ? 'Verified Complete' : 'Missing Fields' })
+            ]),
+            el('div', { style: { fontSize: '0.85rem', color: '#334155', lineHeight: '1.6' } }, [
+              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Recipient: ']), el('strong', { textContent: (subAddr.recipient_name || sub.customer_name || '—') + (subAddr.phone ? ' (' + subAddr.phone + ')' : '') })]),
+              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Flat / House: ']), el('strong', { textContent: subAddr.house || '—' }), el('span', { style: { color: '#64748b', marginLeft: '12px' } }, ['Building: ']), el('span', { textContent: subAddr.building || '—' })]),
+              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Street / Road: ']), el('strong', { textContent: subAddr.street || '—' }), subAddr.landmark ? el('span', { style: { color: '#64748b', marginLeft: '12px' } }, ['Landmark: ']) : null, subAddr.landmark ? el('span', { textContent: subAddr.landmark }) : null].filter(Boolean)),
+              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['City & PIN: ']), el('strong', { textContent: (subAddr.city || 'Hyderabad') + ' - ' + (subAddr.pincode || '—') }), el('span', { style: { color: '#64748b', marginLeft: '12px' } }, ['State: ']), el('span', { textContent: subAddr.state || 'Telangana' })]),
+              subAddr.delivery_instructions ? el('div', { style: { marginTop: '4px', color: '#0284c7' } }, [el('span', { style: { fontWeight: '600' } }, ['Instructions: ']), el('span', { textContent: subAddr.delivery_instructions })]) : null,
+              el('div', { style: { fontSize: '0.75rem', color: '#94a3b8', marginTop: '4px' } }, [el('span', { textContent: 'Source: ' + (subAddr.source || 'subscription_record') })])
+            ].filter(Boolean))
+          ]);
+          container.appendChild(addrCard);
 
           // Entitlement & Reconciled Financials Card
           const verifiedPaidPaise = Number(ent.verifiedPaidAmountPaise || sub.total_amount_paise || 0);
@@ -3370,39 +3815,141 @@
         const modal = document.getElementById('customerDetailModal');
         const container = document.getElementById('customerDetailContent');
         empty(container);
-        container.appendChild(el('div', { style: { padding: '24px', textAlign: 'center' }, textContent: 'Loading customer account details...' }));
+        container.appendChild(el('div', { style: { padding: '24px', textAlign: 'center' }, textContent: 'Loading complete customer account & delivery history...' }));
         modal.classList.remove('hidden');
 
         try {
           const data = await apiRequest('/api/v1/admin/customers/' + customerId + '/details');
           empty(container);
-          const c = data.customer;
+          const c = data.customer || {};
+          const pay = data.paymentSummary || {};
+          const addresses = Array.isArray(data.addresses) ? data.addresses : [];
+          const subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+          const orders = Array.isArray(data.orders) ? data.orders : [];
+          const deliveries = Array.isArray(data.deliveries) ? data.deliveries : [];
 
+          // 1. Overview & Verification Header
           const infoCard = el('div', { style: { background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '16px', marginBottom: '14px' } }, [
-            el('div', { style: { fontWeight: '700', fontSize: '1.1rem', color: '#0a3d66', marginBottom: '8px' }, textContent: c.full_name + ' (#' + c.id + ')' }),
-            el('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' } }, [
+            el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' } }, [
+              el('div', { style: { fontWeight: '700', fontSize: '1.15rem', color: '#0a3d66' }, textContent: (c.full_name || 'Customer') + ' (#' + c.id + ')' }),
+              el('span', { className: 'status-badge ' + (c.is_admin ? 'badge-active' : 'badge-delivered'), textContent: c.is_admin ? '🛡️ Administrator' : '👤 Customer Account' })
+            ]),
+            el('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', fontSize: '0.85rem' } }, [
               el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Phone: ']), el('strong', { textContent: c.phone || '—' })]),
               el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Email: ']), el('strong', { textContent: c.email || '—' })]),
               el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Registered: ']), el('span', { textContent: formatIST(c.created_at) })]),
-              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Role: ']), el('span', { className: 'status-badge ' + (c.is_admin ? 'badge-active' : 'badge-pending'), textContent: c.is_admin ? 'Administrator' : 'Customer' })])
+              el('div', {}, [el('span', { style: { color: '#64748b' } }, ['Phone Verified: ']), el('span', { style: { fontWeight: '600', color: c.phone_verified ? '#15803d' : '#94a3b8' }, textContent: c.phone_verified ? 'Yes' : 'No' })])
+            ]),
+            el('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' } }, [
+              el('div', { className: 'fin-item', style: { background: '#f0fdf4', borderColor: '#bbf7d0' } }, [
+                el('div', { className: 'fin-item-label', style: { color: '#166534' } }, ['Verified Paid Revenue']),
+                el('div', { className: 'fin-item-value', style: { fontSize: '1rem', color: '#15803d' } }, [formatINR(pay.verifiedCapturedPaise || 0)])
+              ]),
+              el('div', { className: 'fin-item' }, [
+                el('div', { className: 'fin-item-label' }, ['Store Orders Spend']),
+                el('div', { className: 'fin-item-value', style: { fontSize: '1rem' } }, [formatINR(pay.orderSpendingPaise || 0)])
+              ]),
+              el('div', { className: 'fin-item' }, [
+                el('div', { className: 'fin-item-label' }, ['Processed Refunds']),
+                el('div', { className: 'fin-item-value', style: { fontSize: '1rem', color: '#b91c1c' } }, [formatINR(pay.approvedRefundsPaise || 0)])
+              ])
             ])
           ]);
           container.appendChild(infoCard);
 
-          // Saved delivery addresses
-          if (Array.isArray(data.addresses) && data.addresses.length > 0) {
-            const addrBox = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '14px' } }, [
-              el('div', { style: { fontWeight: '700', color: '#0a3d66', marginBottom: '8px' }, textContent: 'Saved Delivery Addresses' })
-            ]);
-            data.addresses.forEach(a => {
+          // 2. Saved Delivery Addresses
+          const addrBox = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '14px' } }, [
+            el('div', { style: { fontWeight: '700', color: '#0a3d66', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' } }, [
+              el('span', { textContent: '📍 All Saved Delivery Addresses (' + addresses.length + ')' }),
+              addresses.length > 0 ? el('span', { style: { fontSize: '0.78rem', color: '#64748b' }, textContent: 'Authoritative customer address book' }) : null
+            ].filter(Boolean))
+          ]);
+
+          if (addresses.length === 0) {
+            addrBox.appendChild(el('div', { style: { color: '#dc2626', fontSize: '0.85rem' }, textContent: 'No saved delivery addresses on file for this customer.' }));
+          } else {
+            addresses.forEach(a => {
               const fullStr = [a.house, a.building, a.street, a.landmark, a.city, a.state, a.pincode].filter(Boolean).join(', ');
-              addrBox.appendChild(el('div', { style: { padding: '6px 0', borderBottom: '1px dashed #f1f5f9', fontSize: '0.825rem' } }, [
-                el('strong', { textContent: (a.recipient_name || c.full_name) + (a.is_default ? ' [Default Address]' : '') + ': ' }),
-                el('span', { textContent: fullStr })
+              addrBox.appendChild(el('div', { style: { padding: '8px 0', borderBottom: '1px dashed #f1f5f9', fontSize: '0.825rem' } }, [
+                el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' } }, [
+                  el('strong', { textContent: a.recipient_name || c.full_name }),
+                  a.phone ? el('span', { style: { color: '#64748b', fontSize: '0.78rem' }, textContent: '(' + a.phone + ')' }) : null,
+                  a.is_default ? el('span', { className: 'status-badge badge-active', style: { fontSize: '0.68rem', padding: '1px 6px' }, textContent: 'Default Address' }) : null
+                ].filter(Boolean)),
+                el('div', { style: { color: '#334155' }, textContent: fullStr }),
+                a.delivery_instructions ? el('div', { style: { color: '#0284c7', fontSize: '0.78rem', marginTop: '2px' }, textContent: 'Instructions: ' + a.delivery_instructions }) : null
               ]));
             });
-            container.appendChild(addrBox);
           }
+          container.appendChild(addrBox);
+
+          // 3. Customer Milk Subscriptions
+          const subBox = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '14px' } }, [
+            el('div', { style: { fontWeight: '700', color: '#0a3d66', marginBottom: '8px' }, textContent: '🥛 Milk Subscriptions (' + subscriptions.length + ')' })
+          ]);
+          if (subscriptions.length === 0) {
+            subBox.appendChild(el('div', { style: { color: '#64748b', fontSize: '0.85rem' }, textContent: 'No active or past milk subscriptions.' }));
+          } else {
+            subscriptions.forEach(s => {
+              subBox.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px dashed #f1f5f9', fontSize: '0.825rem' } }, [
+                el('div', {}, [
+                  el('strong', { textContent: s.product_name + ' (#' + s.id + ')' }),
+                  el('div', { style: { color: '#64748b', fontSize: '0.75rem' }, textContent: (s.quantity || '1L') + ' · ' + formatINR(s.cost_per_day_paise) + '/day · Paid through: ' + (s.effective_paid_through_date || '—') })
+                ]),
+                el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [
+                  el('span', { className: 'status-badge badge-' + s.status, textContent: s.status }),
+                  el('button', {
+                    type: 'button',
+                    className: 'btn-row-action btn-accent',
+                    textContent: 'View Sub',
+                    addEventListener: ['click', () => {
+                      modal.classList.add('hidden');
+                      openSubDetails(s.id);
+                    }]
+                  })
+                ])
+              ]));
+            });
+          }
+          container.appendChild(subBox);
+
+          // 4. Recent Store Orders
+          const ordBox = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px', marginBottom: '14px' } }, [
+            el('div', { style: { fontWeight: '700', color: '#0a3d66', marginBottom: '8px' }, textContent: '📦 Store Orders (' + orders.length + ')' })
+          ]);
+          if (orders.length === 0) {
+            ordBox.appendChild(el('div', { style: { color: '#64748b', fontSize: '0.85rem' }, textContent: 'No store purchases recorded.' }));
+          } else {
+            orders.slice(0, 5).forEach(o => {
+              ordBox.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px dashed #f1f5f9', fontSize: '0.825rem' } }, [
+                el('div', {}, [
+                  el('strong', { textContent: o.order_number }),
+                  el('div', { style: { color: '#64748b', fontSize: '0.75rem' }, textContent: formatIST(o.created_at) + ' · Total: ' + formatINR(o.total_paise || (o.total * 100)) })
+                ]),
+                el('span', { className: 'status-badge badge-' + (o.order_status || o.payment_status), textContent: o.order_status || o.payment_status })
+              ]));
+            });
+          }
+          container.appendChild(ordBox);
+
+          // 5. Recent Delivery History
+          const delBox = el('div', { style: { background: '#fff', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '14px' } }, [
+            el('div', { style: { fontWeight: '700', color: '#0a3d66', marginBottom: '8px' }, textContent: '🚚 Recent Delivery History (' + deliveries.length + ')' })
+          ]);
+          if (deliveries.length === 0) {
+            delBox.appendChild(el('div', { style: { color: '#64748b', fontSize: '0.85rem' }, textContent: 'No morning deliveries dispatched yet.' }));
+          } else {
+            deliveries.slice(0, 7).forEach(d => {
+              delBox.appendChild(el('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px dashed #f1f5f9', fontSize: '0.825rem' } }, [
+                el('div', {}, [
+                  el('strong', { textContent: d.delivery_date + ' · ' + (d.product_name || 'Milk Drop') }),
+                  el('div', { style: { color: d.status === 'failed' ? '#dc2626' : '#64748b', fontSize: '0.75rem' }, textContent: d.status === 'failed' ? ('Attempt Failed: ' + (d.failure_reason || 'Incomplete address/locked gate')) : ('Delivered by: ' + (d.delivered_by || 'Operations Team')) })
+                ]),
+                el('span', { className: 'status-badge badge-' + d.status, textContent: d.status })
+              ]));
+            });
+          }
+          container.appendChild(delBox);
 
         } catch (err) {
           empty(container);
@@ -3467,6 +4014,182 @@
           tbody.appendChild(el('tr', {}, [
             el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading demand: ' + err.message })
           ]));
+        }
+      }
+
+// Store Products & Practical Inventory Management
+      async function loadProducts(signal) {
+        const tbody = document.getElementById('productsTableBody');
+        empty(tbody);
+        tbody.appendChild(el('tr', {}, [el('td', { colSpan: '11', style: { textAlign: 'center', padding: '24px' }, textContent: 'Loading grocery & store inventory...' })]));
+
+        try {
+          const data = await apiRequest('/api/v1/admin/inventory', { signal });
+          productState.products = Array.isArray(data.products) ? data.products : [];
+          productState.total = data.totalProducts || productState.products.length;
+
+          document.getElementById('kpiTotalProducts').textContent = String(data.totalProducts || 0);
+          document.getElementById('kpiLowStockCount').textContent = String(data.lowStockCount || 0);
+          document.getElementById('kpiOutOfStockCount').textContent = String(data.outOfStockCount || 0);
+          document.getElementById('kpiTotalReserved').textContent = String(data.totalReservedUnits || 0);
+
+          renderProductsTable();
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          empty(tbody);
+          tbody.appendChild(el('tr', {}, [el('td', { colSpan: '11', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading inventory: ' + err.message })]));
+        }
+      }
+
+      function renderProductsTable() {
+        const tbody = document.getElementById('productsTableBody');
+        empty(tbody);
+
+        let filtered = productState.products;
+        if (productState.category && productState.category !== 'all') {
+          filtered = filtered.filter(p => p.category === productState.category);
+        }
+        if (productState.search) {
+          const q = productState.search.toLowerCase();
+          filtered = filtered.filter(p => (p.name && p.name.toLowerCase().includes(q)) || (p.slug && p.slug.toLowerCase().includes(q)));
+        }
+
+        if (filtered.length === 0) {
+          tbody.appendChild(el('tr', {}, [
+            el('td', { colSpan: '11', style: { padding: '0' } }, [
+              el('div', { className: 'empty-state' }, [
+                el('div', { className: 'empty-icon' }, ['📦']),
+                el('div', { className: 'empty-title' }, ['No products found']),
+                el('div', { className: 'empty-desc' }, ['No inventory items match your current filter or search criteria.'])
+              ])
+            ])
+          ]));
+          return;
+        }
+
+        filtered.forEach(p => {
+          const avail = p.available_stock != null ? p.available_stock : (p.stock_quantity - (p.reserved_stock || 0));
+          const threshold = p.low_stock_threshold || 5;
+          const isLow = p.stock_quantity <= threshold;
+          const isOut = avail <= 0;
+
+          let statusBadgeClass = 'badge-delivered';
+          let statusText = 'In Stock';
+          if (isOut) {
+            statusBadgeClass = 'badge-failed';
+            statusText = 'Out of Stock';
+          } else if (isLow) {
+            statusBadgeClass = 'badge-pending';
+            statusText = 'Low Stock';
+          }
+
+          const tr = el('tr', { style: isOut ? { background: '#fff5f5' } : (isLow ? { background: '#fffbeb' } : {}) }, [
+            el('td', { 'data-col': 'ID' }, [el('strong', { textContent: '#' + p.id })]),
+            el('td', { 'data-col': 'Product' }, [
+              el('div', { style: { fontWeight: '600', color: '#0a3d66' }, textContent: p.name }),
+              el('div', { style: { fontSize: '0.75rem', color: '#64748b' }, textContent: p.slug })
+            ]),
+            el('td', { 'data-col': 'Category', style: { textTransform: 'capitalize' }, textContent: p.category }),
+            el('td', { 'data-col': 'Price' }, [el('strong', { textContent: '₹' + p.price })]),
+            el('td', { 'data-col': 'Selling Unit', textContent: p.selling_unit }),
+            el('td', { 'data-col': 'Physical Stock' }, [el('strong', { textContent: String(p.stock_quantity) })]),
+            el('td', { 'data-col': 'Reserved', style: { color: p.reserved_stock > 0 ? '#d97706' : '#64748b' }, textContent: String(p.reserved_stock || 0) }),
+            el('td', { 'data-col': 'Available to Sell' }, [el('strong', { style: { color: avail > 0 ? '#15803d' : '#dc2626' }, textContent: String(avail) })]),
+            el('td', { 'data-col': 'Threshold', textContent: String(threshold) }),
+            el('td', { 'data-col': 'Status' }, [
+              el('span', { className: 'status-badge ' + statusBadgeClass, textContent: statusText })
+            ]),
+            el('td', { 'data-col': 'Actions' }, [
+              el('div', { style: { display: 'flex', gap: '4px', flexWrap: 'wrap' } }, [
+                el('button', {
+                  type: 'button',
+                  className: 'btn-row-action btn-accent',
+                  style: { fontSize: '0.72rem', padding: '3px 8px' },
+                  textContent: 'Adjust',
+                  addEventListener: ['click', () => openAdjustStockModal(p)]
+                }),
+                el('button', {
+                  type: 'button',
+                  className: 'btn-row-action',
+                  style: { fontSize: '0.72rem', padding: '3px 8px' },
+                  textContent: 'Edit',
+                  addEventListener: ['click', () => openEditProductModal(p)]
+                }),
+                el('button', {
+                  type: 'button',
+                  className: 'btn-row-action',
+                  style: { fontSize: '0.72rem', padding: '3px 8px' },
+                  textContent: 'History',
+                  addEventListener: ['click', () => openStockHistoryModal(p.id, p.name)]
+                })
+              ])
+            ])
+          ]);
+
+          tbody.appendChild(tr);
+        });
+      }
+
+      function openAdjustStockModal(p) {
+        selectedAdjustProduct = p;
+        document.getElementById('adjustProdTitle').textContent = p.name + ' (#' + p.id + ')';
+        document.getElementById('adjustCurrentStock').textContent = String(p.stock_quantity);
+        document.getElementById('adjustReservedStock').textContent = String(p.reserved_stock || 0);
+        const avail = p.available_stock != null ? p.available_stock : (p.stock_quantity - (p.reserved_stock || 0));
+        document.getElementById('adjustAvailableStock').textContent = String(avail);
+        document.getElementById('adjustResultStock').textContent = String(p.stock_quantity);
+        document.getElementById('adjustResultAvailable').textContent = String(avail);
+        document.getElementById('adjustQuantityChange').value = '';
+        document.getElementById('adjustReasonNote').value = '';
+        document.getElementById('adjustStockError').textContent = '';
+        document.getElementById('modalAdjustStock').classList.remove('hidden');
+      }
+
+      function openEditProductModal(p) {
+        selectedEditProduct = p;
+        document.getElementById('editProdName').value = p.name;
+        document.getElementById('editProdPrice').value = String(p.price);
+        document.getElementById('editProdUnit').value = p.selling_unit;
+        document.getElementById('editProdThreshold').value = String(p.low_stock_threshold || 5);
+        document.getElementById('editProdActive').checked = p.is_active !== false;
+        document.getElementById('editProductError').textContent = '';
+        document.getElementById('modalEditProduct').classList.remove('hidden');
+      }
+
+      async function openStockHistoryModal(productId, productName) {
+        document.getElementById('stockHistoryTitle').textContent = 'Audit Ledger: ' + productName;
+        const tbody = document.getElementById('stockHistoryTableBody');
+        empty(tbody);
+        tbody.appendChild(el('tr', {}, [el('td', { colSpan: '7', style: { textAlign: 'center', padding: '16px' }, textContent: 'Loading stock audit history...' })]));
+        document.getElementById('modalStockHistory').classList.remove('hidden');
+
+        try {
+          const data = await apiRequest('/api/v1/admin/inventory/' + productId + '/history');
+          empty(tbody);
+          const history = Array.isArray(data.history) ? data.history : [];
+
+          if (history.length === 0) {
+            tbody.appendChild(el('tr', {}, [
+              el('td', { colSpan: '7', style: { textAlign: 'center', padding: '20px', color: '#64748b' }, textContent: 'No stock movements recorded yet for this product.' })
+            ]));
+            return;
+          }
+
+          history.forEach(h => {
+            const tr = el('tr', {}, [
+              el('td', { style: { fontSize: '0.8rem', color: '#64748b' }, textContent: formatIST(h.created_at) }),
+              el('td', { style: { fontWeight: '600', textTransform: 'capitalize' }, textContent: h.adjustment_type }),
+              el('td', { style: { fontWeight: '700', color: h.quantity_change > 0 ? '#15803d' : '#b91c1c' }, textContent: (h.quantity_change > 0 ? '+' : '') + h.quantity_change }),
+              el('td', { textContent: (h.previous_stock ?? '—') + ' → ' + (h.new_stock ?? '—') }),
+              el('td', { style: { color: '#64748b' }, textContent: String(h.new_reserved ?? 0) }),
+              el('td', { style: { fontSize: '0.8rem', color: '#475569' }, textContent: h.admin_actor || 'System' }),
+              el('td', { style: { fontSize: '0.8rem' }, textContent: h.reason || '—' })
+            ]);
+            tbody.appendChild(tr);
+          });
+        } catch (err) {
+          empty(tbody);
+          tbody.appendChild(el('tr', {}, [el('td', { colSpan: '7', style: { textAlign: 'center', padding: '16px', color: '#dc2626' }, textContent: 'Error loading ledger: ' + err.message })]));
         }
       }
 
@@ -4153,7 +4876,242 @@
         document.getElementById('btnExportDemand').addEventListener('click', () => {
           downloadExportFile('/api/v1/admin/demand-forecast/export?date=' + demandState.date, 'milvanta_milk_demand_' + demandState.date + '.csv');
         });
-        document.getElementById('btnExportReports').addEventListener('click', () => {
+// Pending Address Filter Button
+        const btnPendingAddr = document.getElementById('btnDelFilterPendingAddress');
+        if (btnPendingAddr) {
+          btnPendingAddr.addEventListener('click', () => {
+            deliveryPendingAddressFilterActive = !deliveryPendingAddressFilterActive;
+            btnPendingAddr.classList.toggle('active', deliveryPendingAddressFilterActive);
+            loadDeliveries();
+          });
+        }
+
+        // Sub-tabs in Demand Section
+        const btnSubTabProducts = document.getElementById('btnSubTabProducts');
+        const btnSubTabMilkDemand = document.getElementById('btnSubTabMilkDemand');
+        if (btnSubTabProducts) {
+          btnSubTabProducts.addEventListener('click', () => {
+            demandActiveSubTab = 'products';
+            btnSubTabProducts.style.background = '#0a3d66';
+            btnSubTabProducts.style.color = '#fff';
+            btnSubTabMilkDemand.style.background = '#f1f5f9';
+            btnSubTabMilkDemand.style.color = '#475569';
+            document.getElementById('subViewStoreProducts').classList.remove('hidden');
+            document.getElementById('subViewMilkDemand').classList.add('hidden');
+            loadProducts();
+          });
+        }
+        if (btnSubTabMilkDemand) {
+          btnSubTabMilkDemand.addEventListener('click', () => {
+            demandActiveSubTab = 'milk_demand';
+            btnSubTabMilkDemand.style.background = '#0a3d66';
+            btnSubTabMilkDemand.style.color = '#fff';
+            btnSubTabProducts.style.background = '#f1f5f9';
+            btnSubTabProducts.style.color = '#475569';
+            document.getElementById('subViewMilkDemand').classList.remove('hidden');
+            document.getElementById('subViewStoreProducts').classList.add('hidden');
+            loadDemand();
+          });
+        }
+
+        // Product search & filters
+        let prodSearchDebounce = null;
+        const prodSearch = document.getElementById('productSearchInput');
+        if (prodSearch) {
+          prodSearch.addEventListener('input', () => {
+            clearTimeout(prodSearchDebounce);
+            prodSearchDebounce = setTimeout(() => {
+              productState.search = prodSearch.value.trim();
+              renderProductsTable();
+            }, 300);
+          });
+        }
+        const prodCat = document.getElementById('productCategoryFilter');
+        if (prodCat) {
+          prodCat.addEventListener('change', () => {
+            productState.category = prodCat.value;
+            renderProductsTable();
+          });
+        }
+        document.getElementById('btnResetProductFilters')?.addEventListener('click', () => {
+          productState.search = '';
+          productState.category = 'all';
+          if (prodSearch) prodSearch.value = '';
+          if (prodCat) prodCat.value = 'all';
+          renderProductsTable();
+        });
+
+        // Add Product Modal Handlers
+        document.getElementById('btnOpenAddProductModal')?.addEventListener('click', () => {
+          document.getElementById('addProdName').value = '';
+          document.getElementById('addProdSlug').value = '';
+          document.getElementById('addProdPrice').value = '';
+          document.getElementById('addProdUnit').value = '';
+          document.getElementById('addProdStock').value = '0';
+          document.getElementById('addProdThreshold').value = '5';
+          document.getElementById('addProductError').textContent = '';
+          document.getElementById('modalAddProduct').classList.remove('hidden');
+        });
+        document.getElementById('btnCloseAddProductModal')?.addEventListener('click', () => {
+          document.getElementById('modalAddProduct').classList.add('hidden');
+        });
+        document.getElementById('btnCancelAddProductModal')?.addEventListener('click', () => {
+          document.getElementById('modalAddProduct').classList.add('hidden');
+        });
+        document.getElementById('btnSubmitAddProduct')?.addEventListener('click', async () => {
+          const name = document.getElementById('addProdName').value.trim();
+          const slug = document.getElementById('addProdSlug').value.trim();
+          const category = document.getElementById('addProdCategory').value;
+          const price = parseFloat(document.getElementById('addProdPrice').value);
+          const selling_unit = document.getElementById('addProdUnit').value.trim();
+          const stock_quantity = parseInt(document.getElementById('addProdStock').value, 10);
+          const low_stock_threshold = parseInt(document.getElementById('addProdThreshold').value, 10);
+          const errDiv = document.getElementById('addProductError');
+          errDiv.textContent = '';
+
+          if (!name || !slug || isNaN(price) || !selling_unit) {
+            errDiv.textContent = 'Please fill all required fields correctly.';
+            return;
+          }
+
+          try {
+            await apiRequest('/api/v1/admin/products', {
+              method: 'POST',
+              body: { name, slug, category, price, selling_unit, stock_quantity: isNaN(stock_quantity) ? 0 : stock_quantity, low_stock_threshold: isNaN(low_stock_threshold) ? 5 : low_stock_threshold }
+            });
+            document.getElementById('modalAddProduct').classList.add('hidden');
+            await loadProducts();
+          } catch (err) {
+            errDiv.textContent = err.message || 'Failed to create product.';
+          }
+        });
+
+        // Edit Product Modal Handlers
+        document.getElementById('btnCloseEditProductModal')?.addEventListener('click', () => {
+          document.getElementById('modalEditProduct').classList.add('hidden');
+        });
+        document.getElementById('btnCancelEditProductModal')?.addEventListener('click', () => {
+          document.getElementById('modalEditProduct').classList.add('hidden');
+        });
+        document.getElementById('btnSubmitEditProduct')?.addEventListener('click', async () => {
+          if (!selectedEditProduct) return;
+          const price = parseFloat(document.getElementById('editProdPrice').value);
+          const selling_unit = document.getElementById('editProdUnit').value.trim();
+          const low_stock_threshold = parseInt(document.getElementById('editProdThreshold').value, 10);
+          const is_active = document.getElementById('editProdActive').checked;
+          const errDiv = document.getElementById('editProductError');
+          errDiv.textContent = '';
+
+          if (isNaN(price) || !selling_unit) {
+            errDiv.textContent = 'Please enter valid price and selling unit.';
+            return;
+          }
+
+          try {
+            await apiRequest('/api/v1/admin/products/' + selectedEditProduct.id, {
+              method: 'PATCH',
+              body: { price, selling_unit, low_stock_threshold: isNaN(low_stock_threshold) ? 5 : low_stock_threshold, is_active }
+            });
+            document.getElementById('modalEditProduct').classList.add('hidden');
+            await loadProducts();
+          } catch (err) {
+            errDiv.textContent = err.message || 'Failed to update product.';
+          }
+        });
+
+        // Adjust Stock Modal Handlers
+        const qtyChangeInput = document.getElementById('adjustQuantityChange');
+        if (qtyChangeInput) {
+          qtyChangeInput.addEventListener('input', () => {
+            if (!selectedAdjustProduct) return;
+            const change = parseInt(qtyChangeInput.value, 10) || 0;
+            const newStock = Math.max(0, (selectedAdjustProduct.stock_quantity || 0) + change);
+            const newAvail = newStock - (selectedAdjustProduct.reserved_stock || 0);
+            document.getElementById('adjustResultStock').textContent = String(newStock);
+            document.getElementById('adjustResultAvailable').textContent = String(newAvail);
+          });
+        }
+
+        document.getElementById('btnCloseAdjustModal')?.addEventListener('click', () => {
+          document.getElementById('modalAdjustStock').classList.add('hidden');
+        });
+        document.getElementById('btnCancelAdjustModal')?.addEventListener('click', () => {
+          document.getElementById('modalAdjustStock').classList.add('hidden');
+        });
+        document.getElementById('btnSubmitAdjustStock')?.addEventListener('click', async () => {
+          if (!selectedAdjustProduct) return;
+          const adjustmentType = document.getElementById('adjustTypeSelect').value;
+          const change = parseInt(document.getElementById('adjustQuantityChange').value, 10);
+          const reason = document.getElementById('adjustReasonNote').value.trim();
+          const errDiv = document.getElementById('adjustStockError');
+          errDiv.textContent = '';
+
+          if (isNaN(change) || change === 0) {
+            errDiv.textContent = 'Please enter a non-zero quantity change (+ or -).';
+            return;
+          }
+          if (reason.length < 3) {
+            errDiv.textContent = 'Please provide a detailed adjustment reason (at least 3 characters).';
+            return;
+          }
+
+          try {
+            await apiRequest('/api/v1/admin/inventory/' + selectedAdjustProduct.id + '/adjust', {
+              method: 'POST',
+              body: { adjustmentType, quantityChange: change, reason }
+            });
+            document.getElementById('modalAdjustStock').classList.add('hidden');
+            await loadProducts();
+          } catch (err) {
+            errDiv.textContent = err.message || 'Failed to adjust stock.';
+          }
+        });
+
+        // Stock History Modal Handlers
+        document.getElementById('btnCloseStockHistoryModal')?.addEventListener('click', () => {
+          document.getElementById('modalStockHistory').classList.add('hidden');
+        });
+        document.getElementById('btnDismissStockHistoryModal')?.addEventListener('click', () => {
+          document.getElementById('modalStockHistory').classList.add('hidden');
+        });
+
+        // Full Address Modal Handlers
+        document.getElementById('btnCloseFullAddressModal')?.addEventListener('click', () => {
+          document.getElementById('modalFullAddress').classList.add('hidden');
+        });
+        document.getElementById('btnDismissFullAddressModal')?.addEventListener('click', () => {
+          document.getElementById('modalFullAddress').classList.add('hidden');
+        });
+
+        // Delivery Confirm Modal Handlers
+        document.getElementById('btnCloseConfirmModal')?.addEventListener('click', () => {
+          document.getElementById('modalDeliveryConfirm').classList.add('hidden');
+        });
+        document.getElementById('btnCancelConfirmModal')?.addEventListener('click', () => {
+          document.getElementById('modalDeliveryConfirm').classList.add('hidden');
+        });
+        document.getElementById('btnSubmitConfirmDelivered')?.addEventListener('click', async () => {
+          if (!pendingConfirmOrderId) return;
+          const proof = document.getElementById('inputDeliveryProof').value.trim();
+          document.getElementById('modalDeliveryConfirm').classList.add('hidden');
+          await updateDeliveryStatus(pendingConfirmOrderId, 'delivered', { proofOfDelivery: proof });
+        });
+
+        // Delivery Cancel Modal Handlers
+        document.getElementById('btnCloseCancelDeliveryModal')?.addEventListener('click', () => {
+          document.getElementById('modalDeliveryCancel').classList.add('hidden');
+        });
+        document.getElementById('btnDismissCancelDeliveryModal')?.addEventListener('click', () => {
+          document.getElementById('modalDeliveryCancel').classList.add('hidden');
+        });
+        document.getElementById('btnSubmitCancelDelivery')?.addEventListener('click', async () => {
+          if (!pendingCancelOrderId) return;
+          const reason = document.getElementById('selectCancelDeliveryReason').value;
+          document.getElementById('modalDeliveryCancel').classList.add('hidden');
+          await updateDeliveryStatus(pendingCancelOrderId, 'cancelled', { failureReason: reason });
+        });
+
+                document.getElementById('btnExportReports').addEventListener('click', () => {
           const from = reportState.from || getTodayYMD();
           const to = reportState.to || getTodayYMD();
           downloadExportFile('/api/v1/admin/reports/export?from=' + from + '&to=' + to, 'milvanta_business_reports_' + from + '_to_' + to + '.csv');

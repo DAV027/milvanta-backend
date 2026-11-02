@@ -116,6 +116,37 @@
   }
 
   // Switch Tab
+function formatIstDateTime(isoStr) {
+    if (!isoStr) return '';
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: 'numeric',
+        month: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return String(isoStr);
+    }
+  }
+
+  function renderSubDeliveryStatusBadge(status) {
+    const s = String(status || 'scheduled').toLowerCase();
+    if (s === 'delivered') {
+      return '<span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">✔ Delivered</span>';
+    } else if (s === 'out_for_delivery') {
+      return '<span style="background:#fef08a; color:#854d0e; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🚚 Out for Delivery</span>';
+    } else if (s === 'packed') {
+      return '<span style="background:#ede9fe; color:#6d28d9; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">📦 Packed</span>';
+    } else if (s === 'failed') {
+      return '<span style="background:#fee2e2; color:#b91c1c; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">⚠️ Delivery Failed</span>';
+    }
+    return '<span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🥛 Scheduled</span>';
+  }
+
   function switchTab(tabId) {
     if (!['profile', 'orders', 'addresses', 'subscription', 'calendar'].includes(tabId)) {
       tabId = 'profile';
@@ -172,6 +203,26 @@
   // 1. CUSTOMER PROFILE INITIALIZATION
   // ==========================================
   async function initProfile() {
+    // Admin V3: Revalidate calendar on visibility change or manual refresh
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.activeTab === 'calendar') {
+        if (state.selectedSubId) {
+          clearCachedCalendar(state.selectedSubId);
+        }
+        renderTomorrowStrip();
+        renderMonthlyDeliveryCalendar();
+      }
+    });
+
+    $('#calRefreshBtn')?.addEventListener('click', () => {
+      if (state.selectedSubId) {
+        clearCachedCalendar(state.selectedSubId);
+      }
+      renderTomorrowStrip();
+      renderMonthlyDeliveryCalendar();
+      showToast('📅 Delivery calendar refreshed');
+    });
+
     // A. Read cached customer from localStorage first for instant paint
     try {
       const saved = localStorage.getItem('milvanta-user');
@@ -1149,6 +1200,7 @@
     const dropLabel = DROP_INSTRUCTIONS[dropKey] || DROP_INSTRUCTIONS.silent;
 
     container.innerHTML = state.subscriptions.map((sub) => {
+      const subAddress = (sub.delivery_address && sub.delivery_address.formattedAddress) ? sub.delivery_address.formattedAddress : activeDeliveryAddress;
       const isBuffalo = (sub.product || '').toLowerCase().includes('buffalo');
       const is1L = (sub.quantity || sub.product || '').toLowerCase().includes('1');
       const rate = sub.costPerDay || sub.dailyRate || (isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55));
@@ -1218,7 +1270,7 @@
               <span class="sub-metric-label">DROP &amp; RIDER PREFERENCE</span>
             </div>
             <div class="sub-metric-val sub-address-row">
-              <span class="sub-addr-truncate" title="${escapeHtml(activeDeliveryAddress)}">📍 ${escapeHtml(activeDeliveryAddress)}</span>
+              <span class="sub-addr-truncate" title="${escapeHtml(subAddress)}">📍 ${escapeHtml(subAddress)}</span>
               <button type="button" class="sub-action-link" data-switch-to-addresses="true">Change</button>
             </div>
             <div class="sub-metric-sub sub-rider-row">
@@ -1226,6 +1278,36 @@
               <button type="button" class="sub-action-link" data-change-drop-instruction="true">Change</button>
             </div>
           </div>
+        </div>
+
+        <!-- Live Delivery Status Card -->
+        <div class="sub-delivery-summary-card">
+          <div class="sub-delivery-summary-grid">
+            <div class="sub-delivery-stat-box">
+              <span class="sub-delivery-stat-label">Last Fulfillment Status</span>
+              <span class="sub-delivery-stat-val">
+                ${renderSubDeliveryStatusBadge(sub.last_delivery_status)}
+              </span>
+            </div>
+            <div class="sub-delivery-stat-box">
+              <span class="sub-delivery-stat-label">Last Fulfilled Date</span>
+              <span class="sub-delivery-stat-val" style="font-size: 0.85rem; color: #475569;">
+                ${sub.last_delivered_at ? formatIstDateTime(sub.last_delivered_at) : 'Scheduled for first drop'}
+              </span>
+            </div>
+            <div class="sub-delivery-stat-box">
+              <span class="sub-delivery-stat-label">Total Drops Fulfilled</span>
+              <span class="sub-delivery-stat-val">
+                🥛 ${Number(sub.delivered_count || 0)} Completed
+              </span>
+            </div>
+          </div>
+          ${sub.last_delivery_status === 'failed' ? `
+            <div class="sub-delivery-alert-failed">
+              <span>⚠️</span>
+              <span><strong>Delivery Notice:</strong> ${escapeHtml(sub.failed_reason || 'Rider could not access door')}. Supervisor will retry on next morning drop.</span>
+            </div>
+          ` : ''}
         </div>
 
         <!-- 3. Streamlined Ergonomic Action Bar -->
@@ -1864,6 +1946,10 @@
         badgeHtml = `<span class="cal-icon-badge badge-pending" title="Awaiting Billing Payment"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>`;
       } else if (statusType === 'failed') {
         badgeHtml = `<span class="cal-icon-badge badge-failed" title="Delivery Failed"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg></span>`;
+      } else if (statusType === 'out_for_delivery') {
+        badgeHtml = `<span class="cal-icon-badge badge-out-for-delivery" title="Out for Delivery"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></span>`;
+      } else if (statusType === 'packed') {
+        badgeHtml = `<span class="cal-icon-badge badge-packed" title="Packed for Delivery"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span>`;
       } else if (statusType === 'ended') {
         badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
       } else if (statusType === 'not_started') {

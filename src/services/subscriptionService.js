@@ -1364,7 +1364,17 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
     } else if (orderMap.has(dateStr) && (orderMap.get(dateStr).status !== 'cancelled' || orderMap.get(dateStr).failed_reason !== 'Delivery date skipped by customer')) {
       const ord = orderMap.get(dateStr);
       status = ord.status;
-      detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : (ord.failed_reason || ord.status);
+      if (ord.status === 'delivered') {
+        detail = ord.delivered_at ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}` : 'Delivered';
+      } else if (ord.status === 'out_for_delivery') {
+        detail = 'Out for delivery with morning driver';
+      } else if (ord.status === 'packed') {
+        detail = 'Packed and ready for dispatch';
+      } else if (ord.status === 'failed') {
+        detail = ord.failed_reason ? `Delivery failed: ${ord.failed_reason}` : 'Delivery failed';
+      } else {
+        detail = ord.failed_reason || ord.status;
+      }
     } else {
       const activePause = pauses.find(p => p.pause_start_date <= dateStr && (!p.pause_end_date || p.pause_end_date >= dateStr));
       if (activePause) {
@@ -1406,3 +1416,163 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
   };
 }
 
+
+/**
+ * Normalize and structure delivery address with missing field checks.
+ */
+export function normalizeDeliveryAddress(candidate, fallbackRecipient = '', fallbackPhone = '', source = 'unknown') {
+  if (!candidate || typeof candidate !== 'object') {
+    return {
+      recipient_name: (fallbackRecipient || '').trim(),
+      phone: (fallbackPhone || '').trim(),
+      house: '',
+      building: '',
+      street: '',
+      landmark: '',
+      city: '',
+      state: '',
+      pincode: '',
+      delivery_instructions: '',
+      formatted_address: 'No address provided',
+      formattedAddress: 'No address provided',
+      is_complete: false,
+      missing_fields: ['recipient_name', 'phone', 'street', 'pincode'],
+      source: 'none'
+    };
+  }
+
+  const recipient_name = (candidate.recipient_name || candidate.name || fallbackRecipient || '').trim();
+  const phone = (candidate.phone || candidate.delivery_phone || fallbackPhone || '').trim();
+  const house = (candidate.house || candidate.flat || candidate.flat_no || candidate.house_no || candidate.door_no || '').trim();
+  const building = (candidate.building || candidate.apartment || candidate.society || '').trim();
+  const street = (candidate.street || candidate.area || candidate.colony || candidate.address || candidate.line1 || '').trim();
+  const landmark = (candidate.landmark || '').trim();
+  const city = (candidate.city || 'Hyderabad').trim();
+  const state = (candidate.state || 'Telangana').trim();
+  const pincode = (candidate.pincode || candidate.postal_code || candidate.zip || '').toString().trim();
+  const delivery_instructions = (candidate.delivery_instructions || candidate.instructions || candidate.driver_notes || candidate.notes || '').trim();
+
+  const missing_fields = [];
+  if (!recipient_name) missing_fields.push('recipient_name');
+  if (!phone) missing_fields.push('phone');
+  if (!street) missing_fields.push('street');
+  if (!pincode) missing_fields.push('pincode');
+
+  const parts = [];
+  if (house) parts.push(house);
+  if (building) parts.push(building);
+  if (street) parts.push(street);
+  if (landmark) parts.push('Near ' + landmark);
+  if (city) parts.push(city);
+  if (state) parts.push(state);
+  if (pincode) parts.push(pincode);
+
+  const formatted_address = parts.join(', ') || 'No address details';
+
+  return {
+    recipient_name,
+    phone,
+    house,
+    building,
+    street,
+    landmark,
+    city,
+    state,
+    pincode,
+    delivery_instructions,
+    formatted_address,
+    formattedAddress: formatted_address,
+    is_complete: missing_fields.length === 0,
+    missing_fields,
+    source
+  };
+}
+
+/**
+ * Authoritatively resolve a subscription delivery address.
+ * Prioritizes explicit subscription address over customer default address to prevent silent override.
+ */
+export async function resolveSubscriptionDeliveryAddress(pool, sub) {
+  if (!sub) return normalizeDeliveryAddress(null);
+
+  const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+
+  // 1. Explicit subscription delivery_address
+  if (sub.delivery_address && typeof sub.delivery_address === 'object') {
+    return normalizeDeliveryAddress(sub.delivery_address, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'explicit_subscription');
+  }
+
+  // 2. Explicit address_id linked to customer_addresses
+  const explicitAddressId = sub.address_id || subNotes.addressId || subNotes.address_id;
+  if (explicitAddressId && pool) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT * FROM customer_addresses WHERE id = $1',
+        [explicitAddressId]
+      );
+      if (rows[0]) {
+        return normalizeDeliveryAddress(rows[0], sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'linked_customer_address');
+      }
+    } catch (_) {}
+  }
+
+  // 3. Address in subscription notes (e.g., from checkout)
+  if (subNotes.deliveryAddress && typeof subNotes.deliveryAddress === 'object') {
+    return normalizeDeliveryAddress(subNotes.deliveryAddress, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'subscription_notes');
+  }
+  if (subNotes.address && typeof subNotes.address === 'object') {
+    return normalizeDeliveryAddress(subNotes.address, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'subscription_notes');
+  }
+
+  // 4. Check historical delivery orders for this subscription
+  if (sub.id && pool) {
+    try {
+      const { rows } = await pool.query(
+        'SELECT delivery_address FROM subscription_delivery_orders WHERE subscription_id = $1 AND delivery_address IS NOT NULL ORDER BY delivery_date DESC LIMIT 1',
+        [sub.id]
+      );
+      if (rows[0]?.delivery_address && typeof rows[0].delivery_address === 'object') {
+        return normalizeDeliveryAddress(rows[0].delivery_address, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'delivery_order');
+      }
+    } catch (_) {}
+  }
+
+  // 5. Default address for customer
+  const customerId = sub.customer_id;
+  if (customerId && pool) {
+    try {
+      const { rows: defaultRows } = await pool.query(
+        'SELECT * FROM customer_addresses WHERE customer_id = $1 AND is_default = TRUE LIMIT 1',
+        [customerId]
+      );
+      if (defaultRows[0]) {
+        return normalizeDeliveryAddress(defaultRows[0], sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'customer_default_address');
+      }
+
+      // 6. Any saved address for customer
+      const { rows: savedRows } = await pool.query(
+        'SELECT * FROM customer_addresses WHERE customer_id = $1 ORDER BY is_default DESC, updated_at DESC LIMIT 1',
+        [customerId]
+      );
+      if (savedRows[0]) {
+        return normalizeDeliveryAddress(savedRows[0], sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'customer_saved');
+      }
+
+      // 7. Latest customer order address snapshot
+      const { rows: orderRows } = await pool.query(
+        'SELECT address FROM customer_orders WHERE customer_id = $1 AND address IS NOT NULL ORDER BY created_at DESC LIMIT 1',
+        [customerId]
+      );
+      if (orderRows[0]?.address) {
+        const parsed = typeof orderRows[0].address === 'string'
+          ? (() => { try { return JSON.parse(orderRows[0].address); } catch { return null; } })()
+          : orderRows[0].address;
+        if (parsed && typeof parsed === 'object') {
+          return normalizeDeliveryAddress(parsed, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'order_snapshot');
+        }
+      }
+    } catch (_) {}
+  }
+
+  return normalizeDeliveryAddress(null, sub.customer_name || sub.full_name, sub.customer_phone || sub.phone, 'none');
+}
