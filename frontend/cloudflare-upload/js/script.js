@@ -1008,7 +1008,8 @@ async function apiRequest(path, options = {}) {
     ...options.headers
   };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeoutMs = path === '/api/v1/auth/login' ? 60000 : 15000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${API_URL}${path}`, {
       credentials: 'omit',
@@ -1021,6 +1022,10 @@ async function apiRequest(path, options = {}) {
       setAuthToken(data.token);
     }
     if (response.status === 401) setAuthToken('');
+    if (response.status === 429 && path === '/api/v1/auth/login') {
+      const seconds = Number(response.headers.get('retry-after'));
+      throw new Error('Too many sign-in attempts. Wait ' + (Number.isFinite(seconds) && seconds > 0 ? Math.ceil(seconds) : 60) + ' seconds before trying once.');
+    }
     if (!response.ok) throw new Error(data.message || data.error || `Request failed (${response.status})`);
     return data;
   } catch (error) {
@@ -1032,6 +1037,30 @@ async function apiRequest(path, options = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Logout changes the UI immediately; server-side token revocation is best-effort
+// with a short deadline so a sleeping Render instance cannot freeze the sign-out button.
+function revokeCustomerSessionBestEffort(token) {
+  if (!token) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  void fetch(`${API_URL}/api/v1/auth/logout`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    signal: controller.signal,
+    keepalive: true
+  }).catch(() => {
+    console.warn('Customer session revocation was not confirmed; local credentials were cleared.');
+  }).finally(() => clearTimeout(timeout));
+}
+function clearCustomerSessionImmediately() {
+  const previousToken = authToken;
+  setAuthToken('');
+  try { localStorage.removeItem('milvanta-user'); } catch {}
+  state.customer = null;
+  state.savedAddresses = [];
+  revokeCustomerSessionBestEffort(previousToken);
 }
 
 // Live Catalog Loader
@@ -2977,12 +3006,9 @@ document.addEventListener('DOMContentLoaded', () => {
     closeUserDropdown();
     openAdminOrders();
   });
-  $('#userMenuLogout')?.addEventListener('click', async () => {
+  $('#userMenuLogout')?.addEventListener('click', () => {
     closeUserDropdown();
-    try { await apiRequest('/api/v1/auth/logout', { method: 'POST' }); } catch {}
-    setAuthToken('');
-    state.customer = null;
-    state.savedAddresses = [];
+    clearCustomerSessionImmediately();
     updateAccountButton();
     closeAccount();
     renderCart();
@@ -3591,11 +3617,20 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Account submit with password confirmation validation
+  let accountAuthInFlight = false;
   $('#accountForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (accountAuthInFlight) return;
+    accountAuthInFlight = true;
     const btn = $('#accountSubmit');
+    const previousLabel = btn.textContent;
     btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Signing in…';
     $('#accountMessage').textContent = 'Authenticating…';
+    const slowNotice = setTimeout(() => {
+      if (accountAuthInFlight) $('#accountMessage').textContent = 'Connecting to store server…';
+    }, 5000);
     try {
       const values = Object.fromEntries(new FormData(e.currentTarget).entries());
       if (state.accountMode === 'register') {
@@ -3630,10 +3665,14 @@ document.addEventListener('DOMContentLoaded', () => {
         startPhoneOtpVerification(phone);
         return;
       } else {
-        await apiRequest('/api/v1/auth/login', { method: 'POST', body: JSON.stringify(values) });
+        // Login already returns the authoritative customer and a new session token.
+        // Avoid a second, sequential /auth/me round-trip before showing success.
+        const session = await apiRequest('/api/v1/auth/login', { method: 'POST', body: JSON.stringify(values) });
+        if (!session.token || (!session.customer && !session.user)) {
+          throw new Error('Login response was incomplete. Please try again.');
+        }
+        state.customer = session.customer || session.user;
       }
-      const session = await apiRequest('/api/v1/auth/me');
-      state.customer = session.customer || session.user;
       if (state.customer) {
         try {
           localStorage.setItem('milvanta-user', JSON.stringify(state.customer));
@@ -3653,7 +3692,11 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       $('#accountMessage').textContent = err.message;
     } finally {
+      clearTimeout(slowNotice);
+      accountAuthInFlight = false;
       btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = previousLabel;
     }
   });
 
@@ -3893,11 +3936,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Logout
-  $('#logoutButton')?.addEventListener('click', async () => {
-    try { await apiRequest('/api/v1/auth/logout', { method: 'POST' }); } catch {}
-    setAuthToken('');
-    state.customer = null;
-    state.savedAddresses = [];
+  $('#logoutButton')?.addEventListener('click', () => {
+    clearCustomerSessionImmediately();
     updateAccountButton();
     closeAccount();
     renderCart();
