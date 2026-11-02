@@ -1736,7 +1736,20 @@
     });
 
     userLogout?.addEventListener('click', () => {
+      const tokenToRevoke = authToken;
       setAuthToken('');
+      if (tokenToRevoke) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        void fetch(API_URL + '/api/v1/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + tokenToRevoke },
+          signal: controller.signal,
+          keepalive: true
+        }).catch(() => {
+          console.warn('Customer session revocation could not be confirmed; local credentials were cleared.');
+        }).finally(() => clearTimeout(timeout));
+      }
       state.customer = null;
       state.addressDraft.name = '';
       state.addressDraft.phone = '';
