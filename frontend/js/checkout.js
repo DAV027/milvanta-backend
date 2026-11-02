@@ -1103,6 +1103,8 @@
     $('#payRazorpayBtn')?.addEventListener('click', onPayButtonClick);
     const unresolved = getPendingOrderPayment();
     if (unresolved) {
+      const payBtn = $('#payRazorpayBtn');
+      const errEl = $('#checkoutErrorMessage');
       if (payBtn) payBtn.textContent = 'Check Payment Status (no new charge)';
       if (errEl) errEl.textContent = 'A prior payment attempt needs confirmation. Check its status instead of paying again.';
     }
@@ -1500,6 +1502,10 @@
       } catch (orderErr) {
         state.isPaymentProcessing = false;
         console.error('Order creation failed:', orderErr);
+        if (orderErr.status === 401) {
+          showLoginRequired();
+          return;
+        }
         if (errEl) errEl.textContent = orderErr.message || 'Unable to place order. Please review your cart and try again.';
         if (payBtn) {
           payBtn.disabled = false;
