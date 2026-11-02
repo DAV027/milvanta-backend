@@ -2118,6 +2118,14 @@
       // Keep admin sessions independent of the customer storefront.
       const ADMIN_TOKEN_KEY = 'milvanta-admin-token';
       let currentToken = sessionStorage.getItem(ADMIN_TOKEN_KEY) || '';
+      // Upgrade older sessions that stored one admin bearer token in both slots.
+      // Never delete an independent customer token.
+      try {
+        const legacySharedToken = sessionStorage.getItem('milvanta-auth-token');
+        if (currentToken && legacySharedToken === currentToken) {
+          sessionStorage.removeItem('milvanta-auth-token');
+        }
+      } catch (_) {}
       let adminLoginInFlight = false;
       let adminLoginController = null;
       const ADMIN_LOGIN_TIMEOUT_MS = 60000;
