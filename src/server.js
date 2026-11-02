@@ -3089,6 +3089,11 @@ app.post('/api/v1/orders', {
   config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
 }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  // A production checkout must never reserve stock or create an order that
+  // cannot be paid through the configured gateway.
+  if (process.env.NODE_ENV === 'production' && (!razorpay || !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET)) {
+    return reply.code(503).send({ error: 'payments_not_configured', message: 'Secure payments are temporarily unavailable. Please contact support.' });
+  }
   if (isPhoneVerificationMandatory() && !request.customer?.phone_verified_at) {
     return reply.code(403).send({
       error: 'phone_verification_required',
