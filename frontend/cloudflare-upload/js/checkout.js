@@ -20,7 +20,8 @@
   const $$ = (selector) => document.querySelectorAll(selector);
 
   const API_URL = (window.MILVANTA_API_URL || 'https://milvanta-backend.onrender.com').replace(/\/$/, '');
-  const RAZORPAY_KEY = window.RAZORPAY_KEY_ID || 'rzp_test_TMT4s342RfwceX';
+  const isProdHost = ['milvanta.in', 'www.milvanta.in'].includes((window.location.hostname || '').toLowerCase());
+  const RAZORPAY_KEY = window.RAZORPAY_KEY_ID || (isProdHost ? '' : 'rzp_test_TMT4s342RfwceX');
 
   let authToken = (() => {
     try { return sessionStorage.getItem('milvanta-auth-token') || localStorage.getItem('milvanta-auth-token') || ''; } catch { return ''; }
