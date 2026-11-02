@@ -3709,19 +3709,27 @@
     $('#policyModal')?.classList.add('hidden');
   }
 
-  // Logout User
-  async function logoutUser() {
-    try {
-      await apiRequest('/api/v1/auth/logout', { method: 'POST' });
-    } catch {}
+  // Clear the customer session immediately; do not block the UI on a sleeping backend.
+  function logoutUser() {
+    const tokenToRevoke = authToken;
     setAuthToken('');
-    try {
-      localStorage.removeItem('milvanta-user');
-    } catch {}
-    showToast('Logged out successfully.');
-    setTimeout(() => {
-      window.location.href = 'index.html';
-    }, 700);
+    try { localStorage.removeItem('milvanta-user'); } catch {}
+
+    if (tokenToRevoke) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      void fetch(API_URL + '/api/v1/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + tokenToRevoke },
+        signal: controller.signal,
+        keepalive: true
+      }).catch(() => {
+        console.warn('Customer session revocation could not be confirmed; local credentials were cleared.');
+      }).finally(() => clearTimeout(timeout));
+    }
+
+    showToast('Signed out.');
+    window.location.href = 'index.html';
   }
 
   // ==========================================
