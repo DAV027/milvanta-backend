@@ -85,21 +85,25 @@ export function validateDeliveryTargetDate(targetDateYMD = null, options = {}) {
  */
 export function extractValidDeliveryAddress(sub, defaultAddrRow, latestOrderAddrRow) {
   let candidate = null;
-  if (defaultAddrRow && typeof defaultAddrRow === 'object') {
+  const subNotes = typeof sub?.notes === 'object' && sub?.notes !== null ? sub.notes : {};
+
+  // 1. Explicit subscription delivery address has highest priority (prevents silent replacement by default address)
+  if (sub?.delivery_address && typeof sub.delivery_address === 'object') {
+    candidate = sub.delivery_address;
+  } else if (subNotes.deliveryAddress && typeof subNotes.deliveryAddress === 'object') {
+    candidate = subNotes.deliveryAddress;
+  } else if (subNotes.address && typeof subNotes.address === 'object') {
+    candidate = subNotes.address;
+  } else if (defaultAddrRow && typeof defaultAddrRow === 'object') {
+    // 2. Customer default saved address fallback
     candidate = defaultAddrRow;
-  } else {
-    const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-    if (subNotes.deliveryAddress && typeof subNotes.deliveryAddress === 'object') {
-      candidate = subNotes.deliveryAddress;
-    } else if (subNotes.address && typeof subNotes.address === 'object') {
-      candidate = subNotes.address;
-    } else if (latestOrderAddrRow?.address) {
-      const parsed = typeof latestOrderAddrRow.address === 'string'
-        ? (() => { try { return JSON.parse(latestOrderAddrRow.address); } catch { return null; } })()
-        : latestOrderAddrRow.address;
-      if (parsed && typeof parsed === 'object') {
-        candidate = parsed;
-      }
+  } else if (latestOrderAddrRow?.address) {
+    // 3. Historical customer order address snapshot fallback
+    const parsed = typeof latestOrderAddrRow.address === 'string'
+      ? (() => { try { return JSON.parse(latestOrderAddrRow.address); } catch { return null; } })()
+      : latestOrderAddrRow.address;
+    if (parsed && typeof parsed === 'object') {
+      candidate = parsed;
     }
   }
 
@@ -599,7 +603,7 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     status = orderIdOrParams.status;
     actor = orderIdOrParams.actor || 'driver';
     notes = orderIdOrParams.notes || orderIdOrParams.driverNotes || null;
-    reason = orderIdOrParams.reason || orderIdOrParams.failedReason || null;
+    reason = orderIdOrParams.reason || orderIdOrParams.failureReason || orderIdOrParams.failedReason || null;
   } else {
     deliveryOrderId = orderIdOrParams;
     status = maybeStatus;
@@ -642,20 +646,28 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     let dispatchedAt = order.dispatched_at;
     let deliveredAt = order.delivered_at;
     let failedReason = order.failed_reason;
+    let deliveredBy = order.delivered_by;
+    let failedBy = order.failed_by;
+    const proofOfDelivery = (orderIdOrParams && typeof orderIdOrParams === 'object' ? orderIdOrParams.proofOfDelivery : options.proofOfDelivery) || null;
 
     if (status === 'out_for_delivery') {
       dispatchedAt = new Date();
     } else if (status === 'delivered') {
       deliveredAt = new Date();
+      deliveredBy = actor;
     } else if (status === 'failed') {
       failedReason = reason || 'Delivery failed / customer unreachable';
+      failedBy = actor;
     }
 
     await client.query(
       `UPDATE subscription_delivery_orders 
-       SET status = $2, dispatched_at = $3, delivered_at = $4, failed_reason = $5, driver_notes = COALESCE($6, driver_notes), updated_at = NOW()
+       SET status = $2, dispatched_at = $3, delivered_at = $4, failed_reason = $5,
+           driver_notes = COALESCE($6, driver_notes), delivered_by = COALESCE($7, delivered_by),
+           failed_by = COALESCE($8, failed_by), proof_of_delivery = COALESCE($9, proof_of_delivery),
+           updated_at = NOW()
        WHERE id = $1`,
-      [deliveryOrderId, status, dispatchedAt, deliveredAt, failedReason, notes]
+      [deliveryOrderId, status, dispatchedAt, deliveredAt, failedReason, notes, deliveredBy, failedBy, proofOfDelivery]
     );
 
     // Record audit event
@@ -667,17 +679,24 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
         order.customer_id,
         `delivery_${status}`,
         actor,
-        JSON.stringify({ deliveryOrderId, previousStatus: order.status, newStatus: status, notes, reason })
+        JSON.stringify({ deliveryOrderId, previousStatus: order.status, newStatus: status, notes, reason, proofOfDelivery })
       ]
     );
 
     if (status === 'delivered' && order.subscription_id) {
-      await client.query(
-        `INSERT INTO subscription_entitlement_ledger (
-          subscription_id, customer_id, entry_type, days_delta, amount_paise, delivery_date, notes
-        ) VALUES ($1, $2, 'delivery_fulfilled', -1, $3, $4, $5)`,
-        [order.subscription_id, order.customer_id, order.cost_paise || 0, order.delivery_date, `Delivery fulfilled: ${order.delivery_order_number}`]
+      const { rows: existingLedger } = await client.query(
+        `SELECT id FROM subscription_entitlement_ledger 
+         WHERE subscription_id = $1 AND delivery_date = $2 AND entry_type = 'delivery_fulfilled'`,
+        [order.subscription_id, order.delivery_date]
       );
+      if (existingLedger.length === 0) {
+        await client.query(
+          `INSERT INTO subscription_entitlement_ledger (
+            subscription_id, customer_id, entry_type, days_delta, amount_paise, delivery_date, notes
+          ) VALUES ($1, $2, 'delivery_fulfilled', -1, $3, $4, $5)`,
+          [order.subscription_id, order.customer_id, order.cost_paise || 0, order.delivery_date, `Delivery fulfilled: ${order.delivery_order_number}`]
+        );
+      }
     }
 
     // Queue fulfillment notifications atomically with the transition

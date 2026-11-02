@@ -45,7 +45,9 @@ import {
   isDeliveryCutoffPassed,
   derivePaidThroughDate,
   getEffectivePaidThroughDate,
-  formatDateYMD
+  formatDateYMD,
+  resolveSubscriptionDeliveryAddress,
+  normalizeDeliveryAddress
 } from './services/subscriptionService.js';
 import {
   calculateOrderRefundEligibility,
@@ -989,13 +991,54 @@ app.get('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reques
   const { rows } = await pool.query(
     `SELECT id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
             cost_per_day_paise, plan_type, duration_label, total_amount_paise, razorpay_subscription_id,
-            notes, status, next_delivery, created_at, updated_at
+            notes, status, next_delivery, address_id, delivery_address, created_at, updated_at
      FROM customer_subscriptions
      WHERE customer_id = $1 AND status != 'cancelled'
      ORDER BY created_at DESC`,
     [request.customer.id]
   );
-  return { subscriptions: rows };
+
+  const enriched = await Promise.all(
+    rows.map(async (sub) => {
+      let resolvedAddress = null;
+      let lastDelivery = null;
+      let deliveredCount = 0;
+      let effectivePaidThrough = null;
+      let nextEligible = null;
+
+      try {
+        resolvedAddress = await resolveSubscriptionDeliveryAddress(pool, { ...sub, customer_id: request.customer.id });
+        effectivePaidThrough = await getEffectivePaidThroughDate(pool, sub);
+        nextEligible = await calculateNextDeliveryDate(pool, sub.id);
+
+        const { rows: deliveryStats } = await pool.query(
+          `SELECT status, delivery_date, delivered_at, failed_reason
+           FROM subscription_delivery_orders
+           WHERE subscription_id = $1
+           ORDER BY delivery_date DESC`,
+          [sub.id]
+        );
+        if (deliveryStats.length > 0) {
+          lastDelivery = deliveryStats[0];
+          deliveredCount = deliveryStats.filter(d => d.status === 'delivered').length;
+        }
+      } catch (_) {}
+
+      return {
+        ...sub,
+        delivery_address: resolvedAddress,
+        effective_paid_through_date: effectivePaidThrough,
+        next_eligible_delivery: nextEligible,
+        last_delivery_status: lastDelivery?.status || null,
+        last_delivered_at: lastDelivery?.delivered_at || null,
+        last_delivery_date: lastDelivery?.delivery_date || null,
+        failed_reason: lastDelivery?.status === 'failed' ? lastDelivery.failed_reason : null,
+        delivered_count: deliveredCount
+      };
+    })
+  );
+
+  return { subscriptions: enriched };
 });
 
 app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (request, reply) => {
@@ -2780,7 +2823,19 @@ app.post('/api/v1/subscriptions/:id/pause', { preHandler: app.authenticate }, as
   if (!result.success) {
     return reply.code(result.statusCode || 400).send(result);
   }
-  return reply.send(result);
+
+  const { rows: [deliveryRow] } = await pool.query(
+    'SELECT * FROM subscription_delivery_orders WHERE id = $1',
+    [deliveryOrderId]
+  );
+  if (deliveryRow && deliveryRow.failed_reason) {
+    deliveryRow.failure_reason = deliveryRow.failed_reason;
+  }
+
+  return reply.send({
+    ...result,
+    delivery: deliveryRow
+  });
 });
 
 app.post('/api/v1/subscriptions/:id/resume', { preHandler: app.authenticate }, async (request, reply) => {
@@ -2796,7 +2851,16 @@ app.post('/api/v1/subscriptions/:id/resume', { preHandler: app.authenticate }, a
   if (!result.success) {
     return reply.code(result.statusCode || 400).send(result);
   }
-  return reply.send(result);
+
+  const { rows: [deliveryRow] } = await pool.query(
+    'SELECT * FROM subscription_delivery_orders WHERE id = $1',
+    [deliveryOrderId]
+  );
+
+  return reply.send({
+    ...result,
+    delivery: deliveryRow
+  });
 });
 
 app.post('/api/v1/subscriptions/:id/skip-date', { preHandler: app.authenticate }, async (request, reply) => {
@@ -3668,8 +3732,10 @@ app.get('/api/v1/admin/subscriptions', { preHandler: app.requireAdmin }, async (
       } catch (e) {
         // Safe fallback
       }
+      const deliveryAddress = await resolveSubscriptionDeliveryAddress(pool, sub);
       return {
         ...sub,
+        delivery_address: deliveryAddress,
         effective_paid_through_date: paidThrough,
         next_eligible_delivery: nextEligible,
         remaining_eligible_days: remainingDays
@@ -3841,9 +3907,11 @@ app.get('/api/v1/admin/subscriptions/:id/details', { preHandler: app.requireAdmi
     [subId]
   );
 
+  const resolvedDeliveryAddress = await resolveSubscriptionDeliveryAddress(pool, sub);
   return reply.send({
     subscription: {
       ...sub,
+      delivery_address: resolvedDeliveryAddress,
       effective_paid_through_date: paidThrough,
       next_eligible_delivery: nextEligible
     },
@@ -4281,34 +4349,111 @@ app.get('/api/v1/admin/customers/:id/details', { preHandler: app.requireAdmin },
     [customerId]
   );
 
-  const addresses = [];
-  const seenAddr = new Set();
+  // 1. Authoritative saved addresses from customer_addresses table
+  const { rows: savedAddresses } = await pool.query(
+    `SELECT id, recipient_name, phone, house, building, street, landmark, city, state, pincode, is_default, created_at, updated_at
+     FROM customer_addresses
+     WHERE customer_id = $1
+     ORDER BY is_default DESC, updated_at DESC`,
+    [customerId]
+  );
+
+  // 2. Customer delivery history
+  const { rows: deliveryHistory } = await pool.query(
+    `SELECT id, delivery_order_number, subscription_id, delivery_date, product_name, quantity, status,
+            dispatched_at, delivered_at, failed_reason, delivered_by, failed_by, delivery_address, created_at
+     FROM subscription_delivery_orders
+     WHERE customer_id = $1
+     ORDER BY delivery_date DESC LIMIT 50`,
+    [customerId]
+  );
+
+  // 3. Combined address history (saved addresses + order/subscription snapshots)
+  const addresses = savedAddresses.map(a => ({
+    ...normalizeDeliveryAddress(a, a.recipient_name, a.phone, a.is_default ? 'customer_default' : 'customer_saved'),
+    id: a.id,
+    is_default: a.is_default,
+    is_saved: true,
+    created_at: a.created_at,
+    updated_at: a.updated_at
+  }));
+  const seenKeys = new Set(addresses.map(a => `${(a.street || '').toLowerCase()}-${a.pincode}`));
+
   for (const o of orders) {
     if (o.address && typeof o.address === 'object') {
-      const key = `${o.address.street || ''}-${o.address.pincode || ''}`;
-      if (!seenAddr.has(key)) {
-        seenAddr.add(key);
-        addresses.push(o.address);
-      }
-    }
-  }
-  for (const s of subscriptions) {
-    const addr = s.notes?.address || s.notes?.deliveryAddress;
-    if (addr && typeof addr === 'object') {
-      const key = `${addr.street || ''}-${addr.pincode || ''}`;
-      if (!seenAddr.has(key)) {
-        seenAddr.add(key);
-        addresses.push(addr);
+      const norm = normalizeDeliveryAddress(o.address, customer.full_name, customer.phone, 'order_snapshot');
+      const key = `${(norm.street || '').toLowerCase()}-${norm.pincode}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        addresses.push({
+          ...norm,
+          id: null,
+          is_default: false,
+          is_saved: false,
+          order_number: o.order_number,
+          created_at: o.created_at
+        });
       }
     }
   }
 
+  for (const s of subscriptions) {
+    const addr = s.notes?.address || s.notes?.deliveryAddress;
+    if (addr && typeof addr === 'object') {
+      const norm = normalizeDeliveryAddress(addr, customer.full_name, customer.phone, 'subscription_notes');
+      const key = `${(norm.street || '').toLowerCase()}-${norm.pincode}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        addresses.push({
+          ...norm,
+          id: null,
+          is_default: false,
+          is_saved: false,
+          subscription_id: s.id,
+          created_at: s.created_at
+        });
+      }
+    }
+  }
+
+  // 4. Financial & fulfillment summary
+  const totalOrdersAmountPaise = orders
+    .filter(o => o.payment_status === 'paid')
+    .reduce((sum, o) => sum + (Number(o.total_paise) || 0), 0);
+  const totalSubAmountPaise = subscriptions
+    .reduce((sum, s) => sum + (Number(s.total_amount_paise) || 0), 0);
+  const totalRefundedPaise = refunds
+    .filter(r => r.status === 'processed' || r.status === 'approved')
+    .reduce((sum, r) => sum + (Number(r.approved_amount_paise || r.requested_amount_paise) || 0), 0);
+  const deliveredCount = deliveryHistory.filter(d => d.status === 'delivered').length;
+  const failedCount = deliveryHistory.filter(d => d.status === 'failed').length;
+
+  const paymentSummary = {
+    verifiedCapturedPaise: totalOrdersAmountPaise + totalSubAmountPaise,
+    orderSpendingPaise: totalOrdersAmountPaise,
+    approvedRefundsPaise: totalRefundedPaise,
+    total_orders_paid_paise: totalOrdersAmountPaise,
+    total_subscription_contract_paise: totalSubAmountPaise,
+    total_refunded_paise: totalRefundedPaise,
+    net_paid_paise: Math.max(0, (totalOrdersAmountPaise + totalSubAmountPaise) - totalRefundedPaise),
+    total_orders_count: orders.length,
+    paid_orders_count: orders.filter(o => o.payment_status === 'paid').length,
+    total_subscriptions_count: subscriptions.length,
+    active_subscriptions_count: subscriptions.filter(s => s.status === 'active').length,
+    total_deliveries_count: deliveryHistory.length,
+    delivered_deliveries_count: deliveredCount,
+    failed_deliveries_count: failedCount
+  };
+
   return reply.send({
     customer,
+    savedAddresses,
     addresses,
     orders,
     subscriptions,
-    refunds
+    refunds,
+    deliveryHistory,
+    paymentSummary
   });
 });
 
@@ -5176,6 +5321,424 @@ app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.auth
   return reply.send(result);
 });
 
+// ---------- Admin Inventory & Store Products Management ----------
+app.get('/api/v1/admin/inventory', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { category, search, low_stock } = request.query || {};
+
+  let query = `
+    SELECT id, name, description, category, price_paise, selling_unit, image_url,
+           stock_quantity, reserved_stock,
+           GREATEST(0, stock_quantity - reserved_stock) AS available_stock,
+           low_stock_threshold,
+           ((stock_quantity - reserved_stock) <= low_stock_threshold) AS is_low_stock,
+           active, created_at, updated_at
+    FROM products
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (category && category !== 'all') {
+    params.push(category);
+    query += ' AND category = $' + params.length;
+  }
+  if (search && search.trim()) {
+    params.push('%' + search.trim().toLowerCase() + '%');
+    query += ' AND (LOWER(name) LIKE $' + params.length + ' OR LOWER(description) LIKE $' + params.length + ')';
+  }
+  if (low_stock === 'true' || low_stock === true) {
+    query += ' AND ((stock_quantity - reserved_stock) <= low_stock_threshold)';
+  }
+  query += ' ORDER BY id ASC';
+
+  const { rows: products } = await pool.query(query, params);
+
+  // Separate milk requirements
+  const todayYMD = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  const tomorrowYMD = getTomorrowDeliveryDateYMD();
+
+  async function getDayMilkDemand(targetDate) {
+    const { rows: demandRows } = await pool.query(`
+      SELECT sdo.product_name, sdo.quantity
+      FROM subscription_delivery_orders sdo
+      WHERE sdo.delivery_date = $1 AND sdo.status != 'cancelled'
+    `, [targetDate]);
+
+    let cowLitres = 0;
+    let buffaloLitres = 0;
+
+    for (const r of demandRows) {
+      const name = (r.product_name || '').toLowerCase();
+      const qtyStr = (r.quantity || '').toLowerCase();
+      let litres = 0;
+      if (qtyStr.includes('500ml')) litres = 0.5;
+      else if (qtyStr.includes('1.5l')) litres = 1.5;
+      else if (qtyStr.includes('2l')) litres = 2.0;
+      else if (qtyStr.includes('1l') || qtyStr.includes('litre')) litres = 1.0;
+      else {
+        const num = parseFloat(qtyStr);
+        litres = isNaN(num) ? 1.0 : num;
+      }
+
+      if (name.includes('cow')) {
+        cowLitres += litres;
+      } else if (name.includes('buffalo')) {
+        buffaloLitres += litres;
+      }
+    }
+    return { cowLitres, buffaloLitres, totalLitres: cowLitres + buffaloLitres };
+  }
+
+  const [todayDemand, tomorrowDemand] = await Promise.all([
+    getDayMilkDemand(todayYMD),
+    getDayMilkDemand(tomorrowYMD)
+  ]);
+
+  return reply.send({
+    products: products.map(p => ({
+      ...p,
+      price: Number(p.price_paise) / 100,
+      stock_quantity: Number(p.stock_quantity),
+      reserved_stock: Number(p.reserved_stock),
+      available_stock: Number(p.available_stock),
+      low_stock_threshold: Number(p.low_stock_threshold),
+      is_low_stock: Boolean(p.is_low_stock)
+    })),
+    milkRequirements: {
+      today: todayDemand,
+      tomorrow: tomorrowDemand
+    }
+  });
+});
+
+app.post('/api/v1/admin/products', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const {
+    name,
+    description = '',
+    category,
+    price_paise,
+    price,
+    selling_unit,
+    image_url,
+    stock_quantity = 0,
+    low_stock_threshold = 5,
+    active = true
+  } = request.body || {};
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return reply.code(400).send({ error: 'invalid_product_name', message: 'Product name is required (minimum 2 characters).' });
+  }
+  if (!category || typeof category !== 'string' || !category.trim()) {
+    return reply.code(400).send({ error: 'invalid_category', message: 'Category is required.' });
+  }
+  if (!selling_unit || typeof selling_unit !== 'string' || !selling_unit.trim()) {
+    return reply.code(400).send({ error: 'invalid_selling_unit', message: 'Selling unit is required (e.g. 500g, 1 Litre).' });
+  }
+
+  let finalPricePaise = 0;
+  if (price_paise !== undefined && Number.isInteger(Number(price_paise))) {
+    finalPricePaise = Number(price_paise);
+  } else if (price !== undefined && !isNaN(Number(price))) {
+    finalPricePaise = Math.round(Number(price) * 100);
+  } else {
+    return reply.code(400).send({ error: 'invalid_price', message: 'Price is required and must be a positive number.' });
+  }
+
+  if (finalPricePaise < 0) {
+    return reply.code(400).send({ error: 'invalid_price', message: 'Price cannot be negative.' });
+  }
+
+  const stockQty = Math.max(0, parseInt(stock_quantity, 10) || 0);
+  const lowStock = Math.max(0, parseInt(low_stock_threshold, 10) || 5);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows } = await client.query(
+      `INSERT INTO products (
+         name, description, category, price_paise, selling_unit, image_url,
+         stock_quantity, reserved_stock, low_stock_threshold, active
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9)
+       RETURNING *`,
+      [
+        name.trim(),
+        description.trim(),
+        category.trim(),
+        finalPricePaise,
+        selling_unit.trim(),
+        image_url || 'assets/milvanta-cow-milk.jpg',
+        stockQty,
+        lowStock,
+        Boolean(active)
+      ]
+    );
+    const createdProduct = rows[0];
+
+    if (stockQty > 0) {
+      const adminActor = request.customer?.full_name || request.customer?.email || 'admin';
+      await client.query(
+        `INSERT INTO product_stock_ledger (
+           product_id, adjustment_type, quantity_change, previous_stock, new_stock,
+           previous_reserved, new_reserved, reason, admin_actor
+         ) VALUES ($1, 'restock', $2, 0, $2, 0, 0, 'Initial product creation inventory', $3)`,
+        [createdProduct.id, stockQty, adminActor]
+      );
+    }
+
+    await client.query('COMMIT');
+    return reply.code(201).send({
+      success: true,
+      product: {
+        ...createdProduct,
+        price: Number(createdProduct.price_paise) / 100,
+        available_stock: Number(createdProduct.stock_quantity) - Number(createdProduct.reserved_stock)
+      }
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    request.log.error(err);
+    return reply.code(500).send({ error: 'create_product_failed', message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/api/v1/admin/products/:id', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const productId = Number(request.params.id);
+  if (!Number.isSafeInteger(productId) || productId <= 0) {
+    return reply.code(400).send({ error: 'invalid_product_id' });
+  }
+
+  const { name, description, category, price_paise, price, selling_unit, image_url, low_stock_threshold, active, is_active } = request.body || {};
+
+  const updates = [];
+  const params = [productId];
+
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim().length < 2) {
+      return reply.code(400).send({ error: 'invalid_product_name' });
+    }
+    params.push(name.trim());
+    updates.push('name = $' + params.length);
+  }
+
+  if (description !== undefined) {
+    params.push(String(description).trim());
+    updates.push('description = $' + params.length);
+  }
+
+  if (category !== undefined) {
+    if (typeof category !== 'string' || !category.trim()) {
+      return reply.code(400).send({ error: 'invalid_category' });
+    }
+    params.push(category.trim());
+    updates.push('category = $' + params.length);
+  }
+
+  if (price_paise !== undefined && Number.isInteger(Number(price_paise))) {
+    const val = Number(price_paise);
+    if (val < 0) return reply.code(400).send({ error: 'invalid_price' });
+    params.push(val);
+    updates.push('price_paise = $' + params.length);
+  } else if (price !== undefined && !isNaN(Number(price))) {
+    const val = Math.round(Number(price) * 100);
+    if (val < 0) return reply.code(400).send({ error: 'invalid_price' });
+    params.push(val);
+    updates.push('price_paise = $' + params.length);
+  }
+
+  if (selling_unit !== undefined) {
+    if (typeof selling_unit !== 'string' || !selling_unit.trim()) {
+      return reply.code(400).send({ error: 'invalid_selling_unit' });
+    }
+    params.push(selling_unit.trim());
+    updates.push('selling_unit = $' + params.length);
+  }
+
+  if (image_url !== undefined) {
+    params.push(String(image_url).trim());
+    updates.push('image_url = $' + params.length);
+  }
+
+  if (low_stock_threshold !== undefined) {
+    const thresh = parseInt(low_stock_threshold, 10);
+    if (isNaN(thresh) || thresh < 0) {
+      return reply.code(400).send({ error: 'invalid_threshold' });
+    }
+    params.push(thresh);
+    updates.push('low_stock_threshold = $' + params.length);
+  }
+
+  const activeVal = active !== undefined ? active : is_active;
+  if (activeVal !== undefined) {
+    params.push(Boolean(activeVal));
+    updates.push('active = $' + params.length);
+  }
+
+  if (updates.length === 0) {
+    return reply.code(400).send({ error: 'no_updates_provided' });
+  }
+
+  updates.push('updated_at = NOW()');
+  const query = `UPDATE products SET ${updates.join(', ')} WHERE id = $1 RETURNING *`;
+  const { rows } = await pool.query(query, params);
+  if (!rows[0]) {
+    return reply.code(404).send({ error: 'product_not_found' });
+  }
+
+  const updated = rows[0];
+  return reply.send({
+    success: true,
+    product: {
+      ...updated,
+      price: (Number(updated.price_paise) / 100).toFixed(2),
+      available_stock: Number(updated.stock_quantity) - Number(updated.reserved_stock)
+    }
+  });
+});
+
+app.post('/api/v1/admin/inventory/:productId/adjust', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const productId = Number(request.params.productId);
+  if (!Number.isSafeInteger(productId) || productId <= 0) {
+    return reply.code(400).send({ error: 'invalid_product_id' });
+  }
+
+  const body = request.body || {};
+  const adjustment_type = body.adjustment_type || body.adjustmentType;
+  const quantity_change = body.quantity_change !== undefined ? body.quantity_change : body.quantityChange;
+  const reason = body.reason;
+
+  const validTypes = ['restock', 'correction', 'damage', 'loss', 'return'];
+
+  if (!adjustment_type || !validTypes.includes(adjustment_type)) {
+    return reply.code(400).send({
+      error: 'invalid_adjustment_type',
+      message: `Adjustment type must be one of: ${validTypes.join(', ')}`
+    });
+  }
+
+  const qtyChange = Number(quantity_change);
+  if (!Number.isInteger(qtyChange) || qtyChange === 0) {
+    return reply.code(400).send({
+      error: 'invalid_quantity_change',
+      message: 'quantity_change must be a non-zero integer.'
+    });
+  }
+
+  if (!reason || typeof reason !== 'string' || !reason.trim()) {
+    return reply.code(400).send({
+      error: 'reason_required',
+      message: 'An operational reason is required for any stock adjustment.'
+    });
+  }
+
+  const adminActor = request.customer?.full_name || request.customer?.email || 'admin';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: prodRows } = await client.query(
+      'SELECT id, name, stock_quantity, reserved_stock FROM products WHERE id = $1 FOR UPDATE',
+      [productId]
+    );
+    if (!prodRows[0]) {
+      await client.query('ROLLBACK');
+      return reply.code(404).send({ error: 'product_not_found' });
+    }
+
+    const prod = prodRows[0];
+    const prevStock = Number(prod.stock_quantity);
+    const prevReserved = Number(prod.reserved_stock);
+    const newStock = prevStock + qtyChange;
+
+    if (newStock < 0) {
+      await client.query('ROLLBACK');
+      return reply.code(400).send({
+        error: 'insufficient_stock',
+        message: `Adjustment would reduce stock below 0. Current stock: ${prevStock}, change requested: ${qtyChange}.`
+      });
+    }
+
+    if (newStock < prevReserved) {
+      await client.query('ROLLBACK');
+      return reply.code(400).send({
+        error: `Adjustment would reduce stock below currently reserved stock (${prevReserved} units). Available stock cannot be less than reserved stock.`,
+        message: `Adjustment would reduce stock below currently reserved stock (${prevReserved} units). Available stock cannot be less than reserved stock.`
+      });
+    }
+
+    const { rows: updatedRows } = await client.query(
+      'UPDATE products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [newStock, productId]
+    );
+    const updatedProd = updatedRows[0];
+
+    const { rows: ledgerRows } = await client.query(
+      `INSERT INTO product_stock_ledger (
+         product_id, adjustment_type, quantity_change, previous_stock, new_stock,
+         previous_reserved, new_reserved, reason, admin_actor
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [
+        productId,
+        adjustment_type,
+        qtyChange,
+        prevStock,
+        newStock,
+        prevReserved,
+        prevReserved,
+        reason.trim(),
+        adminActor
+      ]
+    );
+
+    await client.query('COMMIT');
+    return reply.send({
+      success: true,
+      product: {
+        ...updatedProd,
+        price: Number(updatedProd.price_paise) / 100,
+        available_stock: Number(updatedProd.stock_quantity) - Number(updatedProd.reserved_stock)
+      },
+      ledger_entry: ledgerRows[0]
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    request.log.error(err);
+    return reply.code(500).send({ error: 'stock_adjustment_failed', message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/v1/admin/inventory/:productId/history', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const productId = Number(request.params.productId);
+  if (!Number.isSafeInteger(productId) || productId <= 0) {
+    return reply.code(400).send({ error: 'invalid_product_id' });
+  }
+
+  const { rows: prodRows } = await pool.query(
+    'SELECT id, name, category, stock_quantity, reserved_stock FROM products WHERE id = $1',
+    [productId]
+  );
+  if (!prodRows[0]) return reply.code(404).send({ error: 'product_not_found' });
+
+  const { rows: history } = await pool.query(
+    'SELECT * FROM product_stock_ledger WHERE product_id = $1 ORDER BY created_at DESC LIMIT 100',
+    [productId]
+  );
+
+  return reply.send({
+    product: prodRows[0],
+    history
+  });
+});
+
 // ---------- Internal Operations & Dispatch APIs (Admin Protected) ----------
 app.get('/api/v1/operations/deliveries', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
@@ -5290,19 +5853,31 @@ app.post('/api/v1/operations/deliveries/:id/status', { preHandler: app.requireAd
     return reply.code(400).send({ error: 'invalid_delivery_order_id' });
   }
 
-  const { status, actor, notes, reason } = request.body || {};
+  const { status, notes, reason, failureReason, proofOfDelivery } = request.body || {};
+  const adminName = request.customer?.full_name || request.customer?.email || 'Admin';
+  const adminId = request.customer?.id ? ` #${request.customer.id}` : '';
+  const authoritativeActor = `${adminName}${adminId}`;
+
   const result = await updateDeliveryStatus(pool, {
     deliveryOrderId,
     status,
-    actor: actor || 'admin',
+    actor: authoritativeActor,
     notes,
-    reason
+    reason: reason || failureReason,
+    proofOfDelivery
   });
 
   if (!result.success) {
     return reply.code(result.statusCode || 400).send(result);
   }
-  return reply.send(result);
+  const { rows: [deliveryRow] } = await pool.query(
+    'SELECT * FROM subscription_delivery_orders WHERE id = $1',
+    [deliveryOrderId]
+  );
+  return reply.send({
+    ...result,
+    delivery: deliveryRow
+  });
 });
 
 app.post('/api/v1/operations/notifications/process', { preHandler: app.requireAdmin }, async (request, reply) => {
