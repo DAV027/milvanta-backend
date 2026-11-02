@@ -158,7 +158,16 @@
     },
     isSubmitting: false,
     isPaymentProcessing: false,
-    checkoutKey: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('mv-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8))
+    checkoutKey: (() => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        try { return crypto.randomUUID(); } catch {}
+      }
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    })()
   };
 
   // API Helper
@@ -473,25 +482,9 @@
         }
       }
     } catch {}
-
-    // Fallback default address matching profile page
-    state.savedAddresses = [
-      {
-        id: 1,
-        is_default: true,
-        name: state.addressDraft.name || 'Akhil',
-        phone: state.addressDraft.phone || '6305974564',
-        house: 'Flat 402, Greenwood Heights',
-        building: 'Greenwood Heights',
-        street: 'Madhapur Main Road, Near Cyber Towers',
-        landmark: 'Near Cyber Towers',
-        city: 'Hyderabad',
-        state: 'Telangana',
-        pincode: '500081'
-      }
-    ];
-    state.selectedAddressId = 1;
-    applySavedAddressToDraft(state.savedAddresses[0]);
+    // No saved addresses for this customer: reset to clean state without invented defaults
+    state.savedAddresses = [];
+    state.selectedAddressId = null;
   }
 
   function applySavedAddressToDraft(addr) {
@@ -931,9 +924,16 @@
   const PENDING_ORDER_PAYMENT_KEY = 'milvanta-pending-order-payment';
   function getPendingOrderPayment() {
     try {
-      const p = JSON.parse(sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) || 'null');
+      const customerId = state.customer?.id;
+      if (!customerId) return null;
+      let raw = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY);
+      if (!raw) {
+        raw = localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + customerId);
+      }
+      if (!raw) return null;
+      const p = JSON.parse(raw);
       if (!p || typeof p.orderNumber !== 'string' || typeof p.paymentId !== 'string' || !p.orderNumber || !p.paymentId) return null;
-      if (String(p.customerId || '') !== String(state.customer?.id || '')) return null;
+      if (String(p.customerId || '') !== String(customerId)) return null;
       return p;
     } catch { return null; }
   }
@@ -944,11 +944,46 @@
     state.isPaymentProcessing = true;
     if (payBtn) { payBtn.disabled = true; payBtn.textContent = 'Checking payment status…'; }
     try {
-      const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
-      if (result?.order?.payment_status !== 'paid') {
+      let orderPaid = false;
+      try {
+        const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
+        if (result?.order?.payment_status === 'paid') {
+          orderPaid = true;
+        }
+      } catch (checkErr) {
+        if (checkErr.status === 401) {
+          showLoginRequired();
+          return;
+        }
+      }
+
+      // If not marked paid in backend yet, but we have signature, attempt verification
+      if (!orderPaid && pending.orderId && pending.paymentId && pending.signature) {
+        try {
+          const verifyRes = await api('/api/v1/payments/verify', {
+            method: 'POST',
+            body: JSON.stringify({
+              razorpay_order_id: pending.orderId,
+              razorpay_payment_id: pending.paymentId,
+              razorpay_signature: pending.signature
+            })
+          });
+          if (verifyRes?.verified && verifyRes.status === 'captured') {
+            orderPaid = true;
+          }
+        } catch (vErr) {
+          if (vErr.status === 401) {
+            showLoginRequired();
+            return;
+          }
+        }
+      }
+
+      if (!orderPaid) {
         if (errEl) errEl.textContent = 'Payment confirmation is still pending. Please contact support with reference ' + pending.paymentId + '. Do not pay again yet.';
         return;
       }
+
       const financials = getOrderFinancials();
       await activateSubscriptionsFromCart(state.cart, {
         paymentId: pending.paymentId,
@@ -957,6 +992,12 @@
         subtotal: financials.subtotal
       });
       sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
+          if (state.customer?.id) {
+            try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id); } catch {}
+          }
+      if (pending.customerId) {
+        try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId); } catch {}
+      }
       showOrderSuccess(pending.orderNumber, false);
     } catch (err) {
       if (err.status === 401) {
@@ -966,7 +1007,8 @@
       if (errEl) errEl.textContent = 'Could not confirm the previous payment yet. Please retry status check or contact support with reference ' + pending.paymentId + '.';
     } finally {
       state.isPaymentProcessing = false;
-      if (payBtn && sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY)) {
+      const stillPending = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) || (pending.customerId && localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId));
+      if (payBtn && stillPending) {
         payBtn.disabled = false;
         payBtn.textContent = 'Check Payment Status (no new charge)';
       }
@@ -1550,12 +1592,18 @@
           const paymentId = response?.razorpay_payment_id;
           if (typeof paymentId === 'string' && paymentId) {
             try {
-              sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, JSON.stringify({
+              const pendingRecord = JSON.stringify({
                 customerId: state.customer?.id,
                 orderNumber: order.orderNumber,
+                orderId: response?.razorpay_order_id || order.orderId,
                 paymentId,
+                signature: response?.razorpay_signature || '',
                 createdAt: Date.now()
-              }));
+              });
+              sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, pendingRecord);
+              if (state.customer?.id) {
+                localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, pendingRecord);
+              }
             } catch {}
           }
 
@@ -1867,9 +1915,21 @@
         }).finally(() => clearTimeout(timeout));
       }
       state.customer = null;
-      state.addressDraft.name = '';
-      state.addressDraft.phone = '';
-      state.addressDraft.email = '';
+      state.addressDraft = {
+        name: '',
+        phone: '',
+        email: '',
+        house: '',
+        building: '',
+        street: '',
+        landmark: '',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500049'
+      };
+      state.savedAddresses = [];
+      state.selectedAddressId = null;
+      sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
       try { localStorage.removeItem('milvanta-user'); } catch {}
       userDropdown?.classList.add('hidden');
       updateAccountButton();

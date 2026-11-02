@@ -3086,7 +3086,7 @@ app.get('/api/v1/delivery/check', async (request, reply) => {
 // ---------- Orders & Checkout ----------
 app.post('/api/v1/orders', {
   preHandler: app.authenticate,
-  config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
+  config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 10000 : 5, timeWindow: '1 minute' } }
 }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   // A production checkout must never reserve stock or create an order that
