@@ -1,0 +1,32 @@
+name: Payment and receipt regression checks
+
+on:
+  pull_request:
+    paths:
+      - 'src/email.js'
+      - 'src/server.js'
+      - 'tests/order-email-subscription-gateway-regression.test.js'
+      - '.github/workflows/payment-receipt-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: |
+          node --check src/email.js
+          node --check src/server.js
+          node --check tests/order-email-subscription-gateway-regression.test.js
+      - name: Test email outbox and Razorpay error handling (no credentials or database)
+        run: node --test tests/order-email-subscription-gateway-regression.test.js
