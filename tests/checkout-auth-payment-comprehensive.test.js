@@ -865,6 +865,130 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
   });
 
   // =========================================================================
+  // PHASE 6B — CAPTURED-PAYMENT RECOVERY AND MISMATCH REGRESSION TESTS
+  // =========================================================================
+  describe('Phase 6B — Razorpay order reconciliation safety', () => {
+    async function createPendingBuffaloOrder() {
+      const orderNumber = 'MV-RECON-' + crypto.randomUUID().slice(0, 15);
+      const gatewayId = 'order_recon_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const { rows: [order] } = await pool.query(
+        `INSERT INTO customer_orders (
+          customer_id, order_number, idempotency_key, address, items,
+          subtotal_paise, delivery_charge_paise, total_paise, razorpay_order_id,
+          payment_status, order_status, reservation_expires_at
+        ) VALUES (
+          $1, $2, $3, '{"pincode":"500049"}'::jsonb, $4::jsonb,
+          7000, 5000, 12000, $5,
+          'pending', 'placed', NOW() + INTERVAL '15 minutes'
+        ) RETURNING id, order_number`,
+        [customerA.id, orderNumber, crypto.randomUUID(),
+          JSON.stringify([{ productId: Number(buffaloMilkProduct.id), quantity: 1 }]), gatewayId]
+      );
+      await pool.query('UPDATE products SET reserved_stock = reserved_stock + 1 WHERE id = $1', [buffaloMilkProduct.id]);
+      await pool.query(
+        `INSERT INTO payment_orders (razorpay_order_id, customer_order_id, amount_paise, currency, items, status)
+         VALUES ($1, $2, 12000, 'INR', '[]'::jsonb, 'created')`,
+        [gatewayId, order.id]
+      );
+      return { ...order, gatewayId };
+    }
+
+    it('recovers a captured ₹120 payment exactly once', async t => {
+      const order = await createPendingBuffaloOrder();
+      const paymentId = 'pay_rec_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'fetch', async id => ({
+        id, amount: 12000, currency: 'INR', status: 'paid'
+      }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async id => ({
+        items: [{ id: paymentId, order_id: id, amount: 12000, currency: 'INR', status: 'captured' }]
+      }));
+      const before = (await pool.query('SELECT stock_quantity, reserved_stock FROM products WHERE id=$1', [buffaloMilkProduct.id])).rows[0];
+      const url = '/api/v1/orders/' + order.order_number + '/reconcile-payment';
+      const first = await app.inject({ method: 'POST', url, headers: { Authorization: 'Bearer ' + tokenA } });
+      assert.equal(first.statusCode, 200, first.body);
+      assert.equal(first.json().state, 'confirmed');
+      const afterFirst = (await pool.query('SELECT stock_quantity, reserved_stock FROM products WHERE id=$1', [buffaloMilkProduct.id])).rows[0];
+      assert.equal(Number(afterFirst.stock_quantity), Number(before.stock_quantity) - 1);
+      assert.equal(Number(afterFirst.reserved_stock), Number(before.reserved_stock) - 1);
+      const second = await app.inject({ method: 'POST', url, headers: { Authorization: 'Bearer ' + tokenA } });
+      assert.equal(second.statusCode, 200, second.body);
+      assert.equal(second.json().state, 'confirmed');
+      const afterSecond = (await pool.query('SELECT stock_quantity, reserved_stock FROM products WHERE id=$1', [buffaloMilkProduct.id])).rows[0];
+      assert.deepEqual(afterSecond, afterFirst);
+      const payment = (await pool.query('SELECT status, razorpay_payment_id FROM payment_orders WHERE razorpay_order_id=$1', [order.gatewayId])).rows[0];
+      assert.equal(payment.status, 'captured');
+      assert.equal(payment.razorpay_payment_id, paymentId);
+    });
+
+    it('does not accept the wrong Razorpay payment amount', async t => {
+      const order = await createPendingBuffaloOrder();
+      t.mock.method(razorpay.orders, 'fetch', async id => ({ id, amount: 12000, currency: 'INR', status: 'attempted' }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async id => ({
+        items: [{ id: 'pay_wrong_amount', order_id: id, amount: 11000, currency: 'INR', status: 'captured' }]
+      }));
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers: { Authorization: 'Bearer ' + tokenA }
+      });
+      assert.equal(response.statusCode, 409, response.body);
+      assert.equal(response.json().state, 'payment_review');
+      const state = (await pool.query('SELECT payment_status FROM customer_orders WHERE id=$1', [order.id])).rows[0];
+      assert.equal(state.payment_status, 'pending');
+    });
+
+    it('keeps an unconfirmed gateway payment pending', async t => {
+      const order = await createPendingBuffaloOrder();
+      t.mock.method(razorpay.orders, 'fetch', async id => ({ id, amount: 12000, currency: 'INR', status: 'attempted' }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async id => ({
+        items: [{ id: 'pay_failed', order_id: id, amount: 12000, currency: 'INR', status: 'failed' }]
+      }));
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers: { Authorization: 'Bearer ' + tokenA }
+      });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.json().state, 'pending');
+      const state = (await pool.query('SELECT payment_status FROM customer_orders WHERE id=$1', [order.id])).rows[0];
+      assert.equal(state.payment_status, 'pending');
+    });
+
+    it('blocks cross-customer reconciliation before fetching gateway data', async t => {
+      const order = await createPendingBuffaloOrder();
+      const method = t.mock.method(razorpay.orders, 'fetch', async () => { throw Error('Unauthorized gateway fetch'); });
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers: { Authorization: 'Bearer ' + tokenB }
+      });
+      assert.equal(response.statusCode, 404, response.body);
+      assert.equal(method.mock.callCount(), 0);
+    });
+
+    it('rejects a validly signed callback with an inconsistent payment amount', async t => {
+      const order = await createPendingBuffaloOrder();
+      const paymentId = 'pay_mismatch_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(order.gatewayId + '|' + paymentId).digest('hex');
+      t.mock.method(razorpay.orders, 'fetch', async id => ({ id, amount: '12000', currency: 'INR', status: 'paid' }));
+      t.mock.method(razorpay.payments, 'fetch', async id => ({
+        id, order_id: order.gatewayId, amount: 11000, currency: 'INR', status: 'captured'
+      }));
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          razorpay_order_id: order.gatewayId,
+          razorpay_payment_id: paymentId,
+          razorpay_signature: signature
+        }
+      });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.equal(response.json().error, 'payment_details_mismatch');
+      const state = (await pool.query('SELECT payment_status FROM customer_orders WHERE id=$1', [order.id])).rows[0];
+      assert.equal(state.payment_status, 'pending');
+    });
+  });
+
+  // =========================================================================
   // PHASE 7 — ORDER AND SUBSCRIPTION CONFIRMATION & PROFILE SYNC
   // =========================================================================
   describe('Phase 7 — Order and Subscription Confirmation & Profile Sync', () => {
