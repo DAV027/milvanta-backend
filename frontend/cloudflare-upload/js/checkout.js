@@ -1798,10 +1798,14 @@
       const orderPaise = Number(proof?.orderAmountPaise);
       const feePaise = Number(proof?.razorpayCustomerFeePaise);
       const chargedPaise = Number(proof?.totalChargedPaise);
+      const taxPaise = proof?.razorpayCustomerFeeTaxPaise == null
+        ? null : Number(proof.razorpayCustomerFeeTaxPaise);
       const hasVerifiedCharges = proof !== null &&
         [orderPaise, feePaise, chargedPaise].every(Number.isSafeInteger) &&
         orderPaise > 0 && feePaise >= 0 &&
         chargedPaise === orderPaise + feePaise;
+      const hasVerifiedTax = hasVerifiedCharges && Number.isSafeInteger(taxPaise) &&
+        taxPaise >= 0 && taxPaise <= feePaise;
       const existingReceipt = $('#successRazorpayChargeReceipt');
       if (existingReceipt) existingReceipt.remove();
       if (hasVerifiedCharges && feePaise > 0) {
@@ -1809,9 +1813,12 @@
         chargesReceipt.id = 'successRazorpayChargeReceipt';
         chargesReceipt.style.cssText = 'background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:14px 18px;margin:16px 0;text-align:left;color:#334155;font-size:0.87rem;line-height:1.8;';
         const fmt = (paise) => '₹' + (paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const feeDetails = hasVerifiedTax
+          ? ' | Razorpay convenience fee before GST: ' + fmt(feePaise - taxPaise) +
+            ' | GST on Razorpay fee: ' + fmt(taxPaise)
+          : ' | Razorpay convenience fee (incl. applicable tax): ' + fmt(feePaise);
         chargesReceipt.textContent = 'Milvanta order: ' + fmt(orderPaise) +
-          ' | Razorpay convenience fee (incl. applicable tax): ' + fmt(feePaise) +
-          ' | Total charged by Razorpay: ' + fmt(chargedPaise);
+          feeDetails + ' | Total charged by Razorpay: ' + fmt(chargedPaise);
         successEl.appendChild(chargesReceipt);
       }
 
