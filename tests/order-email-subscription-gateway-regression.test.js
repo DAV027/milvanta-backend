@@ -147,3 +147,33 @@ test('actual outbox function enqueues correct customer and admin amounts; missin
   assert.equal(statements.length,2,'invalid receipt must not enqueue any emails');
   assert.equal(recordedErrors.length,1);
 });
+
+
+test('gateway error handler classifies auth, persistence and upstream failures without leaking secrets', () => {
+  const start = server.indexOf('    const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);');
+  const end = server.indexOf('\n  }\n});\n\n// Derive authoritative subscription start date', start);
+  assert.ok(start >= 0 && end > start, 'Subscription catch handler must exist');
+  const cases = [
+    {stage:'plan_create', err:{statusCode:401,error:'Unauthorized',message:'a secret to hide'}, status:503, code:'razorpay_subscription_access_denied'},
+    {stage:'subscription_create',err:{statusCode:403,error:{code:'FORBIDDEN'}},status:503,code:'razorpay_subscription_access_denied'},
+    {stage:'database_persistence',err:{code:'23505',message:'private database error'},status:503,code:'subscription_requires_reconciliation'},
+    {stage:'plan_create',err:{statusCode:500,message:'private upstream error'},status:502,code:'subscription_creation_failed'}
+  ];
+  for (const entry of cases) {
+    const logs = [];
+    const context = vm.createContext({
+      err:entry.err,
+      subscriptionCreationStage:entry.stage,
+      process:{env:{RAZORPAY_KEY_ID:'rzp_test_not_a_real_credential'}},
+      request:{log:{error:(value)=>logs.push(value)}},
+      reply:{code:(status)=>({send:(body)=>({status,body})})}
+    });
+    const result = vm.runInContext('(function(){\n' + server.slice(start,end) + '\n})()',context);
+    assert.equal(result.status,entry.status);
+    assert.equal(result.body.error,entry.code);
+    assert.ok(!JSON.stringify(result.body).includes('private'));
+    assert.ok(!JSON.stringify(result.body).includes('secret'));
+    assert.equal(logs[0].keyMode,'test');
+    assert.equal(logs[0].stage,entry.stage);
+  }
+});
