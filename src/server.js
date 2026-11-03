@@ -3122,14 +3122,14 @@ app.post('/api/v1/orders', {
   const deliveryCharge = deliveryInfo.feePaise || 5000;
 
   const quantities = new Map();
-  const itemMetaMap = new Map();
+  const orderLines = [];
   for (const item of items) {
     const productId = Number(item?.productId), quantity = Number(item?.quantity);
     if (!Number.isSafeInteger(productId) || productId <= 0 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     const totalQuantity = (quantities.get(productId) || 0) + quantity;
     if (totalQuantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     quantities.set(productId, totalQuantity);
-    itemMetaMap.set(productId, item);
+    orderLines.push({ productId, quantity, metadata: item });
   }
 
   const client = await pool.connect();
@@ -3167,24 +3167,39 @@ app.post('/api/v1/orders', {
       await client.query('ROLLBACK');
       return reply.code(409).send({ error: 'product_unavailable', message: 'One or more items in your cart are currently unavailable.' });
     }
+    // Aggregate only inventory; calculate price for EACH cart variant separately.
+    const productById = new Map(productRows.map(p => [Number(p.id), p]));
+    for (const product of productRows) {
+      const requested = quantities.get(Number(product.id));
+      if (Number(product.stock_quantity) - Number(product.reserved_stock) < requested) {
+        await client.query('ROLLBACK');
+        return reply.code(409).send({
+          error: 'insufficient_stock',
+          productId: Number(product.id),
+          message: 'Insufficient stock for ' + product.name + '.'
+        });
+      }
+    }
+
     let subtotal = 0;
     const orderItems = [];
-    for (const product of productRows) {
-      const quantity = quantities.get(Number(product.id));
-      if (Number(product.stock_quantity) - Number(product.reserved_stock) < quantity) {
-        await client.query('ROLLBACK');
-        return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id), message: `Insufficient stock for ${product.name}.` });
-      }
-      const itemMeta = itemMetaMap.get(Number(product.id)) || {};
+    for (const line of orderLines) {
+      const product = productById.get(line.productId);
+      const quantity = line.quantity;
       let pricing;
       try {
-        pricing = resolveItemPricing(product, itemMeta);
-      } catch (err) {
+        pricing = resolveItemPricing(product, line.metadata);
+      } catch (error) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'invalid_item_pricing', message: err.message });
+        return reply.code(400).send({ error: 'invalid_item_pricing', message: error.message });
       }
       const unitPricePaise = pricing.unitPricePaise;
-      subtotal += unitPricePaise * quantity;
+      const lineTotalPaise = unitPricePaise * quantity;
+      if (!Number.isSafeInteger(lineTotalPaise) || lineTotalPaise <= 0) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'invalid_item_total' });
+      }
+      subtotal += lineTotalPaise;
       orderItems.push({
         productId: Number(product.id),
         name: pricing.resolvedName || product.name,
@@ -3193,7 +3208,7 @@ app.post('/api/v1/orders', {
         imageUrl: product.image_url,
         quantity,
         unitPricePaise,
-        lineTotalPaise: unitPricePaise * quantity
+        lineTotalPaise
       });
     }
     // Total amount in Razorpay includes subtotal plus delivery fee (₹50 / ₹80 based on Hafeezpet hub distance)
