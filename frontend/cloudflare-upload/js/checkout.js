@@ -996,7 +996,7 @@
       }
       if (!raw) return null;
       const p = JSON.parse(raw);
-      if (!p || typeof p.orderNumber !== 'string' || typeof p.paymentId !== 'string' || !p.orderNumber || !p.paymentId) return null;
+      if (!p || typeof p.orderNumber !== 'string' || !p.orderNumber || typeof p.paymentId !== 'string') return null;
       if (String(p.customerId || '') !== String(customerId)) return null;
       return p;
     } catch { return null; }
@@ -1007,24 +1007,23 @@
     if (state.isPaymentProcessing) return;
     state.isPaymentProcessing = true;
     if (payBtn) { payBtn.disabled = true; payBtn.textContent = 'Checking payment status…'; }
+
     try {
-      let orderPaid = false;
+      let orderConfirmed = false;
+      let requiresReview = false;
       try {
-        const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
-        if (result?.order?.payment_status === 'paid') {
-          orderPaid = true;
-        }
-      } catch (checkErr) {
-        if (checkErr.status === 401) {
-          showLoginRequired();
-          return;
-        }
+        const response = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
+        orderConfirmed = response?.order?.payment_status === 'paid' &&
+          response?.order?.order_status === 'confirmed';
+        requiresReview = response?.order?.payment_status === 'paid' &&
+          response?.order?.order_status !== 'confirmed';
+      } catch (checkError) {
+        if (checkError.status === 401) { showLoginRequired(); return; }
       }
 
-      // If not marked paid in backend yet, but we have signature, attempt verification
-      if (!orderPaid && pending.orderId && pending.paymentId && pending.signature) {
+      if (!orderConfirmed && !requiresReview && pending.orderId && pending.paymentId && pending.signature) {
         try {
-          const verifyRes = await api('/api/v1/payments/verify', {
+          const result = await api('/api/v1/payments/verify', {
             method: 'POST',
             body: JSON.stringify({
               razorpay_order_id: pending.orderId,
@@ -1032,46 +1031,67 @@
               razorpay_signature: pending.signature
             })
           });
-          if (verifyRes?.verified && verifyRes.status === 'captured') {
-            orderPaid = true;
-          }
-        } catch (vErr) {
-          if (vErr.status === 401) {
-            showLoginRequired();
-            return;
-          }
+          orderConfirmed = result?.verified === true && result.status === 'captured' &&
+            result.orderStatus === 'confirmed' && result.requiresManualReview !== true;
+          requiresReview = result?.requiresManualReview === true || result?.orderStatus === 'payment_review';
+        } catch (verifyError) {
+          if (verifyError.status === 401) { showLoginRequired(); return; }
         }
       }
 
-      if (!orderPaid) {
-        if (errEl) errEl.textContent = 'Payment confirmation is still pending. Please contact support with reference ' + pending.paymentId + '. Do not pay again yet.';
+      // Reconcile independently of browser callbacks: server retrieves the
+      // ORIGINAL order's gateway payments with its own Razorpay credentials.
+      if (!orderConfirmed && !requiresReview) {
+        try {
+          const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber) + '/reconcile-payment', {
+            method: 'POST'
+          });
+          orderConfirmed = result?.state === 'confirmed';
+          requiresReview = result?.state === 'payment_review';
+        } catch (reconcileError) {
+          if (reconcileError.status === 401) { showLoginRequired(); return; }
+          if (reconcileError.status === 409) requiresReview = true;
+          else if (errEl) errEl.textContent = 'Gateway status is temporarily unavailable. Do not pay again; retry status check or contact support.';
+        }
+      }
+
+      if (requiresReview) {
+        if (errEl) errEl.textContent = 'The gateway payment requires manual reconciliation. Do not pay again. Please contact Milvanta support with order ' + pending.orderNumber + '.';
+        return;
+      }
+      if (!orderConfirmed) {
+        if (errEl && !errEl.textContent) {
+          errEl.textContent = 'Payment is still unconfirmed. Do not pay again yet. Use Check Payment Status or contact support with order ' + pending.orderNumber + '.';
+        }
         return;
       }
 
-      const financials = getOrderFinancials();
-      await activateSubscriptionsFromCart(state.cart, {
-        paymentId: pending.paymentId,
-        deliveryFee: financials.deliveryFee,
-        totalPaid: financials.total,
-        subtotal: financials.subtotal
-      });
+      // Financial confirmation comes from PostgreSQL/Razorpay, not localStorage.
+      // Local subscription activation remains best-effort; a failed local
+      // follow-up MUST NOT cause a second payment.
+      try {
+        const financials = getOrderFinancials();
+        await activateSubscriptionsFromCart(state.cart, {
+          paymentId: pending.paymentId || '',
+          deliveryFee: financials.deliveryFee,
+          totalPaid: financials.total,
+          subtotal: financials.subtotal
+        });
+      } catch (activationError) {
+        console.warn('Post-payment subscription refresh needs attention:', activationError.message);
+      }
       sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
-          if (state.customer?.id) {
-            try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id); } catch {}
-          }
       if (pending.customerId) {
         try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId); } catch {}
       }
       showOrderSuccess(pending.orderNumber, false);
-    } catch (err) {
-      if (err.status === 401) {
-        showLoginRequired();
-        return;
-      }
-      if (errEl) errEl.textContent = 'Could not confirm the previous payment yet. Please retry status check or contact support with reference ' + pending.paymentId + '.';
+    } catch (error) {
+      if (error.status === 401) { showLoginRequired(); return; }
+      if (errEl) errEl.textContent = 'Unable to confirm the payment now. Do not pay again yet; try status check or contact support.';
     } finally {
       state.isPaymentProcessing = false;
-      const stillPending = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) || (pending.customerId && localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId));
+      const stillPending = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) ||
+        (pending.customerId && localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId));
       if (payBtn && stillPending) {
         payBtn.disabled = false;
         payBtn.textContent = 'Check Payment Status (no new charge)';
@@ -1623,8 +1643,25 @@
         throw new Error('Secure payment is temporarily unavailable. No payment was started. Please contact Milvanta support.');
       }
       if (serverAmount !== totalAmountPaise) {
-        throw new Error('The final server price does not match the displayed total. No payment was started. Refresh your cart and review prices before trying again.');
+        throw new Error('The live server price is ₹' + (serverAmount / 100).toFixed(2) +
+          ', but checkout displayed ₹' + (totalAmountPaise / 100).toFixed(2) +
+          '. No payment was started. Refresh your cart to review the updated price.');
       }
+
+      // A payment attempt may survive a browser close even if the Razorpay
+      // handler never runs. Record the order before opening the gateway.
+      try {
+        const attempt = JSON.stringify({
+          customerId: state.customer?.id,
+          orderNumber: order.orderNumber,
+          orderId: order.orderId,
+          paymentId: '',
+          signature: '',
+          createdAt: Date.now()
+        });
+        sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, attempt);
+        if (state.customer?.id) localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, attempt);
+      } catch {}
 
       const options = {
         key: order.keyId || RAZORPAY_KEY,
@@ -1670,14 +1707,16 @@
               method: 'POST',
               body: JSON.stringify(response)
             });
-            if (!verifyRes || !verifyRes.verified || verifyRes.status !== 'captured') {
-              throw new Error(verifyRes?.error || 'Payment capture is not yet confirmed.');
+            if (!verifyRes || !verifyRes.verified || verifyRes.status !== 'captured' ||
+                verifyRes.orderStatus !== 'confirmed' || verifyRes.requiresManualReview === true) {
+              throw new Error(verifyRes?.error || 'Payment capture or fulfillment needs reconciliation.');
             }
           } catch (verifyErr) {
             console.error('Payment verification failed:', verifyErr);
             if (errEl) {
               errEl.textContent = 'Razorpay returned a payment reference, but final capture is unconfirmed. Check the status; do NOT pay again yet. Reference: ' + (response?.razorpay_payment_id || 'N/A');
             }
+            state.isPaymentProcessing = false;
             if (payBtn) {
               payBtn.disabled = false;
               payBtn.textContent = 'Check Payment Status (no new charge)';
@@ -1702,13 +1741,25 @@
           });
 
           sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
+          if (state.customer?.id) {
+            try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id); } catch {}
+          }
           state.isPaymentProcessing = false;
           showOrderSuccess(order.orderNumber, false);
         },
         modal: {
           ondismiss: () => {
             state.isPaymentProcessing = false;
-            if (errEl) errEl.textContent = 'Payment was cancelled. You can retry placing the order whenever ready.';
+            // Dismissal is not proof that no charge occurred.
+            if (getPendingOrderPayment()) {
+              if (errEl) errEl.textContent = 'Checkout closed. Check this order’s payment status before attempting another payment.';
+              if (payBtn) {
+                payBtn.disabled = false;
+                payBtn.textContent = 'Check Payment Status (no new charge)';
+              }
+              return;
+            }
+            if (errEl) errEl.textContent = 'Payment checkout was closed.';
             if (payBtn) {
               payBtn.disabled = false;
               payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
