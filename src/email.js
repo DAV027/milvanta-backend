@@ -347,7 +347,7 @@ export function buildCustomerOrderEmail({ order, customer, address, items, payme
             <td style="padding: 28px 24px;">
               <h2 style="font-size: 20px; margin: 0 0 10px; color: #0f172a;">Thank you for your order, ${customerName}!</h2>
               <p style="font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 20px;">
-                We have received your payment of <strong style="color: #0a3d66;">${totalStr}</strong>. Our cold-chain team is preparing your fresh farm favorites straight from our Hafeezpet hub.
+                Your Milvanta order amount is <strong style="color: #0a3d66;">${totalStr}</strong>. Our cold-chain team is preparing your fresh farm favorites straight from our Hafeezpet hub. Any separate Razorpay convenience charges shown at checkout are not included in the Milvanta order total.
               </p>
 
               <!-- Order Metadata Card -->
@@ -405,7 +405,7 @@ export function buildCustomerOrderEmail({ order, customer, address, items, payme
                         <td colspan="2" style="padding: 6px 0;"><div style="height: 1px; background: #cbd5e1;"></div></td>
                       </tr>
                       <tr>
-                        <td style="font-size: 15px; font-weight: 800; color: #0f172a;">Total Paid</td>
+                        <td style="font-size: 15px; font-weight: 800; color: #0f172a;">Milvanta Order Total</td>
                         <td style="font-size: 18px; font-weight: 800; color: #0a3d66; text-align: right;">${totalStr}</td>
                       </tr>
                     </table>
@@ -573,7 +573,7 @@ export function buildAdminOrderEmail({ order, customer, address, items, paymentI
                   <td style="text-align: right; font-weight: 600; color: #0f172a;">${deliveryStr}</td>
                 </tr>
                 <tr style="border-top: 1px solid #cbd5e1;">
-                  <td style="font-weight: 700; color: #0f172a; padding-top: 6px;">Total Paid</td>
+                  <td style="font-weight: 700; color: #0f172a; padding-top: 6px;">Milvanta Order Total</td>
                   <td style="text-align: right; font-weight: 800; font-size: 16px; color: #0a3d66; padding-top: 6px;">${totalStr}</td>
                 </tr>
               </table>
@@ -939,7 +939,7 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       if (item.email_type === 'order_confirmation') {
         subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
         html = buildCustomerOrderEmail(payload);
-        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(payload.order?.total_paise, true)}`;
+        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nMilvanta Order Total: ${formatInr(payload.order?.total_paise, true)}`;
       } else if (item.email_type === 'order_notification') {
         subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
         html = buildAdminOrderEmail(payload);
