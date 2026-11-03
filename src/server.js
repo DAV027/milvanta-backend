@@ -423,7 +423,7 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
   );
   if (!payment.customer_order_id) return true;
   const result = await client.query(
-    'SELECT id, customer_id, order_number, address, items, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
+    'SELECT id, customer_id, order_number, address, items, subtotal_paise, delivery_charge_paise, total_paise, created_at, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
     [payment.customer_order_id]
   );
   const order = result.rows[0];
@@ -1443,6 +1443,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
     };
   }
 
+  let subscriptionCreationStage = 'plan_create';
   try {
     // 5. Create plan in Razorpay with server-calculated monthly amount
     const planName = `Milvanta ${product.name} (${normalizedSize})`;
@@ -1481,9 +1482,11 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       subParams.start_at = startAtTimestamp;
     }
 
+    subscriptionCreationStage = 'subscription_create';
     const rzpSub = await razorpay.subscriptions.create(subParams);
 
     // 7. Store local subscription in pending_authorization state
+    subscriptionCreationStage = 'database_persistence';
     await pool.query(
       `INSERT INTO customer_subscriptions (
         customer_id, product_id, product_name, image_url, frequency, time_slot,
@@ -1534,8 +1537,33 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       planId: plan.id
     };
   } catch (err) {
-    request.log.error({ err }, 'Error creating Razorpay subscription');
-    return reply.code(500).send({ error: 'subscription_creation_failed', message: err.message });
+    const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);
+    const gatewayErrorCode = String(err?.error?.code || err?.code || 'unknown').slice(0, 80);
+    request.log.error({
+      stage: subscriptionCreationStage,
+      gatewayStatus: Number.isSafeInteger(gatewayStatus) ? gatewayStatus : null,
+      gatewayErrorCode
+    }, 'Razorpay subscription setup failed');
+
+    // Do not reveal gateway credentials, provider response bodies or internal
+    // auth details to the browser. A successful one-time order payment does not
+    // imply the Razorpay account is enabled for recurring subscriptions.
+    if (subscriptionCreationStage !== 'database_persistence' && [401, 403].includes(gatewayStatus)) {
+      return reply.code(503).send({
+        error: 'razorpay_subscription_access_denied',
+        message: 'Recurring payments are unavailable on the configured Razorpay account. Please contact Milvanta support.'
+      });
+    }
+    if (subscriptionCreationStage === 'database_persistence') {
+      return reply.code(503).send({
+        error: 'subscription_requires_reconciliation',
+        message: 'The payment gateway created a subscription but we could not save it. Do not attempt another payment; contact Milvanta support.'
+      });
+    }
+    return reply.code(502).send({
+      error: 'subscription_creation_failed',
+      message: 'The subscription payment gateway is temporarily unavailable. Please try later or contact support.'
+    });
   }
 });
 
@@ -3267,7 +3295,7 @@ app.post('/api/v1/orders', {
 
     const ids = [...quantities.keys()];
     const { rows: productRows } = await client.query(
-      'SELECT id, name, category, price_paise, selling_unit, stock_quantity, reserved_stock FROM products WHERE active = TRUE AND id = ANY($1::bigint[]) ORDER BY id FOR UPDATE',
+      'SELECT id, name, category, price_paise, selling_unit, image_url, stock_quantity, reserved_stock FROM products WHERE active = TRUE AND id = ANY($1::bigint[]) ORDER BY id FOR UPDATE',
       [ids]
     );
     if (productRows.length !== ids.length) {
