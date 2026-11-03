@@ -704,6 +704,26 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       const stockAfter = await pool.query('SELECT stock_quantity, reserved_stock FROM products WHERE id = $1', [cowMilkProduct.id]);
       assert.equal(stockAfter.rows[0].stock_quantity, qtyBefore - 1);
       assert.equal(stockAfter.rows[0].reserved_stock, resBefore - 1);
+
+      // Integration regression for PR #25: capture -> locked order SELECT ->
+      // transactional email_outbox must retain the PostgreSQL monetary values.
+      // No external email is sent by this assertion.
+      const receiptRows = await pool.query(
+        `SELECT email_type, recipient_type, payload
+         FROM email_outbox WHERE source_order_id = $1
+         AND email_type IN ('order_confirmation', 'order_notification')
+         ORDER BY email_type`,
+        [testOrderId]
+      );
+      assert.equal(receiptRows.rows.length, 2, 'Exactly one customer and one admin email record must be queued');
+      assert.deepEqual(receiptRows.rows.map(row => row.email_type), ['order_confirmation', 'order_notification']);
+      for (const row of receiptRows.rows) {
+        assert.equal(Number(row.payload.order.subtotal_paise), 18000, 'Email subtotal must match the verified order');
+        assert.equal(Number(row.payload.order.delivery_charge_paise), 5000, 'Email delivery fee must match the verified order');
+        assert.equal(Number(row.payload.order.total_paise), expectedAmountPaise, 'Email total must match the verified payment');
+        assert.ok(row.payload.order.created_at, 'Email order date must be present');
+        assert.equal(row.payload.paymentId, paymentId, 'Email reference must match the captured Razorpay payment');
+      }
     });
 
     it('rejects webhook requests with missing or forged X-Razorpay-Signature with HTTP 400', async () => {
