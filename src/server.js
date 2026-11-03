@@ -12,7 +12,7 @@ import Razorpay from 'razorpay';
 import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
-import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail } from './email.js';
+import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail, sendWelcomeEmail } from './email.js';
 import {
   resolveItemPricing,
   isFreshMilkProduct,
@@ -189,24 +189,7 @@ const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMT
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-async function sendWelcomeEmail(user) {
-  if (!mailer) {
-    app.log.warn('SMTP not configured; welcome email skipped');
-    return;
-  }
-  const name = escapeHtml(user.name);
-  await mailer.sendMail({
-    from: process.env.SMTP_FROM || process.env.MAIL_FROM || process.env.SMTP_USER,
-    to: user.email,
-    subject: 'Welcome to MILVANTA - you have signed up successfully',
-    text: `Hi ${user.name},\n\nYou have signed up successfully on MILVANTA. You can now log in and order fresh milk and dairy products.\n\nConnecting Farms to Families\nTeam MILVANTA`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#0B1B4B">
-      <h2>Welcome to MILVANTA, ${name}!</h2>
-      <p>You have <b>signed up successfully</b>. You can now log in and order fresh milk and dairy products.</p>
-      <p style="color:#1E8E3E">Connecting Farms to Families</p>
-      <p>Team MILVANTA</p></div>`
-  });
-}
+// sendWelcomeEmail is imported from ./email.js
 
 // ---------- Password hashing (built-in scrypt, no extra dependency) ----------
 async function hashPassword(password) {
@@ -579,7 +562,7 @@ app.post('/api/v1/auth/signup', {
     throw error;
   }
 
-  sendWelcomeEmail({ ...user, name: user.full_name }).catch((error) => request.log.error({ err: error }, 'welcome email failed'));
+  sendWelcomeEmail({ to: user.email, customerName: user.full_name }).catch((error) => request.log.error({ err: error }, 'welcome email failed'));
 
   const token = await issueToken(user);
   return reply.code(201).send({ user: publicUser(user), customer: publicUser(user), token });
@@ -694,7 +677,7 @@ app.post('/api/v1/auth/forgot-password/send-otp', {
   `, [email, otpHash]);
 
   // Dispatch live email & log for audit/dev
-  console.log(`[Password Reset] Generated OTP for ${email}: ${otp}`);
+  request.log.info({ email }, 'Password reset OTP generated and dispatched');
   sendPasswordResetEmail({
     to: customer.email,
     customerName: customer.full_name,
@@ -3477,6 +3460,11 @@ app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
       [order.id]
     );
     await client.query('COMMIT');
+    if (order.payment_status !== 'paid' && after?.payment_status === 'paid' && after?.order_status === 'confirmed') {
+      sendOrderPaidEmails(pool, order.id, payment.id).catch(err => {
+        request.log.error({ err }, 'Failed to dispatch order confirmation emails after reconciliation');
+      });
+    }
     return reply.send({
       state: after?.payment_status === 'paid' && after?.order_status === 'confirmed'
         ? 'confirmed' : 'payment_review',

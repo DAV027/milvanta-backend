@@ -134,7 +134,8 @@ export async function sendEmailViaResend({ to, subject, html, text, from }) {
 
     return {
       success: true,
-      id: data.id
+      id: data.id,
+      provider: 'resend'
     };
   } catch (err) {
     console.error('[Resend Network Error]', err);
@@ -590,21 +591,29 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
       });
     }
 
-    // Mark email sent in DB if at least one attempt succeeded or Resend was called
-    try {
-      await client.query(
-        `UPDATE customer_orders 
-         SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
-         WHERE id = $1`,
-        [order.id]
-      );
-    } catch (dbErr) {
-      // If columns don't exist yet, ignore
-      console.warn('[Resend] Could not update confirmation_email_sent column (migration might be pending):', dbErr.message);
+    const customerSent = Boolean(results.customerEmail && results.customerEmail.success);
+    const adminSent = Boolean(results.adminEmail && results.adminEmail.success);
+    const atLeastOneSent = customerSent || adminSent;
+
+    // Mark email sent in DB ONLY if at least one attempt succeeded
+    if (atLeastOneSent) {
+      try {
+        await client.query(
+          `UPDATE customer_orders 
+           SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
+           WHERE id = $1`,
+          [order.id]
+        );
+      } catch (dbErr) {
+        console.warn('[Resend] Could not update confirmation_email_sent column:', dbErr.message);
+      }
+    } else {
+      console.warn('[Resend] Confirmation email dispatch failed for both customer and admin for order #' + order.order_number);
     }
 
     return {
-      success: true,
+      success: atLeastOneSent,
+      skipped: !atLeastOneSent && Boolean(results.customerEmail?.skipped || results.adminEmail?.skipped),
       results
     };
 
@@ -1382,7 +1391,7 @@ export function buildPasswordResetEmail({ customerName, otp }) {
  * Send password reset email with OTP to customer
  */
 export async function sendPasswordResetEmail({ to, customerName, otp }) {
-  const subject = `Your Milvanta Password Reset OTP: ${otp}`;
+  const subject = 'Your Milvanta Password Reset Code';
   const html = buildPasswordResetEmail({ customerName, otp });
   const text = `Hello ${customerName || 'Valued Customer'},\n\nYour Milvanta password reset OTP is: ${otp}\n\nThis OTP is valid for 10 minutes. If you did not request this, please ignore this email.\n\nTeam Milvanta`;
 
@@ -1396,5 +1405,70 @@ export async function sendPasswordResetEmail({ to, customerName, otp }) {
   });
 }
 
+/**
+ * Generate Customer Welcome Email HTML
+ */
+export function buildWelcomeEmail({ customerName }) {
+  const name = escapeHtml(customerName || 'Valued Customer');
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Welcome to Milvanta</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 520px; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 16px rgba(15,23,42,0.06);">
+          <tr style="background: linear-gradient(135deg, #0a3d66 0%, #065f46 100%); color: #ffffff; text-align: center;">
+            <td style="padding: 28px 24px;">
+              <h1 style="margin: 0 0 6px; font-size: 24px; font-weight: 800;">🥛 Welcome to Milvanta</h1>
+              <p style="margin: 0; font-size: 14px; color: #d1fae5;">Pure Fresh Farm Milk & Artisanal Goodness</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 28px 24px; color: #0f172a;">
+              <h2 style="margin: 0 0 12px; font-size: 18px;">Hello ${name},</h2>
+              <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #475569;">
+                Thank you for joining Milvanta! Your account has been created successfully.
+              </p>
+              <p style="margin: 0 0 20px; font-size: 14px; line-height: 1.6; color: #475569;">
+                You can now log in anytime to order fresh morning milk, homemade pickles, and artisanal dairy delivered directly to your doorstep across Hyderabad between <strong>6:00 AM – 7:00 AM</strong>.
+              </p>
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="https://milvanta.in" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">Start Exploring</a>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                Connecting Farms to Families<br>
+                <strong>Team Milvanta · Hafeezpet Hub, Hyderabad</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
 
+/**
+ * Send welcome email to new customer via Resend / SMTP
+ */
+export async function sendWelcomeEmail({ to, customerName }) {
+  const subject = 'Welcome to Milvanta — Pure Fresh Milk & Dairy';
+  const html = buildWelcomeEmail({ customerName });
+  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in and order fresh morning milk, homemade pickles, and artisanal dairy delivered between 6:00 AM – 7:00 AM across Hyderabad.\n\nConnecting Farms to Families\nTeam Milvanta`;
+  const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+  return sendEmail({
+    to,
+    subject,
+    html,
+    text,
+    from: sender
+  });
+}
 
