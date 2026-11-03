@@ -202,6 +202,16 @@
     }
   };
 
+  function newCheckoutKey() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      try { return crypto.randomUUID(); } catch {}
+    }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = (Math.random() * 16) | 0;
+      return (c === 'x' ? r : ((r & 3) | 8)).toString(16);
+    });
+  }
+
   const state = {
     currentStep: 1,
     cart: [],
@@ -222,16 +232,7 @@
     },
     isSubmitting: false,
     isPaymentProcessing: false,
-    checkoutKey: (() => {
-      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-        try { return crypto.randomUUID(); } catch {}
-      }
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-      });
-    })()
+    checkoutKey: newCheckoutKey()
   };
 
   // API Helper
@@ -906,6 +907,120 @@
       return p;
     } catch { return null; }
   }
+  // Separate unrelated carts only after rechecking the recorded paid order.
+  // The previous captured payment remains in the database for review/refund.
+  function priorOrderItemsDiffer(previousOrder) {
+    if (!Array.isArray(previousOrder?.items) || !previousOrder.items.length || !state.cart.length) return false;
+    const signature = (items) => {
+      const rows = items.map(item => ({
+        name: canonicalCheckoutProductName(item.name || item.product_name || item.product || item.variant?.name),
+        quantity: Number(item.quantity)
+      }));
+      if (rows.some(row => !row.name || !Number.isSafeInteger(row.quantity) || row.quantity < 1)) return null;
+      return JSON.stringify(rows.map(row => row.name + ':' + row.quantity).sort());
+    };
+    const previous = signature(previousOrder.items), current = signature(state.cart);
+    return previous !== null && current !== null && previous !== current;
+  }
+
+  function previousPaymentCanBeSeparated(order) {
+    return order?.payment_status === 'paid' &&
+      ['payment_review', 'confirmed'].includes(order.order_status) &&
+      priorOrderItemsDiffer(order);
+  }
+
+  async function offerSeparateNewCartPayment(pending) {
+    let previous;
+    try {
+      const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
+      previous = result?.order;
+    } catch (error) {
+      // No bypass when server evidence or customer authentication is unavailable.
+      if (error.status === 401) showLoginRequired();
+      return;
+    }
+    const stillPending = getPendingOrderPayment();
+    const container = $('#step3Content');
+    if (!container || state.currentStep !== 3 ||
+        !stillPending || stillPending.orderNumber !== pending.orderNumber ||
+        !previousPaymentCanBeSeparated(previous) || $('#continueDifferentOrderBtn')) return;
+
+    const warning = $('#checkoutErrorMessage');
+    if (warning) {
+      warning.style.color = '#92400e';
+      warning.textContent = 'The payment for earlier order ' + previous.order_number +
+        ' remains recorded separately. You may continue with this different cart below; no second payment for the earlier order is required.';
+    }
+    const notice = document.createElement('div');
+    notice.id = 'differentCartPaymentNotice';
+    notice.style.cssText = 'padding:14px;margin:14px 0;border:1px solid #cbd5e1;border-radius:10px;color:#334155;background:#f8fafc;font-size:0.87rem;line-height:1.6;';
+    const explanation = document.createElement('p');
+    explanation.textContent = 'Your earlier order ' + previous.order_number +
+      ' has a recorded payment (' + previous.order_status.replaceAll('_', ' ') +
+      '). This is a different cart. You can start a new order without cancelling or paying for the earlier order again.';
+    const continueBtn = document.createElement('button');
+    continueBtn.id = 'continueDifferentOrderBtn';
+    continueBtn.type = 'button';
+    continueBtn.className = 'checkout-next-btn';
+    continueBtn.style.cssText = 'margin-top:12px;background:#0a3d66;padding:12px 18px;font-size:0.91rem;';
+    continueBtn.textContent = 'Continue with this new cart';
+    notice.append(explanation, continueBtn);
+    container.querySelector('.step-actions-row')?.before(notice);
+
+    continueBtn.addEventListener('click', async () => {
+      if (state.isPaymentProcessing) return;
+      state.isPaymentProcessing = true;
+      continueBtn.disabled = true;
+      const payBtn = $('#payRazorpayBtn');
+      if (payBtn) payBtn.disabled = true;
+      try {
+        // Always re-check, so another tab cannot silently change the outcome.
+        const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
+        const original = result?.order;
+        const active = getPendingOrderPayment();
+        if (!active || active.orderNumber !== pending.orderNumber ||
+            !previousPaymentCanBeSeparated(original)) {
+          throw new Error('Previous payment status or cart changed. Check payment status before trying again.');
+        }
+        // Keep a durable reference; never persist the signed callback proof.
+        const archiveKey = 'milvanta-prior-payment-review-' + state.customer.id + '-' + pending.orderNumber;
+        localStorage.setItem(archiveKey, JSON.stringify({
+          customerId: state.customer.id,
+          orderNumber: pending.orderNumber,
+          orderId: pending.orderId || '',
+          paymentId: pending.paymentId || '',
+          paymentStatus: original.payment_status,
+          orderStatus: original.order_status,
+          archivedAt: Date.now()
+        }));
+        const sessionRaw = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY);
+        if (sessionRaw && JSON.parse(sessionRaw)?.orderNumber === pending.orderNumber) {
+          sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
+        }
+        const previousKey = PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id;
+        const localRaw = localStorage.getItem(previousKey);
+        if (localRaw && JSON.parse(localRaw)?.orderNumber === pending.orderNumber) {
+          localStorage.removeItem(previousKey);
+        }
+        state.checkoutKey = newCheckoutKey();
+        state.isPaymentProcessing = false;
+        renderStep3();
+        const message = $('#checkoutErrorMessage');
+        if (message) {
+          message.style.color = '#166534';
+          message.textContent = 'Earlier order ' + pending.orderNumber +
+            ' remains recorded separately. You can now pay for this different cart. No new payment has been made yet.';
+        }
+      } catch (error) {
+        state.isPaymentProcessing = false;
+        continueBtn.disabled = false;
+        if (payBtn) payBtn.disabled = false;
+        const err = $('#checkoutErrorMessage');
+        if (err) err.textContent = error.message || 'Unable to verify the earlier order. Do not pay again yet.';
+      }
+    });
+  }
+
   async function reconcilePendingOrderPayment(pending) {
     const payBtn = $('#payRazorpayBtn');
     const errEl = $('#checkoutErrorMessage');
@@ -1145,6 +1260,7 @@
       const errEl = $('#checkoutErrorMessage');
       if (payBtn) payBtn.textContent = 'Check Payment Status (no new charge)';
       if (errEl) errEl.textContent = 'A prior payment attempt needs confirmation. Check its status instead of paying again.';
+      void offerSeparateNewCartPayment(unresolved);
     }
   }
 

@@ -31,5 +31,5 @@ test('verified Razorpay fee is disclosed only after server returns authenticated
 test('primary and Cloudflare upload checkout assets have binary parity', () => {
   assert.equal(html, read('frontend/cloudflare-upload/checkout.html'));
   assert.equal(script, read('frontend/cloudflare-upload/js/checkout.js'));
-  assert.match(html, /checkout\.js\?v=20261103-payment-fee-transparency-2/);
+  assert.match(html, /checkout\.js\?v=20261103-distinct-cart-recovery-3/);
 });
