@@ -945,6 +945,12 @@
         !stillPending || stillPending.orderNumber !== pending.orderNumber ||
         !previousPaymentCanBeSeparated(previous) || $('#continueDifferentOrderBtn')) return;
 
+    const warning = $('#checkoutErrorMessage');
+    if (warning) {
+      warning.style.color = '#92400e';
+      warning.textContent = 'The payment for earlier order ' + previous.order_number +
+        ' remains recorded separately. You may continue with this different cart below; no second payment for the earlier order is required.';
+    }
     const notice = document.createElement('div');
     notice.id = 'differentCartPaymentNotice';
     notice.style.cssText = 'padding:14px;margin:14px 0;border:1px solid #cbd5e1;border-radius:10px;color:#334155;background:#f8fafc;font-size:0.87rem;line-height:1.6;';
