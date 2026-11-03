@@ -5115,6 +5115,8 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       expectedPaise,
       gatewayOrderPaise: Number(gatewayOrder?.amount),
       gatewayPaymentPaise: Number(gatewayPayment?.amount),
+      gatewayPaymentFeePaise: gatewayPayment?.fee == null ? null : Number(gatewayPayment.fee),
+      gatewayPaymentTaxPaise: gatewayPayment?.tax == null ? null : Number(gatewayPayment.tax),
       gatewayPaymentStatus: gatewayPayment?.status
     }, 'Razorpay payment verification mismatch; manual reconciliation required');
     return reply.code(400).send({ verified: false, error: 'payment_details_mismatch',
