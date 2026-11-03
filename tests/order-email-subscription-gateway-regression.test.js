@@ -91,3 +91,59 @@ test('Razorpay 401 is diagnostic, actionable and never leaks provider response t
   assert.match(server, /subscription_requires_reconciliation/);
   assert.doesNotMatch(server, /subscription_creation_failed', message: err\.message/);
 });
+
+
+test('actual outbox function enqueues correct customer and admin amounts; missing values fail closed', async () => {
+  const helperStart = email.indexOf('export function publicEmailImageUrl(');
+  const helperEnd = email.indexOf('/**\n * Format currency helper', helperStart);
+  const outboxStart = email.indexOf('export async function enqueueOrderPaidOutbox(');
+  const outboxEnd = email.indexOf('/**\n * Enqueue transactional email outbox records for a confirmed milk subscription', outboxStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart && outboxStart >= 0 && outboxEnd > outboxStart);
+
+  const recordedErrors = [];
+  const context = vm.createContext({
+    process: {env: {ADMIN_EMAIL:'admin@milvanta.test'}},
+    console: {error:(...messages)=>recordedErrors.push(messages)}
+  });
+  vm.runInContext(
+    email.slice(helperStart,helperEnd).replaceAll('export function','function') + '\n' +
+    email.slice(outboxStart,outboxEnd).replace('export async function','async function') +
+    '\n;globalThis.enqueuePaid = enqueueOrderPaidOutbox;',
+    context
+  );
+
+  const statements = [];
+  const client = {
+    query: async (sql,args) => {
+      statements.push({sql,args});
+      return {rows:[{id:statements.length,event_key:args[0],status:'pending'}]};
+    }
+  };
+  const payload = {
+    order:validOrder,
+    customer:{email:'buyer@milvanta.test',name:'Sample Customer'},
+    address:{house:'Unit 1',city:'Hyderabad'},
+    items:[{name:'Pot Curd',quantity:1,unitPricePaise:4900,lineTotalPaise:4900}],
+    paymentId:'pay_example_mock'
+  };
+
+  const enqueued = await context.enqueuePaid(client,payload);
+  assert.equal(enqueued.length,2);
+  assert.equal(statements.length,2);
+  assert.ok(statements.every(statement => /INSERT INTO email_outbox/.test(statement.sql)));
+  for (const statement of statements) {
+    const saved = JSON.parse(statement.args[4]);
+    assert.equal(saved.order.subtotal_paise,154900);
+    assert.equal(saved.order.delivery_charge_paise,5000);
+    assert.equal(saved.order.total_paise,159900);
+    assert.equal(saved.paymentId,'pay_example_mock');
+  }
+
+  const skipped = await context.enqueuePaid(client,{
+    ...payload,
+    order:{...validOrder,total_paise:undefined}
+  });
+  assert.equal(skipped.length,0);
+  assert.equal(statements.length,2,'invalid receipt must not enqueue any emails');
+  assert.equal(recordedErrors.length,1);
+});
