@@ -54,6 +54,18 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
 
   const validPassword = 'SecurePassword123!';
 
+  const validHydAddress = {
+    name: 'Alpha Recipient',
+    phone: '9876543210',
+    house: 'Flat 101',
+    building: 'Sunrise Heights',
+    street: 'Hitech City Main Road',
+    landmark: 'Near Cyber Towers',
+    city: 'Hyderabad',
+    state: 'Telangana',
+    pincode: '500049' // Standard Hyderabad pincode (delivery fee = ₹50 = 5000 paise)
+  };
+
   before(async () => {
     // 1. Create Customer A (verified phone)
     const { salt: saltA, hash: hashA } = await createPasswordHash(validPassword);
@@ -331,18 +343,6 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
   // PHASE 3 & PHASE 4 — CHECKOUT AUTH GATES & RAZORPAY ORDER CREATION
   // =========================================================================
   describe('Phase 3 & Phase 4 — Checkout Authentication & Order Creation', () => {
-    const validHydAddress = {
-      name: 'Alpha Recipient',
-      phone: '9876543210',
-      house: 'Flat 101',
-      building: 'Sunrise Heights',
-      street: 'Hitech City Main Road',
-      landmark: 'Near Cyber Towers',
-      city: 'Hyderabad',
-      state: 'Telangana',
-      pincode: '500049' // Standard Hyderabad pincode (delivery fee = ₹50 = 5000 paise)
-    };
-
     it('blocks unauthenticated order placement with HTTP 401', async () => {
       const res = await app.inject({
         method: 'POST',
@@ -1021,6 +1021,583 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
         'SELECT reserved_stock FROM products WHERE id=$1', [cowMilkProduct.id]
       )).rows[0];
       assert.equal(Number(stockAfter.reserved_stock), Number(stockBefore.reserved_stock) + 2);
+    });
+
+    it('rejects direct order with legacy catalog product IDs (101/102) with HTTP 409 product_unavailable', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: 101, quantity: 1, size: '1 Litre' }
+          ]
+        }
+      });
+      assert.equal(response.statusCode, 409);
+      assert.equal(response.json().error, 'product_unavailable');
+    });
+
+    it('enforces server-authoritative pricing overriding client-tampered unitPrice', async (t) => {
+      const gatewayId = 'order_tamper_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async (params) => ({
+        id: gatewayId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: Number(cowMilkProduct.id), quantity: 1, size: '1 Litre', unitPrice: 10, price_paise: 100 }
+          ]
+        }
+      });
+      assert.equal(response.statusCode, 201);
+      assert.equal(response.json().amount, 16000, 'Server must enforce ₹110 cow milk + ₹50 delivery = 16,000 paise regardless of client tampering');
+    });
+  });
+
+  // =========================================================================
+  // PHASE 6C — CUSTOM-DAYS MILK SUBSCRIPTION ACTIVATION, ENTITLEMENT & IDEMPOTENCY
+  // =========================================================================
+  describe('Phase 6C — Custom-Days Milk Subscription Activation, Entitlement & Idempotency', () => {
+    it('activates custom-days milk subscription with exact entitlement, paid-through date and delivery address upon captured payment', async (t) => {
+      const gatewayOrderId = 'order_csub_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const gatewayPaymentId = 'pay_csub_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async (params) => ({
+        id: gatewayOrderId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+
+      // 30 days of 1 Litre Cow Milk: 30 * 10500 = 315000 paise + 5000 delivery charge = 320000 paise (₹3200)
+      const orderRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            {
+              productId: Number(cowMilkProduct.id),
+              quantity: 1,
+              size: '1 Litre',
+              isCustomDaysPlan: true,
+              days: 30
+            }
+          ]
+        }
+      });
+      assert.equal(orderRes.statusCode, 201, orderRes.body);
+      const orderData = orderRes.json();
+      assert.equal(orderData.amount, 320000, '30 days * ₹105 + ₹50 delivery must be 320,000 paise');
+
+      const { rows: [orderRow] } = await pool.query(
+        'SELECT * FROM customer_orders WHERE order_number = $1',
+        [orderData.orderNumber]
+      );
+      assert.equal(orderRow.items[0].isCustomDaysPlan, true);
+      assert.equal(orderRow.items[0].subscriptionDays, 30);
+      assert.equal(orderRow.items[0].subscriptionDailyRatePaise, 10500);
+      assert.equal(orderRow.items[0].subscriptionSize, '1 Litre');
+
+      // Now verify payment with captured gateway order
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({
+        id, amount: 320000, currency: 'INR', status: 'paid'
+      }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({
+        id, order_id: gatewayOrderId, amount: 320000, currency: 'INR', status: 'captured'
+      }));
+
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${gatewayOrderId}|${gatewayPaymentId}`).digest('hex');
+
+      const verifyRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          razorpay_order_id: gatewayOrderId,
+          razorpay_payment_id: gatewayPaymentId,
+          razorpay_signature: signature
+        }
+      });
+      assert.equal(verifyRes.statusCode, 200, verifyRes.body);
+      assert.equal(verifyRes.json().verified, true);
+      assert.equal(verifyRes.json().orderStatus, 'confirmed');
+
+      // Verify PostgreSQL customer_orders
+      const { rows: [updatedOrder] } = await pool.query(
+        'SELECT payment_status, order_status FROM customer_orders WHERE id = $1',
+        [orderRow.id]
+      );
+      assert.equal(updatedOrder.payment_status, 'paid');
+      assert.equal(updatedOrder.order_status, 'confirmed');
+
+      // Verify customer_subscriptions materialized atomically
+      const { rows: subs } = await pool.query(
+        `SELECT * FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(orderRow.id)]
+      );
+      assert.equal(subs.length, 1, 'Exactly one custom-days subscription must be materialized');
+      const sub = subs[0];
+      assert.equal(Number(sub.customer_id), Number(customerA.id));
+      assert.equal(Number(sub.product_id), Number(cowMilkProduct.id));
+      assert.equal(sub.status, 'active');
+      assert.equal(sub.plan_type, 'custom');
+      assert.equal(sub.duration_label, '30 Days Custom Plan');
+      assert.equal(Number(sub.cost_per_day_paise), 10500);
+      assert.equal(Number(sub.total_amount_paise), 315000);
+      assert.equal(sub.quantity, '1 Litre');
+
+      // Verify notes structure
+      const notes = sub.notes;
+      assert.equal(notes.fulfillmentEntitled, true, 'Must have fulfillmentEntitled === true');
+      assert.equal(notes.authType, 'one_time');
+      assert.equal(notes.paidCount, 1);
+      assert.equal(notes.days, 30);
+      assert.equal(notes.dailyRatePaise, 10500);
+      assert.equal(notes.paymentId, gatewayPaymentId);
+      assert.equal(notes.lastPaymentId, gatewayPaymentId);
+      assert.equal(notes.sourceOrderId, String(orderRow.id));
+      assert.equal(notes.sourceOrderLineKey, '0:0');
+      assert.ok(notes.startDate, 'Must have startDate');
+      assert.ok(notes.paidThroughDate, 'Must have paidThroughDate');
+
+      // Verify address preserved
+      assert.equal(notes.deliveryAddress.house, validHydAddress.house);
+      assert.equal(notes.deliveryAddress.pincode, validHydAddress.pincode);
+      assert.equal(sub.delivery_address.house, validHydAddress.house);
+      assert.equal(sub.delivery_address.pincode, validHydAddress.pincode);
+    });
+
+    it('enforces exactly-once activation and idempotency against duplicate verification and webhook replay via Migration 017 index', async (t) => {
+      const gatewayOrderId = 'order_dup_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const gatewayPaymentId = 'pay_dup_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async (params) => ({
+        id: gatewayOrderId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+
+      const orderRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: Number(cowMilkProduct.id), quantity: 1, size: '500 ml', isCustomDaysPlan: true, days: 7 }
+          ]
+        }
+      });
+      assert.equal(orderRes.statusCode, 201);
+      const order = orderRes.json();
+
+      const { rows: [orderRow] } = await pool.query(
+        'SELECT id FROM customer_orders WHERE order_number = $1', [order.orderNumber]
+      );
+
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({
+        id, amount: order.amount, currency: 'INR', status: 'paid'
+      }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({
+        id, order_id: gatewayOrderId, amount: order.amount, currency: 'INR', status: 'captured'
+      }));
+
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${gatewayOrderId}|${gatewayPaymentId}`).digest('hex');
+
+      // First verification call
+      const verify1 = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayOrderId, razorpay_payment_id: gatewayPaymentId, razorpay_signature: signature }
+      });
+      assert.equal(verify1.statusCode, 200);
+
+      const count1 = await pool.query(
+        `SELECT COUNT(*) FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(orderRow.id)]
+      );
+      assert.equal(Number(count1.rows[0].count), 1);
+
+      // Duplicate verification call (e.g. user refreshed or webhook replayed)
+      const verify2 = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayOrderId, razorpay_payment_id: gatewayPaymentId, razorpay_signature: signature }
+      });
+      assert.equal(verify2.statusCode, 200);
+
+      const count2 = await pool.query(
+        `SELECT COUNT(*) FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(orderRow.id)]
+      );
+      assert.equal(Number(count2.rows[0].count), 1, 'Subscription count must remain exactly 1 after duplicate verify');
+
+      // Verify that Migration 017 partial unique index rejects conflicting raw insert
+      let constraintError = null;
+      try {
+        await pool.query(
+          `INSERT INTO customer_subscriptions (
+            customer_id, product_id, product_name, frequency, time_slot,
+            quantity, quantity_num, cost_per_day_paise, plan_type, duration_label,
+            total_amount_paise, delivery_address, notes, status, next_delivery
+          ) VALUES ($1, $2, 'Duplicate Test', 'Daily', '6:00 AM', '500 ml', 1, 6000, 'custom', '7 Days', 42000, $3::jsonb, $4::jsonb, 'active', 'Tomorrow')`,
+          [
+            customerA.id, cowMilkProduct.id, JSON.stringify(validHydAddress),
+            JSON.stringify({ sourceOrderId: String(orderRow.id), sourceOrderLineKey: '0:0' })
+          ]
+        );
+      } catch (err) {
+        constraintError = err;
+      }
+      assert.ok(constraintError, 'Raw duplicate insert must throw unique constraint violation');
+      assert.equal(constraintError.code, '23505', 'PostgreSQL error code must be 23505 unique_violation');
+      assert.ok(constraintError.constraint.includes('customer_subscriptions_paid_order_line_key_unique'));
+    });
+
+    it('does NOT materialize any subscription for authorized-only or failed payments', async (t) => {
+      // 1. Authorized-only payment
+      const gatewayOrderId = 'order_authonly_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const gatewayPaymentId = 'pay_authonly_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async (params) => ({
+        id: gatewayOrderId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+
+      const orderRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: Number(cowMilkProduct.id), quantity: 1, size: '1 Litre', isCustomDaysPlan: true, days: 15 }
+          ]
+        }
+      });
+      assert.equal(orderRes.statusCode, 201);
+      const order = orderRes.json();
+      const { rows: [orderRow] } = await pool.query(
+        'SELECT id FROM customer_orders WHERE order_number = $1', [order.orderNumber]
+      );
+
+      // Payment fetch returns authorized (not captured)
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({ id, amount: order.amount, currency: 'INR', status: 'attempted' }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({
+        id, order_id: gatewayOrderId, amount: order.amount, currency: 'INR', status: 'authorized'
+      }));
+
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${gatewayOrderId}|${gatewayPaymentId}`).digest('hex');
+
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayOrderId, razorpay_payment_id: gatewayPaymentId, razorpay_signature: signature }
+      });
+      // Authorized-only must NOT materialize subscription
+      const subCheck = await pool.query(
+        `SELECT COUNT(*) FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(orderRow.id)]
+      );
+      assert.equal(Number(subCheck.rows[0].count), 0, 'No subscription materialized for authorized-only payment');
+
+      const orderCheck = (await pool.query('SELECT payment_status FROM customer_orders WHERE id=$1', [orderRow.id])).rows[0];
+      assert.notEqual(orderCheck.payment_status, 'paid');
+    });
+
+    it('materializes distinct subscription units with unique sourceOrderLineKey for multi-quantity custom-days orders', async (t) => {
+      const gatewayOrderId = 'order_multi_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const gatewayPaymentId = 'pay_multi_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async (params) => ({
+        id: gatewayOrderId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+
+      // Quantity = 2 of 14-day 500ml cow milk: 2 * 14 * 5500 = 154000 paise + 5000 delivery = 159000 paise
+      const orderRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: Number(cowMilkProduct.id), quantity: 2, size: '500 ml', isCustomDaysPlan: true, days: 14 }
+          ]
+        }
+      });
+      assert.equal(orderRes.statusCode, 201);
+      const order = orderRes.json();
+      assert.equal(order.amount, 159000);
+
+      const { rows: [orderRow] } = await pool.query(
+        'SELECT id FROM customer_orders WHERE order_number = $1', [order.orderNumber]
+      );
+
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({ id, amount: 159000, currency: 'INR', status: 'paid' }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({
+        id, order_id: gatewayOrderId, amount: 159000, currency: 'INR', status: 'captured'
+      }));
+
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${gatewayOrderId}|${gatewayPaymentId}`).digest('hex');
+
+      const verifyRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayOrderId, razorpay_payment_id: gatewayPaymentId, razorpay_signature: signature }
+      });
+      assert.equal(verifyRes.statusCode, 200);
+
+      const { rows: subs } = await pool.query(
+        `SELECT id, notes FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1 ORDER BY notes->>'sourceOrderLineKey' ASC`,
+        [String(orderRow.id)]
+      );
+      assert.equal(subs.length, 2, 'Quantity 2 must materialize exactly 2 distinct subscription units');
+      assert.equal(subs[0].notes.sourceOrderLineKey, '0:0');
+      assert.equal(subs[1].notes.sourceOrderLineKey, '0:1');
+      assert.equal(subs[0].notes.fulfillmentEntitled, true);
+      assert.equal(subs[1].notes.fulfillmentEntitled, true);
+      assert.equal(subs[0].notes.days, 14);
+      assert.equal(subs[1].notes.days, 14);
+    });
+
+    it('reconciles pending custom-days orders via POST /api/v1/orders/:orderNumber/reconcile-payment exactly once', async (t) => {
+      const orderNumber = 'MV-RECON-CD-' + crypto.randomUUID().slice(0, 12);
+      const gatewayId = 'order_recon_cd_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const paymentId = 'pay_recon_cd_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+
+      // Order total: 7 days * 10500 = 73500 + 5000 = 78500 paise
+      const { rows: [order] } = await pool.query(
+        `INSERT INTO customer_orders (
+          customer_id, order_number, idempotency_key, address, items,
+          subtotal_paise, delivery_charge_paise, total_paise, razorpay_order_id,
+          payment_status, order_status, reservation_expires_at
+        ) VALUES (
+          $1, $2, $3, $4::jsonb, $5::jsonb,
+          73500, 5000, 78500, $6,
+          'pending', 'placed', NOW() + INTERVAL '15 minutes'
+        ) RETURNING id, order_number`,
+        [
+          customerA.id, orderNumber, crypto.randomUUID(), JSON.stringify(validHydAddress),
+          JSON.stringify([{
+            productId: Number(cowMilkProduct.id),
+            name: 'Pure Fresh Cow Milk',
+            quantity: 1,
+            unitPricePaise: 73500,
+            lineTotalPaise: 73500,
+            isCustomDaysPlan: true,
+            subscriptionDays: 7,
+            subscriptionDailyRatePaise: 10500,
+            subscriptionSize: '1 Litre'
+          }]),
+          gatewayId
+        ]
+      );
+      await pool.query('UPDATE products SET reserved_stock = reserved_stock + 1 WHERE id = $1', [cowMilkProduct.id]);
+      await pool.query(
+        `INSERT INTO payment_orders (razorpay_order_id, customer_order_id, amount_paise, currency, items, status)
+         VALUES ($1, $2, 78500, 'INR', '[]'::jsonb, 'created')`,
+        [gatewayId, order.id]
+      );
+
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({ id, amount: 78500, currency: 'INR', status: 'paid' }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async (id) => ({
+        items: [{ id: paymentId, order_id: id, amount: 78500, currency: 'INR', status: 'captured' }]
+      }));
+
+      const reconcileUrl = `/api/v1/orders/${order.order_number}/reconcile-payment`;
+      const rec1 = await app.inject({
+        method: 'POST',
+        url: reconcileUrl,
+        headers: { Authorization: 'Bearer ' + tokenA }
+      });
+      assert.equal(rec1.statusCode, 200, rec1.body);
+      assert.equal(rec1.json().state, 'confirmed');
+
+      // Check subscription materialized
+      const subs = await pool.query(
+        `SELECT * FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(order.id)]
+      );
+      assert.equal(subs.rowCount, 1);
+      assert.equal(subs.rows[0].notes.fulfillmentEntitled, true);
+      assert.equal(subs.rows[0].notes.days, 7);
+
+      // Re-running reconcile is idempotent
+      const rec2 = await app.inject({
+        method: 'POST',
+        url: reconcileUrl,
+        headers: { Authorization: 'Bearer ' + tokenA }
+      });
+      assert.equal(rec2.statusCode, 200);
+      assert.equal(rec2.json().state, 'confirmed');
+
+      const subsAfter = await pool.query(
+        `SELECT COUNT(*) FROM customer_subscriptions WHERE notes->>'sourceOrderId' = $1`,
+        [String(order.id)]
+      );
+      assert.equal(Number(subsAfter.rows[0].count), 1);
+    });
+
+    it('displays activated custom-days plan in Customer Profile, Subscription Calendar, Admin Dashboard, and Delivery Preview', async () => {
+      // 1. Customer profile fetches subscriptions
+      const profileRes = await app.inject({
+        method: 'GET',
+        url: '/api/v1/subscriptions',
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+      assert.equal(profileRes.statusCode, 200);
+      const profileSubs = profileRes.json().subscriptions;
+      assert.ok(Array.isArray(profileSubs));
+      const customSub = profileSubs.find(s => s.plan_type === 'custom' && s.status === 'active');
+      assert.ok(customSub, 'Customer profile must include active custom-days subscription');
+      assert.ok(customSub.effective_paid_through_date, 'Must have effective_paid_through_date');
+
+      // 2. Subscription Calendar
+      const calRes = await app.inject({
+        method: 'GET',
+        url: `/api/v1/subscriptions/${customSub.id}/calendar`,
+        headers: { Authorization: `Bearer ${tokenA}` }
+      });
+      assert.equal(calRes.statusCode, 200);
+      const calData = calRes.json();
+      assert.ok(calData.subscriptionId);
+      assert.ok(Array.isArray(calData.days));
+
+      // 3. Admin Subscriptions list
+      const adminSubsRes = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/subscriptions',
+        headers: { Authorization: `Bearer ${tokenAdmin}` }
+      });
+      assert.equal(adminSubsRes.statusCode, 200);
+      const adminData = adminSubsRes.json();
+      const adminMatch = adminData.subscriptions.find(s => s.id === customSub.id);
+      assert.ok(adminMatch, 'Admin subscriptions must display custom-days plan');
+      assert.equal(adminMatch.notes.fulfillmentEntitled, true);
+
+      // 4. Delivery Preview includes custom days plan for tomorrow
+      const previewRes = await app.inject({
+        method: 'GET',
+        url: '/api/v1/operations/deliveries/generate-preview',
+        headers: { Authorization: `Bearer ${tokenAdmin}` }
+      });
+      assert.equal(previewRes.statusCode, 200);
+      const previewData = previewRes.json();
+      assert.ok(previewData.eligibleSubscriptions.length >= 1, 'Delivery preview must include entitled subscriptions');
+    });
+
+    it('rejects verification callback with mismatched currency, mismatched amount, or mismatched order ID', async (t) => {
+      const orderNumber = 'MV-MISMATCH-' + crypto.randomUUID().slice(0, 10);
+      const gatewayId = 'order_mismatch_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      const paymentId = 'pay_mismatch_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+
+      const { rows: [order] } = await pool.query(
+        `INSERT INTO customer_orders (
+          customer_id, order_number, idempotency_key, address, items,
+          subtotal_paise, delivery_charge_paise, total_paise, razorpay_order_id,
+          payment_status, order_status, reservation_expires_at
+        ) VALUES (
+          $1, $2, $3, $4::jsonb, '[]'::jsonb,
+          11000, 5000, 16000, $5,
+          'pending', 'placed', NOW() + INTERVAL '15 minutes'
+        ) RETURNING id, order_number`,
+        [customerA.id, orderNumber, crypto.randomUUID(), JSON.stringify(validHydAddress), gatewayId]
+      );
+      await pool.query(
+        `INSERT INTO payment_orders (razorpay_order_id, customer_order_id, amount_paise, currency, items, status)
+         VALUES ($1, $2, 16000, 'INR', '[]'::jsonb, 'created')`,
+        [gatewayId, order.id]
+      );
+
+      const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+        .update(`${gatewayId}|${paymentId}`).digest('hex');
+
+      // Case A: Currency mismatch (e.g. gateway order currency is USD)
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({ id, amount: 16000, currency: 'USD', status: 'paid' }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({ id, order_id: gatewayId, amount: 16000, currency: 'INR', status: 'captured' }));
+
+      const resA = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayId, razorpay_payment_id: paymentId, razorpay_signature: signature }
+      });
+      assert.equal(resA.statusCode, 400);
+      assert.equal(resA.json().error, 'payment_details_mismatch');
+
+      // Case B: Payment amount mismatch
+      t.mock.method(razorpay.orders, 'fetch', async (id) => ({ id, amount: 16000, currency: 'INR', status: 'paid' }));
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({ id, order_id: gatewayId, amount: 9999, currency: 'INR', status: 'captured' }));
+
+      const resB = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayId, razorpay_payment_id: paymentId, razorpay_signature: signature }
+      });
+      assert.equal(resB.statusCode, 400);
+      assert.equal(resB.json().error, 'payment_details_mismatch');
+
+      // Case C: Payment order_id mismatch
+      t.mock.method(razorpay.payments, 'fetch', async (id) => ({ id, order_id: 'order_wrong_foreign_id', amount: 16000, currency: 'INR', status: 'captured' }));
+
+      const resC = await app.inject({
+        method: 'POST',
+        url: '/api/v1/payments/verify',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: { razorpay_order_id: gatewayId, razorpay_payment_id: paymentId, razorpay_signature: signature }
+      });
+      assert.equal(resC.statusCode, 400);
+      assert.equal(resC.json().error, 'payment_details_mismatch');
+    });
+
+    it('reconcile endpoint handles gateway error gracefully with HTTP 503', async (t) => {
+      const orderNumber = 'MV-REC-ERR-' + crypto.randomUUID().slice(0, 10);
+      const gatewayId = 'order_err_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+
+      const { rows: [order] } = await pool.query(
+        `INSERT INTO customer_orders (
+          customer_id, order_number, idempotency_key, address, items,
+          subtotal_paise, delivery_charge_paise, total_paise, razorpay_order_id,
+          payment_status, order_status, reservation_expires_at
+        ) VALUES (
+          $1, $2, $3, $4::jsonb, '[]'::jsonb,
+          11000, 5000, 16000, $5,
+          'pending', 'placed', NOW() + INTERVAL '15 minutes'
+        ) RETURNING id, order_number`,
+        [customerA.id, orderNumber, crypto.randomUUID(), JSON.stringify(validHydAddress), gatewayId]
+      );
+      await pool.query(
+        `INSERT INTO payment_orders (razorpay_order_id, customer_order_id, amount_paise, currency, items, status)
+         VALUES ($1, $2, 16000, 'INR', '[]'::jsonb, 'created')`,
+        [gatewayId, order.id]
+      );
+
+      t.mock.method(razorpay.orders, 'fetch', async () => {
+        const err = new Error('Gateway Connection Timeout');
+        err.statusCode = 504;
+        throw err;
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/orders/${order.order_number}/reconcile-payment`,
+        headers: { Authorization: 'Bearer ' + tokenA }
+      });
+      assert.equal(res.statusCode, 503);
+      assert.equal(res.json().error, 'payment_reconciliation_unavailable');
     });
   });
 
