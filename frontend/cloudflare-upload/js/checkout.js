@@ -1696,7 +1696,11 @@
               });
               sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, pendingRecord);
               if (state.customer?.id) {
-                localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, pendingRecord);
+                // Never persist the signed Razorpay callback proof in durable storage.
+                // Gateway reconciliation only needs the server-owned order reference.
+                const safeForDurableStorage = JSON.parse(pendingRecord);
+                safeForDurableStorage.signature = '';
+                localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, JSON.stringify(safeForDurableStorage));
               }
             } catch {}
           }
