@@ -12,7 +12,20 @@ import Razorpay from 'razorpay';
 import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
-import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail } from './email.js';
+import {
+  sendOrderPaidEmails,
+  sendSubscriptionConfirmationEmails,
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+  enqueueOrderPaidOutbox,
+  enqueueSubscriptionOutbox,
+  processEmailOutbox,
+  markOutboxDelivered,
+  verifyResendWebhookSignature,
+  enqueueRecurringSubscriptionOutbox,
+  startEmailOutboxWorker,
+  stopEmailOutboxWorker
+} from './email.js';
 import {
   resolveItemPricing,
   isFreshMilkProduct,
@@ -46,6 +59,7 @@ import {
   derivePaidThroughDate,
   getEffectivePaidThroughDate,
   formatDateYMD,
+  addDaysToYMD,
   resolveSubscriptionDeliveryAddress,
   normalizeDeliveryAddress
 } from './services/subscriptionService.js';
@@ -188,24 +202,7 @@ const mailer = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMT
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-async function sendWelcomeEmail(user) {
-  if (!mailer) {
-    app.log.warn('SMTP not configured; welcome email skipped');
-    return;
-  }
-  const name = escapeHtml(user.name);
-  await mailer.sendMail({
-    from: process.env.SMTP_FROM || process.env.MAIL_FROM || process.env.SMTP_USER,
-    to: user.email,
-    subject: 'Welcome to MILVANTA - you have signed up successfully',
-    text: `Hi ${user.name},\n\nYou have signed up successfully on MILVANTA. You can now log in and order fresh milk and dairy products.\n\nConnecting Farms to Families\nTeam MILVANTA`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#0B1B4B">
-      <h2>Welcome to MILVANTA, ${name}!</h2>
-      <p>You have <b>signed up successfully</b>. You can now log in and order fresh milk and dairy products.</p>
-      <p style="color:#1E8E3E">Connecting Farms to Families</p>
-      <p>Team MILVANTA</p></div>`
-  });
-}
+// sendWelcomeEmail is imported from ./email.js
 
 // ---------- Password hashing (built-in scrypt, no extra dependency) ----------
 async function hashPassword(password) {
@@ -344,6 +341,69 @@ function safeAddress(input) {
   return address;
 }
 
+// Create prepaid custom-days subscriptions only from a captured, matching
+// Razorpay order. The original paid order and subscription records commit
+// atomically, with one server-authoritative source order line per delivery plan.
+async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
+  const lines = Array.isArray(order?.items) ? order.items : [];
+  const startDate = getTomorrowDeliveryDateYMD();
+  const address = order.address && typeof order.address === 'object' ? order.address : null;
+  if (!startDate || !address) throw new Error('paid_subscription_address_or_start_missing');
+
+  for (let i = 0; i < lines.length; i++) {
+    const item = lines[i];
+    if (item.isCustomDaysPlan !== true) continue;
+    const days = Number(item.subscriptionDays);
+    const dailyRate = Number(item.subscriptionDailyRatePaise);
+    const quantity = Number(item.quantity);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 90 ||
+        !Number.isSafeInteger(dailyRate) || dailyRate <= 0 ||
+        !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25 ||
+        Number(item.lineTotalPaise) !== days * dailyRate * quantity) {
+      throw new Error('invalid_server_subscription_plan');
+    }
+    const paidThroughDate = addDaysToYMD(startDate, days - 1);
+    if (!paidThroughDate) throw new Error('invalid_paid_through_date');
+    const itemSize = String(item.subscriptionSize || '').trim();
+    if (!itemSize) throw new Error('missing_subscription_size');
+
+    for (let unitIndex = 0; unitIndex < quantity; unitIndex++) {
+      const notes = {
+        sourceOrderId: String(order.id),
+        sourceOrderLineKey: String(i) + ':' + String(unitIndex),
+        sourceOrderNumber: order.order_number,
+        paymentId: capturedPaymentId,
+        lastPaymentId: capturedPaymentId,
+        fulfillmentEntitled: true,
+        authType: 'one_time',
+        paidCount: 1,
+        startDate,
+        paidThroughDate,
+        days,
+        customDays: days,
+        dailyRatePaise: dailyRate,
+        deliveryAddress: address,
+        verifiedAt: new Date().toISOString()
+      };
+      await client.query(
+        'INSERT INTO customer_subscriptions (' +
+        'customer_id, product_id, product_name, image_url, frequency, time_slot, ' +
+        'quantity, quantity_num, cost_per_day_paise, plan_type, duration_label, ' +
+        'total_amount_paise, delivery_address, notes, status, next_delivery' +
+        ') VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16) ' +
+        'ON CONFLICT DO NOTHING',
+        [
+          order.customer_id, item.productId, item.name, item.imageUrl || null,
+          'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+          itemSize, 1, dailyRate, 'custom',
+          String(days) + ' Days Custom Plan', days * dailyRate,
+          JSON.stringify(address), JSON.stringify(notes), 'active', 'Tomorrow, 6:00 AM'
+        ]
+      );
+    }
+  }
+}
+
 async function applyPaymentStatus(client, orderId, paymentId, status, amount, currency) {
   if (!['authorized', 'captured', 'failed'].includes(status)) return false;
   const found = await client.query(
@@ -359,7 +419,7 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
   );
   if (!payment.customer_order_id) return true;
   const result = await client.query(
-    'SELECT id, order_number, items, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
+    'SELECT id, customer_id, order_number, address, items, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
     [payment.customer_order_id]
   );
   const order = result.rows[0];
@@ -394,6 +454,7 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
         );
         if (!changed.rowCount) throw new Error('reserved_stock_invariant_failed');
       }
+      await materializeCustomDaysPlans(client, order, paymentId);
       await client.query(
         "UPDATE customer_orders SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE id = $1",
         [payment.customer_order_id]
@@ -403,6 +464,48 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
          VALUES ($1, $2, $3, 'confirmed', 'payment_gateway', 'Payment verified and order confirmed')`,
         [order.id, order.order_number, order.order_status]
       );
+
+      // Persist transactional email outbox records within transaction client
+      const orderAddress = typeof order.address === 'string' ? JSON.parse(order.address) : (order.address || {});
+      const orderItems = Array.isArray(order.items) ? order.items : [];
+      const { rows: [custRow] } = await client.query(
+        'SELECT email, full_name, phone FROM customers WHERE id = $1',
+        [order.customer_id]
+      );
+      const customer = {
+        name: custRow?.full_name || orderAddress.name,
+        email: custRow?.email || orderAddress.email,
+        phone: custRow?.phone || orderAddress.phone
+      };
+
+      const isPureSub = orderItems.length > 0 && orderItems.every(it => it.isCustomDaysPlan === true);
+      const hasSub = orderItems.some(it => it.isCustomDaysPlan === true);
+
+      if (hasSub) {
+        const { rows: subRows } = await client.query(
+          `SELECT * FROM customer_subscriptions WHERE (notes->>'sourceOrderId') = $1::text`,
+          [String(order.id)]
+        );
+        for (const sub of subRows) {
+          await enqueueSubscriptionOutbox(client, {
+            subscription: sub,
+            customer,
+            address: orderAddress,
+            paymentId,
+            sourceOrderId: order.id
+          });
+        }
+      }
+
+      if (!isPureSub) {
+        await enqueueOrderPaidOutbox(client, {
+          order,
+          customer,
+          address: orderAddress,
+          items: orderItems,
+          paymentId
+        });
+      }
     } else {
       await client.query(
         "UPDATE customer_orders SET payment_status = 'paid', order_status = 'payment_review', updated_at = NOW() WHERE id = $1",
@@ -514,7 +617,7 @@ app.post('/api/v1/auth/signup', {
     throw error;
   }
 
-  sendWelcomeEmail({ ...user, name: user.full_name }).catch((error) => request.log.error({ err: error }, 'welcome email failed'));
+  sendWelcomeEmail({ to: user.email, customerName: user.full_name }).catch((error) => request.log.error({ err: error }, 'welcome email failed'));
 
   const token = await issueToken(user);
   return reply.code(201).send({ user: publicUser(user), customer: publicUser(user), token });
@@ -629,7 +732,7 @@ app.post('/api/v1/auth/forgot-password/send-otp', {
   `, [email, otpHash]);
 
   // Dispatch live email & log for audit/dev
-  console.log(`[Password Reset] Generated OTP for ${email}: ${otp}`);
+  request.log.info({ email }, 'Password reset OTP generated and dispatched');
   sendPasswordResetEmail({
     to: customer.email,
     customerName: customer.full_name,
@@ -3086,7 +3189,7 @@ app.get('/api/v1/delivery/check', async (request, reply) => {
 // ---------- Orders & Checkout ----------
 app.post('/api/v1/orders', {
   preHandler: app.authenticate,
-  config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
+  config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 10000 : 5, timeWindow: '1 minute' } }
 }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   // A production checkout must never reserve stock or create an order that
@@ -3122,14 +3225,14 @@ app.post('/api/v1/orders', {
   const deliveryCharge = deliveryInfo.feePaise || 5000;
 
   const quantities = new Map();
-  const itemMetaMap = new Map();
+  const orderLines = [];
   for (const item of items) {
     const productId = Number(item?.productId), quantity = Number(item?.quantity);
     if (!Number.isSafeInteger(productId) || productId <= 0 || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     const totalQuantity = (quantities.get(productId) || 0) + quantity;
     if (totalQuantity > 25) return reply.code(400).send({ error: 'invalid_item' });
     quantities.set(productId, totalQuantity);
-    itemMetaMap.set(productId, item);
+    orderLines.push({ productId, quantity, metadata: item });
   }
 
   const client = await pool.connect();
@@ -3167,24 +3270,49 @@ app.post('/api/v1/orders', {
       await client.query('ROLLBACK');
       return reply.code(409).send({ error: 'product_unavailable', message: 'One or more items in your cart are currently unavailable.' });
     }
+    // Aggregate only inventory; calculate price for EACH cart variant separately.
+    const productById = new Map(productRows.map(p => [Number(p.id), p]));
+    for (const product of productRows) {
+      const requested = quantities.get(Number(product.id));
+      if (Number(product.stock_quantity) - Number(product.reserved_stock) < requested) {
+        await client.query('ROLLBACK');
+        return reply.code(409).send({
+          error: 'insufficient_stock',
+          productId: Number(product.id),
+          message: 'Insufficient stock for ' + product.name + '.'
+        });
+      }
+    }
+
     let subtotal = 0;
     const orderItems = [];
-    for (const product of productRows) {
-      const quantity = quantities.get(Number(product.id));
-      if (Number(product.stock_quantity) - Number(product.reserved_stock) < quantity) {
-        await client.query('ROLLBACK');
-        return reply.code(409).send({ error: 'insufficient_stock', productId: Number(product.id), message: `Insufficient stock for ${product.name}.` });
-      }
-      const itemMeta = itemMetaMap.get(Number(product.id)) || {};
+    for (const line of orderLines) {
+      const product = productById.get(line.productId);
+      const quantity = line.quantity;
       let pricing;
       try {
-        pricing = resolveItemPricing(product, itemMeta);
-      } catch (err) {
+        pricing = resolveItemPricing(product, line.metadata);
+      } catch (error) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'invalid_item_pricing', message: err.message });
+        return reply.code(400).send({ error: 'invalid_item_pricing', message: error.message });
       }
+      // Recurring mandates must use Razorpay Subscriptions checkout, never
+      // ordinary one-time order payments.
+      if (line.metadata.isContinuousMonthsPlan || line.metadata.variant?.isContinuousMonthsPlan) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'recurring_plan_requires_subscription_checkout' });
+      }
+      const isCustomDaysPlan = pricing.isSubscription === true && Boolean(
+        line.metadata.isCustomDaysPlan || line.metadata.variant?.isCustomDaysPlan ||
+        line.metadata.subscriptionPlan?.days
+      );
       const unitPricePaise = pricing.unitPricePaise;
-      subtotal += unitPricePaise * quantity;
+      const lineTotalPaise = unitPricePaise * quantity;
+      if (!Number.isSafeInteger(lineTotalPaise) || lineTotalPaise <= 0) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'invalid_item_total' });
+      }
+      subtotal += lineTotalPaise;
       orderItems.push({
         productId: Number(product.id),
         name: pricing.resolvedName || product.name,
@@ -3193,7 +3321,13 @@ app.post('/api/v1/orders', {
         imageUrl: product.image_url,
         quantity,
         unitPricePaise,
-        lineTotalPaise: unitPricePaise * quantity
+        lineTotalPaise,
+        isCustomDaysPlan,
+        ...(isCustomDaysPlan ? {
+          subscriptionDays: pricing.totalDays,
+          subscriptionDailyRatePaise: pricing.dailyRatePaise,
+          subscriptionSize: pricing.effectiveSize
+        } : {})
       });
     }
     // Total amount in Razorpay includes subtotal plus delivery fee (₹50 / ₹80 based on Hafeezpet hub distance)
@@ -3274,6 +3408,7 @@ app.post('/api/v1/orders', {
       });
     }
   } catch (error) {
+    console.error('[WEBHOOK CATCH ERROR]:', error);
     await client.query('ROLLBACK');
     throw error;
   } finally {
@@ -3302,6 +3437,103 @@ app.get('/api/v1/orders/:orderNumber', { preHandler: app.authenticate }, async (
   );
   if (!rows[0]) return reply.code(404).send({ error: 'order_not_found' });
   return { order: rows[0] };
+});
+
+// Reconcile an uncertain payment solely from the customer's recorded Razorpay
+// order. All status/amount evidence comes from Razorpay under server credentials.
+app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
+  preHandler: app.authenticate,
+  config: { rateLimit: { max: process.env.NODE_ENV === 'test' ? 10000 : 5, timeWindow: '1 minute' } }
+}, async (request, reply) => {
+  if (!pool || !razorpay || !process.env.RAZORPAY_KEY_SECRET) {
+    return reply.code(503).send({ error: 'payments_not_configured' });
+  }
+  const { rows: [order] } = await pool.query(
+    'SELECT co.id, co.order_number, co.payment_status, co.order_status, po.razorpay_order_id, po.amount_paise, po.currency ' +
+    'FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id ' +
+    'WHERE co.customer_id = $1 AND co.order_number = $2',
+    [request.customer.id, request.params.orderNumber]
+  );
+  if (!order) return reply.code(404).send({ error: 'order_not_found' });
+  if (order.payment_status === 'paid') {
+    return reply.send({
+      state: order.order_status === 'confirmed' ? 'confirmed' : 'payment_review',
+      orderNumber: order.order_number,
+      orderStatus: order.order_status
+    });
+  }
+
+  let gatewayOrder, collection;
+  try {
+    [gatewayOrder, collection] = await Promise.all([
+      razorpay.orders.fetch(order.razorpay_order_id),
+      razorpay.orders.fetchPayments(order.razorpay_order_id)
+    ]);
+  } catch (error) {
+    request.log.warn({ code: error?.statusCode || 'gateway_unavailable' }, 'Razorpay reconciliation unavailable');
+    return reply.code(503).send({
+      error: 'payment_reconciliation_unavailable',
+      message: 'Unable to confirm payment right now. Please do not pay again yet.'
+    });
+  }
+
+  const amount = Number(order.amount_paise);
+  if (!Number.isSafeInteger(amount) || Number(gatewayOrder?.amount) !== amount ||
+      gatewayOrder?.currency !== order.currency || order.currency !== 'INR') {
+    request.log.error({ expectedPaise: amount, actualPaise: Number(gatewayOrder?.amount) }, 'Razorpay order mismatch during reconciliation');
+    return reply.code(409).send({ state: 'payment_review', error: 'gateway_order_mismatch' });
+  }
+  const payments = Array.isArray(collection?.items) ? collection.items : [];
+  const captured = payments.filter(p => p?.status === 'captured');
+  const validCaptured = captured.filter(p =>
+    p.order_id === order.razorpay_order_id && Number(p.amount) === amount && p.currency === 'INR'
+  );
+  if (captured.length !== validCaptured.length || validCaptured.length > 1) {
+    request.log.error({
+      capturedCount: captured.length,
+      matchedCount: validCaptured.length
+    }, 'Unexpected captured payments during reconciliation');
+    return reply.code(409).send({ state: 'payment_review', error: 'captured_payment_mismatch' });
+  }
+  if (validCaptured.length === 0) {
+    return reply.send({
+      state: 'pending', orderNumber: order.order_number,
+      message: 'Payment is not yet confirmed as captured. Do not pay again until the status is resolved.'
+    });
+  }
+
+  const payment = validCaptured[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const applied = await applyPaymentStatus(client, order.razorpay_order_id, payment.id, 'captured', payment.amount, payment.currency);
+    if (!applied) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ state: 'payment_review', error: 'payment_state_conflict' });
+    }
+    const { rows: [after] } = await client.query(
+      'SELECT payment_status, order_status FROM customer_orders WHERE id = $1',
+      [order.id]
+    );
+    await client.query('COMMIT');
+    if (order.payment_status !== 'paid' && after?.payment_status === 'paid' && after?.order_status === 'confirmed') {
+      sendOrderPaidEmails(pool, order.id, payment.id).catch(err => {
+        request.log.error({ err }, 'Failed to dispatch order confirmation emails after reconciliation');
+      });
+    }
+    return reply.send({
+      state: after?.payment_status === 'paid' && after?.order_status === 'confirmed'
+        ? 'confirmed' : 'payment_review',
+      orderNumber: order.order_number,
+      orderStatus: after?.order_status || 'payment_review'
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    request.log.error({ code: error?.code || 'reconciliation_error' }, 'Payment reconciliation transaction failed');
+    return reply.code(503).send({ error: 'payment_reconciliation_failed' });
+  } finally {
+    client.release();
+  }
 });
 
 // Order Tracking Timeline
@@ -4864,32 +5096,69 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
   );
   if (!paymentOrder.rowCount) return reply.code(404).send({ verified: false, error: 'payment_order_not_found' });
   const [gatewayOrder, gatewayPayment] = await Promise.all([razorpay.orders.fetch(orderId), razorpay.payments.fetch(paymentId)]);
-  if (gatewayPayment.order_id !== orderId ||
-      gatewayOrder.amount !== Number(paymentOrder.rows[0].amount_paise) ||
-      gatewayPayment.amount !== Number(paymentOrder.rows[0].amount_paise) ||
-      gatewayPayment.currency !== 'INR') {
-    return reply.code(400).send({ verified: false, error: 'payment_details_mismatch' });
+  const expectedPaise = Number(paymentOrder.rows[0].amount_paise);
+  const checks = {
+    paymentOrderId: gatewayPayment?.order_id === orderId,
+    gatewayOrderAmount: Number.isSafeInteger(Number(gatewayOrder?.amount)) && Number(gatewayOrder.amount) === expectedPaise,
+    gatewayPaymentAmount: Number.isSafeInteger(Number(gatewayPayment?.amount)) && Number(gatewayPayment.amount) === expectedPaise,
+    gatewayOrderCurrency: (gatewayOrder?.currency || 'INR') === 'INR',
+    gatewayPaymentCurrency: gatewayPayment?.currency === 'INR'
+  };
+  if (Object.values(checks).includes(false)) {
+    request.log.error({
+      mismatchedFields: Object.entries(checks).filter(([, passed]) => !passed).map(([field]) => field),
+      expectedPaise,
+      gatewayOrderPaise: Number(gatewayOrder?.amount),
+      gatewayPaymentPaise: Number(gatewayPayment?.amount),
+      gatewayPaymentStatus: gatewayPayment?.status
+    }, 'Razorpay payment verification mismatch; manual reconciliation required');
+    return reply.code(400).send({ verified: false, error: 'payment_details_mismatch',
+      message: 'We could not reconcile this payment safely. Do not pay again. Please use Check Payment Status or contact support.' });
   }
   const client = await pool.connect();
+  let applied;
+  let newlyConfirmed = false;
+  let orderState = null;
   try {
     await client.query('BEGIN');
-    const applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    // Match webhook lock order: payment_orders first, customer_orders second.
+    await client.query('SELECT razorpay_order_id FROM payment_orders WHERE razorpay_order_id = $1 FOR UPDATE', [orderId]);
+    const beforeRows = await client.query(
+      'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1 FOR UPDATE OF co',
+      [orderId]
+    );
+    const wasPaid = beforeRows.rows[0]?.payment_status === 'paid';
+    applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    if (applied) {
+      const afterRows = await client.query(
+        'SELECT co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+        [orderId]
+      );
+      orderState = afterRows.rows[0] || null;
+      newlyConfirmed = !wasPaid && orderState?.payment_status === 'paid' && orderState?.order_status === 'confirmed';
+    }
     await client.query('COMMIT');
     if (!applied) return reply.code(409).send({ verified: false, error: 'payment_state_not_applicable' });
 
-    // Send order confirmation emails via Resend to customer & admin
-    if (gatewayPayment.status === 'captured') {
+    if (gatewayPayment.status === 'captured' && newlyConfirmed) {
       const customerOrderId = paymentOrder.rows[0]?.customer_order_id;
       if (customerOrderId) {
-        sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
+        try {
+          await sendOrderPaidEmails(pool, customerOrderId, paymentId);
+        } catch (err) {
           app.log.error({ err }, '[Resend] Failed to send order emails on payment verify');
-        });
+        }
         await dispatchOrderPaidNotification(pool, customerOrderId);
       }
     }
 
-    return { verified: true, orderId, paymentId, status: gatewayPayment.status };
+    return {
+      verified: true, orderId, paymentId, status: gatewayPayment.status,
+      orderStatus: orderState?.order_status || null,
+      requiresManualReview: orderState?.order_status === 'payment_review'
+    };
   } catch (error) {
+    console.error('[WEBHOOK CATCH ERROR]:', error);
     await client.query('ROLLBACK');
     throw error;
   } finally {
@@ -4918,6 +5187,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   const subEntity = request.body?.payload?.subscription?.entity;
   const rawPaymentEntity = request.body?.payload?.payment?.entity;
   const rawInvoiceEntity = request.body?.payload?.invoice?.entity;
+  let hasPaymentEvidence = false;
+  let confirmedPaymentId = null;
 
   if (
     ['subscription.activated', 'subscription.charged'].includes(eventName) &&
@@ -4950,6 +5221,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   try {
     await client.query('BEGIN');
     const seen = await client.query('INSERT INTO payment_webhook_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id', [eventId]);
+    const ordersToNotify = [];
     if (seen.rowCount) {
       const eventName = request.body?.event;
       // A. Standard Order Payment Events
@@ -4959,15 +5231,23 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           : request.body.event === 'payment.failed' ? 'failed'
             : request.body.event === 'payment.authorized' ? 'authorized' : null;
         if (status) {
+          const beforeRow = await client.query(
+            'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+            [entity.order_id]
+          );
+          const wasPaid = beforeRow.rows[0]?.payment_status === 'paid';
           await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency);
           if (status === 'captured') {
-            const foundOrder = await client.query('SELECT customer_order_id FROM payment_orders WHERE razorpay_order_id = $1', [entity.order_id]);
-            const orderId = foundOrder.rows[0]?.customer_order_id;
-            if (orderId) {
-              sendOrderPaidEmails(pool, orderId, entity.id).catch((err) => {
-                app.log.error({ err }, '[Resend] Failed to send order emails on webhook capture');
-              });
-              await dispatchOrderPaidNotification(client, orderId, false);
+            const foundOrder = await client.query(
+              'SELECT co.id, co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+              [entity.order_id]
+            );
+            const ord = foundOrder.rows[0];
+            if (ord) {
+              if (!wasPaid && ord.payment_status === 'paid' && ord.order_status === 'confirmed') {
+                ordersToNotify.push({ orderId: ord.id, paymentId: entity.id });
+              }
+              await dispatchOrderPaidNotification(client, ord.id, false);
             }
           }
         }
@@ -4997,7 +5277,6 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
 
       // B. Razorpay Subscription Lifecycle Events
-      const subEntity = request.body?.payload?.subscription?.entity;
       if (subEntity?.id) {
         if (['subscription.authenticated'].includes(eventName)) {
           // Mandate authorization alone must NOT authorize unpaid deliveries.
@@ -5022,8 +5301,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
 
           // Defensible captured billing-cycle evidence requirement:
           // Must match subscription ID, be captured/paid, and belong to current billing cycle.
-          let hasPaymentEvidence = false;
-          let confirmedPaymentId = null;
+          hasPaymentEvidence = false;
+          confirmedPaymentId = null;
 
           if (rawPaymentEntity?.id && typeof rawPaymentEntity.id === 'string' && rawPaymentEntity.id.startsWith('pay_')) {
             const isCaptured = rawPaymentEntity.status === 'captured';
@@ -5293,16 +5572,104 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
     }
     if (seen.rowCount && subEntity?.id) {
-      const {rows: notificationSubs}=await client.query(`SELECT s.*,c.phone FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id WHERE s.razorpay_subscription_id=$1 OR s.notes->>'subscriptionId'=$1 OR s.notes->>'razorpay_subscription_id'=$1`,[subEntity.id]);
-      for(const s of notificationSubs) {
-        if(['subscription.activated','subscription.charged'].includes(eventName)) await queuePaidSubscriptionActivation(client,s.id);
-        else {
-          const templateKey=({'subscription.cancelled':'SUBSCRIPTION_CANCELLED','subscription.paused':'SUBSCRIPTION_PAUSED','subscription.resumed':'SUBSCRIPTION_RESUMED','subscription.halted':'BILLING_ISSUE','subscription.pending':'BILLING_ISSUE'})[eventName];
-          if(templateKey) await queueNotification(client,{customerId:s.customer_id,phone:s.phone,templateKey,params:{productName:s.product_name,dueDate:s.notes?.paidThroughDate},idempotencyKey:templateKey==='SUBSCRIPTION_CANCELLED'?`sms_sub_cancel_${s.id}`:`gateway_${eventName}_${s.id}_${eventId}`});
+      const { rows: notificationSubs } = await client.query(
+        `SELECT s.*, c.phone, c.email AS customer_email, c.full_name AS customer_name 
+         FROM customer_subscriptions s 
+         JOIN customers c ON c.id = s.customer_id 
+         WHERE s.razorpay_subscription_id = $1 OR s.notes->>'subscriptionId' = $1 OR s.notes->>'razorpay_subscription_id' = $1`,
+        [subEntity.id]
+      );
+
+      for (const s of notificationSubs) {
+        if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
+          const notes = typeof s.notes === 'object' && s.notes !== null ? s.notes : {};
+          const isMandateOnly = notes.authType === 'mandate_only' || notes.fulfillmentEntitled === false;
+
+          // Strict payment verification: require captured payment evidence, valid paidCount, and paid-through date
+          const paidCount = Number(subEntity?.paid_count) || Number(notes.paidCount) || 0;
+          const paidThroughDate = notes.paidThroughDate;
+          const todayYMD = new Date().toISOString().slice(0, 10);
+          const hasValidPaidThrough = Boolean(paidThroughDate && typeof paidThroughDate === 'string' && paidThroughDate >= todayYMD);
+
+          // Payment entity verification when raw payment is present in webhook
+          let paymentEntityValid = true;
+          if (rawPaymentEntity?.id) {
+            const isCaptured = rawPaymentEntity.status === 'captured';
+            const isINR = !rawPaymentEntity.currency || rawPaymentEntity.currency === 'INR';
+            const hasAmount = rawPaymentEntity.amount !== undefined ? Number(rawPaymentEntity.amount) > 0 : true;
+            const subMatch = !rawPaymentEntity.subscription_id || rawPaymentEntity.subscription_id === subEntity.id;
+            paymentEntityValid = isCaptured && isINR && hasAmount && subMatch;
+          }
+
+          const hasConfirmedPayment = Boolean(
+            (hasPaymentEvidence || rawPaymentEntity?.status === 'captured' || notes.lastPaymentId) &&
+            paymentEntityValid
+          );
+
+          const isFulfillmentEntitled = notes.fulfillmentEntitled === true && !isMandateOnly && paidCount > 0 && hasValidPaidThrough && hasConfirmedPayment;
+
+          if (!isFulfillmentEntitled) {
+            app.log.info({
+              subId: s.id,
+              eventName,
+              isMandateOnly,
+              paidCount,
+              hasValidPaidThrough,
+              hasConfirmedPayment
+            }, '[Webhook] Subscription missing captured billing or fulfillment entitlement; skipping paid confirmation emails.');
+            continue;
+          }
+
+          // Verified captured billing confirmed!
+          await queuePaidSubscriptionActivation(client, s.id);
+
+          const paymentIdForNotice = confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null) || (notes.lastPaymentId) || '';
+          const cycleForNotice = paidCount || subEntity?.paid_count || subEntity?.current_start || 1;
+          const isRenewal = eventName === 'subscription.charged' || paidCount > 1;
+
+          await enqueueRecurringSubscriptionOutbox(client, {
+            subscription: s,
+            customer: { phone: s.phone, email: s.customer_email, name: s.customer_name },
+            address: s.delivery_address || {},
+            paymentId: paymentIdForNotice,
+            billingCycle: cycleForNotice,
+            isRenewal,
+            eventName
+          });
+        } else {
+          const templateKey = ({
+            'subscription.cancelled': 'SUBSCRIPTION_CANCELLED',
+            'subscription.paused': 'SUBSCRIPTION_PAUSED',
+            'subscription.resumed': 'SUBSCRIPTION_RESUMED',
+            'subscription.halted': 'BILLING_ISSUE',
+            'subscription.pending': 'BILLING_ISSUE'
+          })[eventName];
+          if (templateKey) {
+            await queueNotification(client, {
+              customerId: s.customer_id,
+              phone: s.phone,
+              templateKey,
+              params: { productName: s.product_name, dueDate: s.notes?.paidThroughDate },
+              idempotencyKey: templateKey === 'SUBSCRIPTION_CANCELLED' ? `sms_sub_cancel_${s.id}` : `gateway_${eventName}_${s.id}_${eventId}`
+            });
+          }
         }
       }
     }
     await client.query('COMMIT');
+
+    // Asynchronously dispatch transactional emails strictly AFTER database transaction commit
+    for (const { orderId, paymentId } of ordersToNotify) {
+      sendOrderPaidEmails(pool, orderId, paymentId).catch((err) => {
+        app.log.error({ err }, '[Resend] Failed to send order emails after webhook commit');
+      });
+    }
+    if (subEntity?.id && ['subscription.activated', 'subscription.charged'].includes(eventName) && hasPaymentEvidence) {
+      processEmailOutbox(pool, { limit: 10 }).catch((err) => {
+        app.log.error({ err }, '[Resend] Failed to process subscription outbox after webhook commit');
+      });
+    }
+
     return { received: true, duplicate: !seen.rowCount };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -5313,16 +5680,261 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
 });
 
 // Explicit endpoint to trigger or resend order confirmation emails (authenticated)
+// Enforces authoritative PostgreSQL & Razorpay payment evidence and status guards.
 app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { orderNumber } = request.params;
-  const paymentId = request.body?.paymentId || '';
-  if (pool) {
-    const { rows } = await pool.query('SELECT customer_id FROM customer_orders WHERE order_number = $1', [orderNumber]);
-    if (!rows.length || (Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin)) {
-      return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
-    }
+  // Strictly ignore untrusted paymentId from body; strictly query captured payment from database
+
+  const { rows } = await pool.query(
+    `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name 
+     FROM customer_orders co
+     LEFT JOIN customers c ON c.id = co.customer_id
+     WHERE co.order_number = $1`,
+    [orderNumber]
+  );
+
+  if (!rows.length) {
+    return reply.code(404).send({ error: 'order_not_found', message: 'Order record does not exist.' });
   }
-  const result = await sendOrderPaidEmails(pool, orderNumber, paymentId);
+
+  const order = rows[0];
+
+  // Reject unauthorized customers
+  if (Number(order.customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+    return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
+  }
+
+  // Reject payment_review orders
+  if (order.order_status === 'payment_review') {
+    return reply.code(409).send({ error: 'order_in_review', message: 'Order is under manual review and cannot send paid confirmation emails.' });
+  }
+
+  // Reject unconfirmed or unpaid orders (pending, authorized, failed)
+  if (order.payment_status !== 'paid' || order.order_status !== 'confirmed') {
+    return reply.code(400).send({ error: 'order_not_paid', message: 'Order payment is not paid or order is not confirmed.' });
+  }
+
+  // Verify authoritative captured payment evidence in payment_orders
+  const payRes = await pool.query(
+    `SELECT razorpay_payment_id, amount_paise, currency, status 
+     FROM payment_orders 
+     WHERE customer_order_id = $1`,
+    [order.id]
+  );
+
+  const capturedRows = payRes.rows.filter(p => p.status === 'captured');
+  const validCaptured = capturedRows.filter(p =>
+    Number(p.amount_paise) === Number(order.total_paise) &&
+    p.currency === 'INR'
+  );
+
+  if (!validCaptured.length) {
+    return reply.code(409).send({ error: 'unverified_payment_evidence', message: 'No authoritative captured payment record matches this order.' });
+  }
+
+  if (capturedRows.length > 1 && capturedRows.some(p => p.razorpay_payment_id !== validCaptured[0].razorpay_payment_id)) {
+    return reply.code(409).send({ error: 'payment_conflict', message: 'Unresolved payment conflict detected.' });
+  }
+
+  const verifiedPaymentId = validCaptured[0].razorpay_payment_id;
+  const result = await sendOrderPaidEmails(pool, order.id, verifiedPaymentId);
+  return reply.send(result);
+});
+
+// Email delivery webhook (Resend Svix / SMTP authenticated events)
+// Fail closed when signing secret missing; rejects anonymous delivery/bounce events; deduplicates via email_webhook_events
+app.post('/api/v1/emails/webhook', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+
+  const headers = request.headers || {};
+  const isResend = Boolean(headers['svix-id'] || headers['Svix-Id'] || headers['SVIX-ID']);
+  const smtpToken = headers['x-smtp-webhook-token'] || headers['X-SMTP-Webhook-Token'];
+
+  let provider = null;
+  let eventId = null;
+
+  if (isResend) {
+    const resendSecret = (process.env.RESEND_WEBHOOK_SECRET || '').trim();
+    if (!resendSecret) {
+      return reply.code(503).send({
+        error: 'resend_webhook_not_configured',
+        message: 'RESEND_WEBHOOK_SECRET is not configured'
+      });
+    }
+
+    const verification = verifyResendWebhookSignature({
+      headers,
+      rawBody: request.rawBody,
+      secret: resendSecret,
+      toleranceSeconds: 300
+    });
+
+    if (!verification.valid) {
+      return reply.code(400).send({
+        error: 'invalid_webhook_signature',
+        reason: verification.reason
+      });
+    }
+    provider = 'resend';
+    eventId = verification.svixId;
+  } else if (smtpToken) {
+    const expectedToken = (process.env.SMTP_WEBHOOK_SECRET || process.env.SMTP_WEBHOOK_TOKEN || '').trim();
+    if (!expectedToken) {
+      return reply.code(503).send({
+        error: 'smtp_webhook_not_configured',
+        message: 'SMTP_WEBHOOK_SECRET / SMTP_WEBHOOK_TOKEN is not configured'
+      });
+    }
+    if (smtpToken !== expectedToken) {
+      return reply.code(401).send({ error: 'invalid_smtp_webhook_token' });
+    }
+    provider = 'smtp';
+    eventId = headers['x-smtp-event-id'] || request.body?.event_id || request.body?.data?.id || ('smtp_' + Date.now() + '_' + crypto.randomUUID().slice(0, 8));
+  } else {
+    // Reject anonymous webhook requests
+    return reply.code(401).send({
+      error: 'unauthorized_email_webhook',
+      message: 'Email webhook requests require Svix signature verification or SMTP authorization token.'
+    });
+  }
+
+  const event = request.body?.type || request.body?.event || 'unknown';
+  const data = request.body?.data || request.body;
+  const messageId = data?.email_id || data?.id || data?.message_id;
+
+  if (!messageId) {
+    return reply.code(400).send({ error: 'missing_message_id' });
+  }
+
+  // Atomically process deduplication event recording and delivery status updates in a single transaction
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    if (eventId) {
+      const dedup = await client.query(
+        `INSERT INTO email_webhook_events (event_id, provider, event_type)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [eventId, provider, event]
+      );
+
+      if (dedup.rowCount === 0) {
+        // Replay detected: commit and return duplicate response safely
+        await client.query('COMMIT');
+        return reply.send({ received: true, duplicate: true, eventId });
+      }
+    }
+
+    let responseData = { received: true, event, provider };
+
+    if (['email.delivered', 'delivered'].includes(event)) {
+      const rawDeliveredAt = data?.created_at || data?.delivered_at;
+      const deliveredAt = rawDeliveredAt ? new Date(rawDeliveredAt) : new Date();
+      if (isNaN(deliveredAt.getTime())) {
+        throw new Error('invalid_delivered_at_timestamp');
+      }
+      const res = await markOutboxDelivered(client, { providerMessageId: messageId, deliveredAt });
+      responseData = { received: true, status: 'delivered', messageId, ...res };
+    } else if (['email.bounced', 'bounced', 'email.complained'].includes(event)) {
+      const reason = data?.bounce?.message || data?.complaint?.message || 'Bounced/Spam complaint';
+      await client.query(
+        `UPDATE email_outbox 
+         SET status = 'bounced', provider_status = 'bounced', last_error = $2, updated_at = NOW() 
+         WHERE provider_message_id = $1`,
+        [messageId, reason]
+      );
+      responseData = { received: true, status: 'bounced', messageId };
+    }
+
+    await client.query('COMMIT');
+    return reply.send(responseData);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    request.log.error({ err: err?.message || err }, 'Failed to process email delivery webhook transaction');
+    return reply.code(500).send({ error: 'webhook_processing_failed', message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Admin Email Outbox Inspection & Dead-Letter Visibility
+app.get('/api/v1/admin/emails/outbox', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { status, email_type, recipient_email, limit = 50, offset = 0 } = request.query || {};
+
+  let query = `
+    SELECT id, event_key, email_type, recipient_type, recipient_email,
+           source_order_id, source_subscription_id, payment_id,
+           status, provider, provider_message_id, provider_status,
+           attempts, max_attempts, last_error, locked_by, locked_at, lease_expires_at,
+           next_retry_at, sent_at, delivered_at, created_at, updated_at
+    FROM email_outbox
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (status && status !== 'all') {
+    params.push(status);
+    query += ' AND status = $' + params.length;
+  }
+  if (email_type) {
+    params.push(email_type);
+    query += ' AND email_type = $' + params.length;
+  }
+  if (recipient_email && recipient_email.trim()) {
+    params.push(`%${recipient_email.trim().toLowerCase()}%`);
+    query += ' AND LOWER(recipient_email) LIKE $' + params.length;
+  }
+
+  const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+
+  params.push(safeLimit);
+  const limitIdx = params.length;
+  params.push(safeOffset);
+  const offsetIdx = params.length;
+
+  query += ' ORDER BY id DESC LIMIT $' + limitIdx + ' OFFSET $' + offsetIdx;
+
+  const { rows: items } = await pool.query(query, params);
+  const { rows: [countRow] } = await pool.query(
+    `SELECT count(*)::int AS total FROM email_outbox`
+  );
+
+  return reply.send({
+    success: true,
+    total: countRow?.total || items.length,
+    count: items.length,
+    items
+  });
+});
+
+// Internal scheduled worker trigger (for Cloudflare Worker Cron / external ping)
+app.post('/api/v1/internal/email-outbox/process', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const providedSecret = request.headers['x-internal-worker-secret'];
+  const expectedSecret = (process.env.INTERNAL_WORKER_SECRET || '').trim();
+
+  if (!expectedSecret) {
+    return reply.code(503).send({
+      error: 'worker_trigger_not_configured',
+      message: 'INTERNAL_WORKER_SECRET is not configured'
+    });
+  }
+
+  if (!providedSecret || providedSecret !== expectedSecret) {
+    return reply.code(401).send({ error: 'unauthorized', message: 'Invalid or missing worker secret' });
+  }
+
+  const limit = Math.min(100, Math.max(1, Number(request.query?.limit) || 50));
+  const result = await processEmailOutbox(pool, {
+    workerId: 'cf_cron_trigger',
+    limit
+  });
+
   return reply.send(result);
 });
 
@@ -5938,12 +6550,14 @@ async function releaseExpiredReservations() {
   }
 }
 
-const port = Number(process.env.PORT || 10000);
-const host = process.env.HOST || '0.0.0.0';
+const defaultPort = Number(process.env.PORT || 10000);
+const defaultHost = process.env.HOST || '0.0.0.0';
 
 let reservationSweep = null;
 let outboxSweep = null;
-if (process.env.NODE_ENV !== 'test') {
+let emailWorkerInstance = null;
+
+export async function startServer(customPort = defaultPort, customHost = defaultHost) {
   // 1. Controlled migration execution before HTTP listener is opened
   if (pool) {
     if (process.env.APP_ENV === 'staging') {
@@ -5975,24 +6589,71 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   // 2. Open HTTP listener only after database migrations succeed
-  await app.listen({ port, host });
-  reservationSweep = setInterval(releaseExpiredReservations, 60_000);
-  reservationSweep.unref();
+  const address = await app.listen({ port: customPort, host: customHost });
 
-  outboxSweep = setInterval(async () => {
-    try {
-      if (pool) await processNotificationOutbox(pool, 25);
-    } catch (err) {
-      app.log.warn({ err: err?.message || err }, 'Background outbox sweep error');
-    }
-  }, 30_000);
-  outboxSweep.unref();
+  if (!reservationSweep) {
+    reservationSweep = setInterval(releaseExpiredReservations, 60_000);
+    reservationSweep.unref();
+  }
+
+  if (!outboxSweep) {
+    outboxSweep = setInterval(async () => {
+      try {
+        if (pool) await processNotificationOutbox(pool, 25);
+      } catch (err) {
+        app.log.warn({ err: err?.message || err }, 'Background outbox sweep error');
+      }
+    }, 30_000);
+    outboxSweep.unref();
+  }
+
+  // 3. Start transactional email outbox worker & trigger recovery pass for persisted pending jobs
+  if (pool) {
+    emailWorkerInstance = startEmailOutboxWorker(pool, { intervalMs: 15_000 });
+    // Process persisted pending jobs after application restart (e.g. Render wake-up)
+    processEmailOutbox(pool, { limit: 50 }).catch((err) => {
+      app.log.warn({ err: err?.message || err }, 'Initial email outbox startup recovery pass error');
+    });
+  }
+
+  return { app, address, emailWorker: emailWorkerInstance };
+}
+
+export async function stopServer() {
+  stopEmailOutboxWorker();
+  emailWorkerInstance = null;
+  if (reservationSweep) {
+    clearInterval(reservationSweep);
+    reservationSweep = null;
+  }
+  if (outboxSweep) {
+    clearInterval(outboxSweep);
+    outboxSweep = null;
+  }
+  try {
+    await app.close();
+  } catch (_) {}
+}
+
+app.addHook('onClose', async () => {
+  stopEmailOutboxWorker();
+  emailWorkerInstance = null;
+  if (reservationSweep) {
+    clearInterval(reservationSweep);
+    reservationSweep = null;
+  }
+  if (outboxSweep) {
+    clearInterval(outboxSweep);
+    outboxSweep = null;
+  }
+});
+
+if (process.env.NODE_ENV !== 'test') {
+  await startServer();
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
-      if (reservationSweep) clearInterval(reservationSweep);
-      if (outboxSweep) clearInterval(outboxSweep);
-      await app.close();
+      await stopServer();
       await pool?.end();
       process.exit(0);
     });

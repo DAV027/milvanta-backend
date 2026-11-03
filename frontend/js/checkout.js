@@ -98,6 +98,70 @@
     return productsCatalog.find(p => Number(p.id) === numId) || {};
   }
 
+  // Resolve a legacy cart entry to exactly one ACTIVE server product.
+  // Never use historical frontend IDs as database IDs: legacy id=1 was a brownie
+  // while production id=1 is Cow Milk. Names must independently match.
+  function canonicalCheckoutProductName(value) {
+    const raw = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const aliases = {
+      'pure farm cow milk': 'cow milk',
+      'pure farm buffalo milk': 'buffalo milk',
+      'heritage kowa cake': 'kowa cake',
+      'organic raagi millet cookies': 'raagi cookies',
+      'sprouted millet muesli': 'muesli',
+      'butter cake chocolate chips': 'butter cake with couverture chocolate chips',
+      'pure desi cow ghee': 'pure cow ghee',
+      'pure desi buffalo ghee': 'pure buffalo ghee'
+    };
+    return aliases[raw] || raw;
+  }
+
+  async function resolveCheckoutCartAgainstServer() {
+    // A fresh catalog is mandatory at payment time; render-only fallback
+    // products are not allowed to create chargeable orders.
+    const { products: liveProducts } = await api('/api/v1/products');
+    if (!Array.isArray(liveProducts) || liveProducts.length === 0) {
+      throw new Error('Live product catalog is temporarily unavailable. Please retry when connected.');
+    }
+    const requested = state.cart.map(item => {
+      const itemName = canonicalCheckoutProductName(item.name || item.product_name);
+      const liveMatches = liveProducts.filter(product =>
+        canonicalCheckoutProductName(product.name) === itemName
+      );
+      if (!itemName || liveMatches.length !== 1) {
+        throw new Error('Cart item "' + String(item.name || 'Unknown item') +
+          '" is no longer available in our live catalog. Please refresh your cart before paying.');
+      }
+      const product = liveMatches[0];
+      const qty = Number(item.quantity);
+      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 25) {
+        throw new Error('Invalid cart quantity for ' + product.name + '.');
+      }
+      return {
+        productId: Number(product.id),
+        quantity: qty,
+        size: item.variant?.size || item.size || product.selling_unit || '',
+        variant: item.variant || null,
+        isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan),
+        isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan),
+        subscriptionPlan: item.subscriptionPlan || item.variant?.subscriptionPlan || null,
+        productName: product.name,
+        availableStock: Number(product.stock_quantity)
+      };
+    });
+    const grouped = new Map();
+    for (const item of requested) {
+      grouped.set(item.productId, (grouped.get(item.productId) || 0) + item.quantity);
+    }
+    for (const [id, quantity] of grouped) {
+      const item = requested.find(entry => entry.productId === id);
+      if (!Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(item.availableStock) || quantity > item.availableStock) {
+        throw new Error(item.productName + ' has insufficient live stock for this order. Please adjust your cart.');
+      }
+    }
+    return requested.map(({ productName, availableStock, ...item }) => item);
+  }
+
   // Store Policy Contents for Compliance Dialog (Same as index.html)
   const POLICIES = {
     terms: {
@@ -158,7 +222,16 @@
     },
     isSubmitting: false,
     isPaymentProcessing: false,
-    checkoutKey: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('mv-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8))
+    checkoutKey: (() => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        try { return crypto.randomUUID(); } catch {}
+      }
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    })()
   };
 
   // API Helper
@@ -473,25 +546,9 @@
         }
       }
     } catch {}
-
-    // Fallback default address matching profile page
-    state.savedAddresses = [
-      {
-        id: 1,
-        is_default: true,
-        name: state.addressDraft.name || 'Akhil',
-        phone: state.addressDraft.phone || '6305974564',
-        house: 'Flat 402, Greenwood Heights',
-        building: 'Greenwood Heights',
-        street: 'Madhapur Main Road, Near Cyber Towers',
-        landmark: 'Near Cyber Towers',
-        city: 'Hyderabad',
-        state: 'Telangana',
-        pincode: '500081'
-      }
-    ];
-    state.selectedAddressId = 1;
-    applySavedAddressToDraft(state.savedAddresses[0]);
+    // No saved addresses for this customer: reset to clean state without invented defaults
+    state.savedAddresses = [];
+    state.selectedAddressId = null;
   }
 
   function applySavedAddressToDraft(addr) {
@@ -805,125 +862,30 @@
     `;
   }
 
-  // Activate Subscriptions from Cart into localStorage & PostgreSQL Database
+  // Payments and subscription activation are authoritative in PostgreSQL.
+  // Never manufacture an "active" plan in localStorage or reuse a one-time
+  // order payment via POST /subscriptions (the backend intentionally rejects it).
   async function activateSubscriptionsFromCart(cartItems, paymentInfo = {}) {
-    let existingSubs = [];
+    const hasSubscription = cartItems.some(item =>
+      item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan ||
+      item.isCustomDaysPlan || item.variant?.isCustomDaysPlan ||
+      item.isSubscriptionPlan || item.variant?.isSubscriptionPlan
+    );
+    if (!hasSubscription) return { synced: true };
     try {
-      existingSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
-      if (!Array.isArray(existingSubs)) existingSubs = [];
-    } catch {
-      existingSubs = [];
-    }
-
-    for (const item of cartItems) {
-      const isContinuous = Boolean(item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
-      const isCustom = Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan);
-      const isSub = isContinuous || isCustom || Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan);
-      if (!isSub) continue;
-
-      const planType = isContinuous ? 'month' : 'custom';
-      const subData = item.subscriptionPlan || item.variant?.subscriptionPlan || {};
-      const prod = findProductInCatalog(item);
-      const productName = item.name || subData.productName || prod.name || 'Fresh Milk';
-      const sizeStr = item.size || item.variant?.size || prod.size || '500 ml';
-      const cleanSize = sizeStr.split('(')[0].trim();
-      const isBuffalo = productName.toLowerCase().includes('buffalo');
-      const is1L = cleanSize.toLowerCase().includes('1');
-      const defaultDailyRate = isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55);
-
-      const days = subData.days || item.variant?.days || item.variant?.customDays || item.customDays || (isContinuous ? (subData.monthsCount || 1) * 30 : 7);
-      const dailyRate = subData.dailyRate || item.variant?.dailyRate || defaultDailyRate;
-      const durationLabel = isContinuous
-        ? (subData.rangeLabel || `${subData.monthsCount || 1} Month Continuous`)
-        : `${days} Days Custom Plan`;
-      const image = item.image || prod.image || (isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg');
-      const totalPlanAmount = Number(item.variant?.price || item.price || (days * dailyRate));
-
-      const subId = paymentInfo.subscriptionId || ('sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
-
-      const deliveryFee = Number(paymentInfo.deliveryFee !== undefined ? paymentInfo.deliveryFee : 50);
-      const totalAmountPaid = Number(paymentInfo.totalPaid || (totalPlanAmount + deliveryFee));
-
-      const subItem = {
-        id: subId,
-        product: `${productName} (${cleanSize})`,
-        productName: productName,
-        productId: item.id || prod.id,
-        image: image,
-        size: cleanSize,
-        planType: planType,
-        durationLabel: durationLabel,
-        days: days,
-        customDays: days,
-        dailyRate: dailyRate,
-        costPerDay: dailyRate,
-        subtotalAmount: totalPlanAmount,
-        deliveryFee: deliveryFee,
-        totalAmount: totalPlanAmount,
-        totalPaid: totalAmountPaid,
-        frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM - 7:00 AM',
-        quantity: cleanSize,
-        qtyNum: 1,
-        status: 'active',
-        nextDelivery: 'Tomorrow',
-        paymentId: paymentInfo.paymentId || '',
-        created_at: new Date().toISOString()
-      };
-
-      existingSubs.unshift(subItem);
-
-      // Persist directly into PostgreSQL customer_subscriptions table
-      // If it's a continuous plan, the Razorpay checkout and verify endpoint already created and activated it.
-      // Only call POST /api/v1/subscriptions for custom-days one-time plans to avoid duplicate subscriptions.
-      if (!isContinuous) {
-        try {
-          await api('/api/v1/subscriptions', {
-            method: 'POST',
-            body: JSON.stringify({
-              productId: Number(item.id) === 102 ? 2 : 1,
-              productName: subItem.product,
-              imageUrl: subItem.image,
-              frequency: subItem.frequency,
-              timeSlot: subItem.timeSlot,
-              quantity: subItem.quantity,
-              quantityNum: 1,
-              costPerDayPaise: dailyRate * 100,
-              planType: subItem.planType,
-              durationLabel: subItem.durationLabel,
-              totalAmountPaise: totalPlanAmount * 100,
-              notes: {
-                subscriptionId: subId,
-                planType: subItem.planType,
-                durationLabel: subItem.durationLabel,
-                days: days,
-                dailyRate: dailyRate,
-                subtotalPaise: totalPlanAmount * 100,
-                deliveryFeePaise: deliveryFee * 100,
-                totalPaidPaise: totalAmountPaid * 100,
-                paymentId: paymentInfo.paymentId || ''
-              },
-              status: 'active'
-            })
-          });
-        } catch (dbErr) {
-          console.warn('Backend subscription PostgreSQL sync notice:', dbErr.message);
-        }
+      const result = await api('/api/v1/subscriptions');
+      if (!result || !Array.isArray(result.subscriptions)) {
+        throw new Error('The server did not return subscription records.');
       }
+      localStorage.setItem('milvanta-subscriptions', JSON.stringify(result.subscriptions));
+      return { synced: true, subscriptions: result.subscriptions };
+    } catch (error) {
+      // Preserve the paid order record while refusing to display fake active
+      // subscriptions. A background refresh or support may still be needed.
+      try { localStorage.removeItem('milvanta-subscriptions'); } catch {}
+      console.warn('Subscription records could not be refreshed after payment:', error.message);
+      return { synced: false, message: 'Payment status is preserved; subscriptions will be shown after server synchronization.' };
     }
-
-    // Refresh authoritative subscriptions from backend if available
-    try {
-      const serverSubs = await api('/api/v1/subscriptions');
-      if (serverSubs && Array.isArray(serverSubs.subscriptions) && serverSubs.subscriptions.length > 0) {
-        localStorage.setItem('milvanta-subscriptions', JSON.stringify(serverSubs.subscriptions));
-        return;
-      }
-    } catch {}
-
-    try {
-      localStorage.setItem('milvanta-subscriptions', JSON.stringify(existingSubs));
-    } catch {}
   }
 
   // If Razorpay returned a payment reference but the backend verification
@@ -931,9 +893,16 @@
   const PENDING_ORDER_PAYMENT_KEY = 'milvanta-pending-order-payment';
   function getPendingOrderPayment() {
     try {
-      const p = JSON.parse(sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) || 'null');
-      if (!p || typeof p.orderNumber !== 'string' || typeof p.paymentId !== 'string' || !p.orderNumber || !p.paymentId) return null;
-      if (String(p.customerId || '') !== String(state.customer?.id || '')) return null;
+      const customerId = state.customer?.id;
+      if (!customerId) return null;
+      let raw = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY);
+      if (!raw) {
+        raw = localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + customerId);
+      }
+      if (!raw) return null;
+      const p = JSON.parse(raw);
+      if (!p || typeof p.orderNumber !== 'string' || !p.orderNumber || typeof p.paymentId !== 'string') return null;
+      if (String(p.customerId || '') !== String(customerId)) return null;
       return p;
     } catch { return null; }
   }
@@ -943,30 +912,92 @@
     if (state.isPaymentProcessing) return;
     state.isPaymentProcessing = true;
     if (payBtn) { payBtn.disabled = true; payBtn.textContent = 'Checking payment status…'; }
+
     try {
-      const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
-      if (result?.order?.payment_status !== 'paid') {
-        if (errEl) errEl.textContent = 'Payment confirmation is still pending. Please contact support with reference ' + pending.paymentId + '. Do not pay again yet.';
+      let orderConfirmed = false;
+      let requiresReview = false;
+      try {
+        const response = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
+        orderConfirmed = response?.order?.payment_status === 'paid' &&
+          response?.order?.order_status === 'confirmed';
+        requiresReview = response?.order?.payment_status === 'paid' &&
+          response?.order?.order_status !== 'confirmed';
+      } catch (checkError) {
+        if (checkError.status === 401) { showLoginRequired(); return; }
+      }
+
+      if (!orderConfirmed && !requiresReview && pending.orderId && pending.paymentId && pending.signature) {
+        try {
+          const result = await api('/api/v1/payments/verify', {
+            method: 'POST',
+            body: JSON.stringify({
+              razorpay_order_id: pending.orderId,
+              razorpay_payment_id: pending.paymentId,
+              razorpay_signature: pending.signature
+            })
+          });
+          orderConfirmed = result?.verified === true && result.status === 'captured' &&
+            result.orderStatus === 'confirmed' && result.requiresManualReview !== true;
+          requiresReview = result?.requiresManualReview === true || result?.orderStatus === 'payment_review';
+        } catch (verifyError) {
+          if (verifyError.status === 401) { showLoginRequired(); return; }
+        }
+      }
+
+      // Reconcile independently of browser callbacks: server retrieves the
+      // ORIGINAL order's gateway payments with its own Razorpay credentials.
+      if (!orderConfirmed && !requiresReview) {
+        try {
+          const result = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber) + '/reconcile-payment', {
+            method: 'POST'
+          });
+          orderConfirmed = result?.state === 'confirmed';
+          requiresReview = result?.state === 'payment_review';
+        } catch (reconcileError) {
+          if (reconcileError.status === 401) { showLoginRequired(); return; }
+          if (reconcileError.status === 409) requiresReview = true;
+          else if (errEl) errEl.textContent = 'Gateway status is temporarily unavailable. Do not pay again; retry status check or contact support.';
+        }
+      }
+
+      if (requiresReview) {
+        if (errEl) errEl.textContent = 'The gateway payment requires manual reconciliation. Do not pay again. Please contact Milvanta support with order ' + pending.orderNumber + '.';
         return;
       }
-      const financials = getOrderFinancials();
-      await activateSubscriptionsFromCart(state.cart, {
-        paymentId: pending.paymentId,
-        deliveryFee: financials.deliveryFee,
-        totalPaid: financials.total,
-        subtotal: financials.subtotal
-      });
+      if (!orderConfirmed) {
+        if (errEl && !errEl.textContent) {
+          errEl.textContent = 'Payment is still unconfirmed. Do not pay again yet. Use Check Payment Status or contact support with order ' + pending.orderNumber + '.';
+        }
+        return;
+      }
+
+      // Financial confirmation comes from PostgreSQL/Razorpay, not localStorage.
+      // Local subscription activation remains best-effort; a failed local
+      // follow-up MUST NOT cause a second payment.
+      try {
+        const financials = getOrderFinancials();
+        await activateSubscriptionsFromCart(state.cart, {
+          paymentId: pending.paymentId || '',
+          deliveryFee: financials.deliveryFee,
+          totalPaid: financials.total,
+          subtotal: financials.subtotal
+        });
+      } catch (activationError) {
+        console.warn('Post-payment subscription refresh needs attention:', activationError.message);
+      }
       sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
-      showOrderSuccess(pending.orderNumber, false);
-    } catch (err) {
-      if (err.status === 401) {
-        showLoginRequired();
-        return;
+      if (pending.customerId) {
+        try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId); } catch {}
       }
-      if (errEl) errEl.textContent = 'Could not confirm the previous payment yet. Please retry status check or contact support with reference ' + pending.paymentId + '.';
+      showOrderSuccess(pending.orderNumber, false);
+    } catch (error) {
+      if (error.status === 401) { showLoginRequired(); return; }
+      if (errEl) errEl.textContent = 'Unable to confirm the payment now. Do not pay again yet; try status check or contact support.';
     } finally {
       state.isPaymentProcessing = false;
-      if (payBtn && sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY)) {
+      const stillPending = sessionStorage.getItem(PENDING_ORDER_PAYMENT_KEY) ||
+        (pending.customerId && localStorage.getItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId));
+      if (payBtn && stillPending) {
         payBtn.disabled = false;
         payBtn.textContent = 'Check Payment Status (no new charge)';
       }
@@ -1481,15 +1512,8 @@
       // NORMAL PAYMENT: Custom Days Plan or Regular Products
       const orderBody = {
         address: state.addressDraft,
-        items: state.cart.map((item) => ({
-          productId: Number(item.id || item.productId),
-          quantity: Number(item.quantity || 1),
-          size: item.size || item.variant?.size || '',
-          variant: item.variant || null,
-          isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan),
-          isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan),
-          subscriptionPlan: item.subscriptionPlan || item.variant?.subscriptionPlan || null
-        }))
+        // Resolve against the authoritative live catalog before reserving stock.
+        items: await resolveCheckoutCartAgainstServer()
       };
 
       let order;
@@ -1524,8 +1548,25 @@
         throw new Error('Secure payment is temporarily unavailable. No payment was started. Please contact Milvanta support.');
       }
       if (serverAmount !== totalAmountPaise) {
-        throw new Error('The final server price does not match the displayed total. No payment was started. Refresh your cart and review prices before trying again.');
+        throw new Error('The live server price is ₹' + (serverAmount / 100).toFixed(2) +
+          ', but checkout displayed ₹' + (totalAmountPaise / 100).toFixed(2) +
+          '. No payment was started. Refresh your cart to review the updated price.');
       }
+
+      // A payment attempt may survive a browser close even if the Razorpay
+      // handler never runs. Record the order before opening the gateway.
+      try {
+        const attempt = JSON.stringify({
+          customerId: state.customer?.id,
+          orderNumber: order.orderNumber,
+          orderId: order.orderId,
+          paymentId: '',
+          signature: '',
+          createdAt: Date.now()
+        });
+        sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, attempt);
+        if (state.customer?.id) localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, attempt);
+      } catch {}
 
       const options = {
         key: order.keyId || RAZORPAY_KEY,
@@ -1550,12 +1591,22 @@
           const paymentId = response?.razorpay_payment_id;
           if (typeof paymentId === 'string' && paymentId) {
             try {
-              sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, JSON.stringify({
+              const pendingRecord = JSON.stringify({
                 customerId: state.customer?.id,
                 orderNumber: order.orderNumber,
+                orderId: response?.razorpay_order_id || order.orderId,
                 paymentId,
+                signature: response?.razorpay_signature || '',
                 createdAt: Date.now()
-              }));
+              });
+              sessionStorage.setItem(PENDING_ORDER_PAYMENT_KEY, pendingRecord);
+              if (state.customer?.id) {
+                // Never persist the signed Razorpay callback proof in durable storage.
+                // Gateway reconciliation only needs the server-owned order reference.
+                const safeForDurableStorage = JSON.parse(pendingRecord);
+                safeForDurableStorage.signature = '';
+                localStorage.setItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id, JSON.stringify(safeForDurableStorage));
+              }
             } catch {}
           }
 
@@ -1565,14 +1616,16 @@
               method: 'POST',
               body: JSON.stringify(response)
             });
-            if (!verifyRes || !verifyRes.verified || verifyRes.status !== 'captured') {
-              throw new Error(verifyRes?.error || 'Payment capture is not yet confirmed.');
+            if (!verifyRes || !verifyRes.verified || verifyRes.status !== 'captured' ||
+                verifyRes.orderStatus !== 'confirmed' || verifyRes.requiresManualReview === true) {
+              throw new Error(verifyRes?.error || 'Payment capture or fulfillment needs reconciliation.');
             }
           } catch (verifyErr) {
             console.error('Payment verification failed:', verifyErr);
             if (errEl) {
               errEl.textContent = 'Razorpay returned a payment reference, but final capture is unconfirmed. Check the status; do NOT pay again yet. Reference: ' + (response?.razorpay_payment_id || 'N/A');
             }
+            state.isPaymentProcessing = false;
             if (payBtn) {
               payBtn.disabled = false;
               payBtn.textContent = 'Check Payment Status (no new charge)';
@@ -1597,13 +1650,25 @@
           });
 
           sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
+          if (state.customer?.id) {
+            try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id); } catch {}
+          }
           state.isPaymentProcessing = false;
           showOrderSuccess(order.orderNumber, false);
         },
         modal: {
           ondismiss: () => {
             state.isPaymentProcessing = false;
-            if (errEl) errEl.textContent = 'Payment was cancelled. You can retry placing the order whenever ready.';
+            // Dismissal is not proof that no charge occurred.
+            if (getPendingOrderPayment()) {
+              if (errEl) errEl.textContent = 'Checkout closed. Check this order’s payment status before attempting another payment.';
+              if (payBtn) {
+                payBtn.disabled = false;
+                payBtn.textContent = 'Check Payment Status (no new charge)';
+              }
+              return;
+            }
+            if (errEl) errEl.textContent = 'Payment checkout was closed.';
             if (payBtn) {
               payBtn.disabled = false;
               payBtn.textContent = `Pay ₹${currentTotal.toFixed(0)} via Razorpay 🔒`;
@@ -1867,9 +1932,21 @@
         }).finally(() => clearTimeout(timeout));
       }
       state.customer = null;
-      state.addressDraft.name = '';
-      state.addressDraft.phone = '';
-      state.addressDraft.email = '';
+      state.addressDraft = {
+        name: '',
+        phone: '',
+        email: '',
+        house: '',
+        building: '',
+        street: '',
+        landmark: '',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500049'
+      };
+      state.savedAddresses = [];
+      state.selectedAddressId = null;
+      sessionStorage.removeItem(PENDING_ORDER_PAYMENT_KEY);
       try { localStorage.removeItem('milvanta-user'); } catch {}
       userDropdown?.classList.add('hidden');
       updateAccountButton();

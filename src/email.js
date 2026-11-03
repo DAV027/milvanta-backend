@@ -1,7 +1,92 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 
 const RESEND_API_URL = 'https://api.resend.com/emails';
+
+/**
+ * Verify Resend webhook signature following the Svix standard.
+ * svix-id, svix-timestamp, svix-signature (v1,<base64>)
+ * Signed content: `${svix_id}.${svix_timestamp}.${rawBody}`
+ */
+export function verifyResendWebhookSignature({ headers = {}, rawBody, secret, toleranceSeconds = 300 }) {
+  if (!secret || typeof secret !== 'string' || !secret.trim()) {
+    return { valid: false, reason: 'missing_secret' };
+  }
+
+  // Normalize header names (case-insensitive lookup)
+  const headerKeys = Object.keys(headers);
+  const findHeader = (name) => {
+    const key = headerKeys.find(k => k.toLowerCase() === name.toLowerCase());
+    return key ? headers[key] : undefined;
+  };
+
+  const svixId = findHeader('svix-id');
+  const svixTimestamp = findHeader('svix-timestamp');
+  const svixSignature = findHeader('svix-signature');
+
+  if (!svixId || !svixTimestamp || !svixSignature) {
+    return { valid: false, reason: 'missing_svix_headers' };
+  }
+
+  // Validate timestamp within tolerance
+  const ts = parseInt(svixTimestamp, 10);
+  if (Number.isNaN(ts)) {
+    return { valid: false, reason: 'invalid_timestamp' };
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - ts) > toleranceSeconds) {
+    return { valid: false, reason: 'timestamp_out_of_tolerance' };
+  }
+
+  if (rawBody === undefined || rawBody === null) {
+    return { valid: false, reason: 'missing_raw_body' };
+  }
+
+  const bodyStr = Buffer.isBuffer(rawBody)
+    ? rawBody.toString('utf8')
+    : (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody));
+
+  const toSign = `${svixId}.${svixTimestamp}.${bodyStr}`;
+
+  // Resend/Svix secrets are base64 encoded, often prefixed with 'whsec_'
+  const trimmedSecret = secret.trim();
+  let secretKey;
+  if (trimmedSecret.startsWith('whsec_')) {
+    secretKey = Buffer.from(trimmedSecret.slice(6), 'base64');
+  } else {
+    try {
+      const b64 = Buffer.from(trimmedSecret, 'base64');
+      secretKey = b64.length >= 16 ? b64 : Buffer.from(trimmedSecret, 'utf8');
+    } catch {
+      secretKey = Buffer.from(trimmedSecret, 'utf8');
+    }
+  }
+
+  const computedSig = crypto.createHmac('sha256', secretKey).update(toSign).digest('base64');
+
+  // svix-signature contains space-separated versions: e.g. "v1,signature1 v1,signature2"
+  const sigParts = svixSignature.split(' ');
+  let isValid = false;
+
+  for (const part of sigParts) {
+    const [version, sig] = part.split(',');
+    if (version === 'v1' && sig) {
+      const computedBuf = Buffer.from(computedSig);
+      const expectedBuf = Buffer.from(sig);
+      if (computedBuf.length === expectedBuf.length && crypto.timingSafeEqual(computedBuf, expectedBuf)) {
+        isValid = true;
+        break;
+      }
+    }
+  }
+
+  if (!isValid) {
+    return { valid: false, reason: 'signature_mismatch' };
+  }
+
+  return { valid: true, svixId, timestamp: ts };
+}
 
 const escapeHtml = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -134,7 +219,8 @@ export async function sendEmailViaResend({ to, subject, html, text, from }) {
 
     return {
       success: true,
-      id: data.id
+      id: data.id,
+      provider: 'resend'
     };
   } catch (err) {
     console.error('[Resend Network Error]', err);
@@ -492,7 +578,614 @@ export function buildAdminOrderEmail({ order, customer, address, items, paymentI
 }
 
 /**
- * Send order confirmation emails to both customer and admin
+ * Enqueue transactional email outbox records for a confirmed paid order
+ */
+export async function enqueueOrderPaidOutbox(client, { order, customer, address, items, paymentId }) {
+  if (!client || !order) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || order?.customer_email || '').trim();
+
+  const customerKey = `order_paid:customer:${order.id}`;
+  const adminKey = `order_paid:admin:${order.id}`;
+
+  const payload = {
+    order: {
+      id: order.id,
+      order_number: order.order_number,
+      total_paise: order.total_paise,
+      subtotal_paise: order.subtotal_paise,
+      delivery_charge_paise: order.delivery_charge_paise,
+      created_at: order.created_at
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Customer',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || ''
+    },
+    address: address || {},
+    items: Array.isArray(items) ? items : [],
+    paymentId: paymentId || ''
+  };
+
+  const enqueued = [];
+
+  // 1. Enqueue Customer Confirmation
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, payment_id, payload, status
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, order.id, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  // 2. Enqueue Admin Notification
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, payment_id, payload, status
+       ) VALUES ($1, 'order_notification', 'admin', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, order.id, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Enqueue transactional email outbox records for a confirmed milk subscription
+ */
+export async function enqueueSubscriptionOutbox(client, { subscription, customer, address, paymentId, sourceOrderId = null }) {
+  if (!client || !subscription) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || subscription?.customer_email || subscription?.email || '').trim();
+
+  const subId = subscription.id;
+  const customerKey = `sub_confirmed:customer:${subId}`;
+  const adminKey = `sub_notification:admin:${subId}`;
+
+  const payload = {
+    subscription: {
+      id: subscription.id,
+      productName: subscription.product_name || subscription.productName || 'Pure Fresh Milk',
+      quantity: subscription.quantity,
+      frequency: subscription.frequency || 'Daily (Every Morning)',
+      timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
+      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      planType: subscription.plan_type || subscription.planType || 'custom',
+      durationLabel: subscription.duration_label || subscription.durationLabel || '7 Days Custom Plan',
+      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      image: subscription.image_url || subscription.image,
+      status: subscription.status || 'active',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      notes: subscription.notes || {}
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Customer',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || subscription?.phone || ''
+    },
+    address: address || (typeof subscription.delivery_address === 'object' ? subscription.delivery_address : {}),
+    paymentId: paymentId || ''
+  };
+
+  const enqueued = [];
+
+  // 1. Enqueue Customer Subscription Confirmation
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_confirmation', 'customer', $2, $3, $4, $5, $6::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, sourceOrderId, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  // 2. Enqueue Admin Subscription Notification
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_notification', 'admin', $2, $3, $4, $5, $6::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, sourceOrderId, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Enqueue durable transactional email outbox records for recurring monthly subscription charges
+ * Using renewal-specific event keys to guarantee idempotent delivery per billing cycle.
+ */
+export async function enqueueRecurringSubscriptionOutbox(client, {
+  subscription,
+  customer,
+  address,
+  paymentId = '',
+  billingCycle = '',
+  isRenewal = true,
+  eventName = 'subscription.charged'
+}) {
+  if (!client || !subscription) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || subscription?.customer_email || subscription?.email || '').trim();
+
+  const subId = subscription.id;
+  const cycleToken = paymentId || billingCycle || (subscription.notes?.paidThroughDate) || 'renewal';
+  const customerKey = `sub_charged:customer:${subId}:${cycleToken}`;
+  const adminKey = `sub_charged:admin:${subId}:${cycleToken}`;
+
+  const payload = {
+    subscription: {
+      id: subscription.id,
+      productName: subscription.product_name || subscription.productName || 'Pure Fresh Milk',
+      quantity: subscription.quantity,
+      frequency: subscription.frequency || 'Daily (Every Morning)',
+      timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
+      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      planType: subscription.plan_type || subscription.planType || 'monthly',
+      durationLabel: subscription.duration_label || subscription.durationLabel || 'Monthly Recurring',
+      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      image: subscription.image_url || subscription.image,
+      status: subscription.status || 'active',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      notes: subscription.notes || {}
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Subscriber',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || subscription?.phone || ''
+    },
+    address: address || (typeof subscription.delivery_address === 'object' ? subscription.delivery_address : {}),
+    paymentId: paymentId || '',
+    billingCycle: cycleToken,
+    eventName,
+    isRenewal: Boolean(isRenewal)
+  };
+
+  const enqueued = [];
+
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_confirmation', 'customer', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_notification', 'admin', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Process pending/failed/recoverable records in email_outbox.
+ * Supports worker concurrency leases, timeout recovery, exponential backoff and dead-letter state.
+ */
+export async function processEmailOutbox(poolOrClient, options = {}) {
+  if (!poolOrClient) return { success: false, error: 'NO_DATABASE_POOL' };
+  const isPool = Boolean(poolOrClient && typeof poolOrClient.connect === 'function' && typeof poolOrClient.totalCount === 'number');
+  const client = isPool ? await poolOrClient.connect() : poolOrClient;
+  const shouldRelease = isPool;
+
+  try {
+    const {
+      orderId,
+      subscriptionId,
+      eventKey,
+      limit = 50,
+      leaseMinutes = 5,
+      workerId = `worker_${process.pid}_${crypto.randomUUID().slice(0, 8)}`
+    } = options;
+
+    // 1. Transition expired leases exceeding max_attempts directly to dead_letter state
+    await client.query(`
+      UPDATE email_outbox
+      SET status = 'dead_letter',
+          last_error = COALESCE(last_error, 'LEASE_EXPIRED_MAX_ATTEMPTS_EXCEEDED'),
+          next_retry_at = NULL,
+          locked_by = NULL,
+          locked_at = NULL,
+          lease_expires_at = NULL,
+          updated_at = NOW()
+      WHERE status = 'processing'
+        AND lease_expires_at <= NOW()
+        AND attempts >= max_attempts
+    `);
+
+    let filterClauses = `
+      ((status IN ('pending', 'failed') AND next_retry_at <= NOW() AND attempts < max_attempts)
+       OR (status = 'processing' AND lease_expires_at <= NOW() AND attempts < max_attempts))
+    `;
+    const params = [limit, workerId, leaseMinutes];
+
+    if (orderId) {
+      params.push(orderId);
+      filterClauses += ` AND source_order_id = $${params.length}`;
+    }
+    if (subscriptionId) {
+      params.push(subscriptionId);
+      filterClauses += ` AND source_subscription_id = $${params.length}`;
+    }
+    if (eventKey) {
+      params.push(eventKey);
+      filterClauses += ` AND event_key = $${params.length}`;
+    }
+
+    // Atomic claim query with row-level locks and lease recovery
+    const claimQuery = `
+      WITH claimable AS (
+        SELECT id
+        FROM email_outbox
+        WHERE ${filterClauses}
+        ORDER BY id ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE email_outbox
+      SET status = 'processing',
+          locked_by = $2,
+          locked_at = NOW(),
+          lease_expires_at = NOW() + ($3 || ' minutes')::interval,
+          attempts = attempts + 1,
+          updated_at = NOW()
+      FROM claimable
+      WHERE email_outbox.id = claimable.id
+      RETURNING email_outbox.*;
+    `;
+
+    const { rows: pendingItems } = await client.query(claimQuery, params);
+
+    const results = {
+      workerId,
+      processed: pendingItems.length,
+      customerEmail: null,
+      adminEmail: null,
+      items: []
+    };
+
+    const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+
+    for (const item of pendingItems) {
+      const payload = item.payload || {};
+      let subject = '';
+      let html = '';
+      let text = '';
+
+      if (item.email_type === 'order_confirmation') {
+        subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
+        html = buildCustomerOrderEmail(payload);
+        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(payload.order?.total_paise, true)}`;
+      } else if (item.email_type === 'order_notification') {
+        subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
+        html = buildAdminOrderEmail(payload);
+        text = `ALERT: New Paid Order #${payload.order?.order_number}\nAmount: ${formatInr(payload.order?.total_paise, true)}\nCustomer: ${payload.customer?.name} (${payload.customer?.phone}, ${payload.customer?.email})`;
+      } else if (item.email_type === 'subscription_confirmation') {
+        const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
+        subject = isRefundable
+          ? `🥛 Subscription E-Mandate Registered: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
+          : (payload.isRenewal
+              ? `🥛 Subscription Renewal Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
+              : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`);
+        html = buildCustomerSubscriptionEmail(payload);
+        text = `Your Milvanta Milk Subscription is Confirmed!\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name}\nTeam Milvanta`;
+      } else if (item.email_type === 'subscription_notification') {
+        const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
+        subject = isRefundable
+          ? `🚨 ACTION REQUIRED: New Morning Milk Mandate Registered`
+          : (payload.isRenewal
+              ? `🚨 NOTICE: Morning Milk Subscription Renewed`
+              : `🚨 ACTION REQUIRED: New Morning Milk Subscription`);
+        html = buildAdminSubscriptionEmail(payload);
+        text = `ALERT: Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
+      }
+
+      const toEmail = item.recipient_email?.trim();
+      let sendResult;
+
+      if (!toEmail || !toEmail.includes('@')) {
+        sendResult = { success: false, skipped: true, error: 'INVALID_RECIPIENT_EMAIL' };
+      } else {
+        try {
+          sendResult = await sendEmail({
+            to: toEmail,
+            subject,
+            html,
+            text,
+            from: sender
+          });
+        } catch (dispatchErr) {
+          sendResult = { success: false, error: dispatchErr.message };
+        }
+      }
+
+      if (sendResult.success) {
+        // Record provider acceptance (status = 'sent', provider_status = 'accepted').
+        // Note: delivered_at remains NULL until webhook confirms inbox delivery.
+        // Fencing guard: ONLY succeed if this worker still holds the lock!
+        const updateRes = await client.query(
+          `UPDATE email_outbox 
+           SET status = 'sent',
+               provider = $2,
+               provider_message_id = $3,
+               provider_status = 'accepted',
+               sent_at = NOW(),
+               locked_by = NULL,
+               locked_at = NULL,
+               lease_expires_at = NULL,
+               updated_at = NOW()
+           WHERE id = $1 AND locked_by = $4`,
+          [item.id, sendResult.provider || 'resend', sendResult.id || null, workerId]
+        );
+
+        if (updateRes.rowCount === 0) {
+          console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id}; ignoring stale update`);
+          continue;
+        }
+
+        // Update independent recipient tracking
+        if (item.source_order_id) {
+          if (item.recipient_type === 'customer') {
+            await client.query(
+              `UPDATE customer_orders 
+               SET customer_email_sent = TRUE, customer_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          } else if (item.recipient_type === 'admin') {
+            await client.query(
+              `UPDATE customer_orders 
+               SET admin_email_sent = TRUE, admin_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          }
+
+          // Mark confirmation_email_sent ONLY when BOTH customer and admin dispatches have succeeded
+          const { rows: [ordCheck] } = await client.query(
+            `SELECT customer_email_sent, admin_email_sent FROM customer_orders WHERE id = $1`,
+            [item.source_order_id]
+          );
+          if (ordCheck && ordCheck.customer_email_sent && ordCheck.admin_email_sent) {
+            await client.query(
+              `UPDATE customer_orders 
+               SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          }
+        }
+
+        if (item.source_subscription_id) {
+          if (item.recipient_type === 'customer') {
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET customer_email_sent = TRUE, customer_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_subscription_id]
+            );
+          } else if (item.recipient_type === 'admin') {
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET admin_email_sent = TRUE, admin_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_subscription_id]
+            );
+          }
+        }
+
+        const outboxSummary = {
+          success: true,
+          status: 'accepted',
+          providerAccepted: true,
+          id: sendResult.id,
+          provider: sendResult.provider || 'resend',
+          acceptedAt: new Date().toISOString()
+        };
+        if (item.recipient_type === 'customer') results.customerEmail = outboxSummary;
+        if (item.recipient_type === 'admin') results.adminEmail = outboxSummary;
+        results.items.push({ id: item.id, recipientType: item.recipient_type, ...outboxSummary });
+      } else {
+        const errMsg = sendResult.error || 'DISPATCH_FAILED';
+        const currentAttempts = item.attempts;
+        const maxAttempts = item.max_attempts || 5;
+
+        if (currentAttempts >= maxAttempts) {
+          // Transition to terminal dead_letter state
+          const dlRes = await client.query(
+            `UPDATE email_outbox 
+             SET status = 'dead_letter',
+                 last_error = $2,
+                 next_retry_at = NULL,
+                 locked_by = NULL,
+                 locked_at = NULL,
+                 lease_expires_at = NULL,
+                 updated_at = NOW()
+             WHERE id = $1 AND locked_by = $3`,
+            [item.id, errMsg, workerId]
+          );
+          if (dlRes.rowCount === 0) {
+            console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id} during dead-letter transition`);
+            continue;
+          }
+        } else {
+          // Exponential backoff: min(60, 2^(attempts-1)) minutes
+          const backoffMinutes = Math.min(60, Math.pow(2, Math.max(0, currentAttempts - 1)));
+          const failRes = await client.query(
+            `UPDATE email_outbox 
+             SET status = 'failed',
+                 last_error = $2,
+                 next_retry_at = NOW() + ($3 || ' minutes')::interval,
+                 locked_by = NULL,
+                 locked_at = NULL,
+                 lease_expires_at = NULL,
+                 updated_at = NOW()
+             WHERE id = $1 AND locked_by = $4`,
+            [item.id, errMsg, backoffMinutes, workerId]
+          );
+          if (failRes.rowCount === 0) {
+            console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id} during failure transition`);
+            continue;
+          }
+        }
+
+        const outboxSummary = {
+          success: false,
+          status: currentAttempts >= maxAttempts ? 'dead_letter' : 'failed',
+          providerAccepted: false,
+          attempts: currentAttempts,
+          maxAttempts,
+          error: errMsg
+        };
+        if (item.recipient_type === 'customer') results.customerEmail = outboxSummary;
+        if (item.recipient_type === 'admin') results.adminEmail = outboxSummary;
+        results.items.push({ id: item.id, recipientType: item.recipient_type, ...outboxSummary });
+      }
+    }
+
+    return results;
+  } finally {
+    if (shouldRelease) {
+      client.release();
+    }
+  }
+}
+
+let outboxWorkerTimer = null;
+let isWorkerExecuting = false;
+
+/**
+ * Start the background worker for processing email outbox records.
+ * Uses recursive setTimeout to guarantee runs never overlap.
+ */
+export function startEmailOutboxWorker(pool, options = {}) {
+  if (outboxWorkerTimer) {
+    return { workerId: options.workerId || 'running', status: 'already_running' };
+  }
+
+  const intervalMs = Math.max(1000, options.intervalMs || 10000);
+  const workerId = options.workerId || `worker_${process.pid}_${crypto.randomUUID().slice(0, 8)}`;
+  const limit = options.limit || 50;
+  const leaseMinutes = options.leaseMinutes || 5;
+
+  const scheduleNext = () => {
+    outboxWorkerTimer = setTimeout(async () => {
+      if (isWorkerExecuting) {
+        scheduleNext();
+        return;
+      }
+      isWorkerExecuting = true;
+      try {
+        await processEmailOutbox(pool, { workerId, limit, leaseMinutes });
+      } catch (err) {
+        console.error('[Email Outbox Worker] Error during scheduled pass:', err.message);
+      } finally {
+        isWorkerExecuting = false;
+        if (outboxWorkerTimer !== null) {
+          scheduleNext();
+        }
+      }
+    }, intervalMs);
+    if (outboxWorkerTimer?.unref) {
+      outboxWorkerTimer.unref();
+    }
+  };
+
+  scheduleNext();
+
+  return {
+    workerId,
+    intervalMs,
+    stop: () => stopEmailOutboxWorker()
+  };
+}
+
+/**
+ * Stop the background email outbox worker.
+ */
+export function stopEmailOutboxWorker() {
+  if (outboxWorkerTimer) {
+    clearTimeout(outboxWorkerTimer);
+    outboxWorkerTimer = null;
+  }
+  isWorkerExecuting = false;
+}
+
+/**
+ * Mark an outbox email record as delivered upon receipt of webhook delivery confirmation.
+ * Strictly separates provider acceptance from actual inbox delivery.
+ */
+export async function markOutboxDelivered(poolOrClient, { providerMessageId, deliveredAt = new Date() }) {
+  if (!providerMessageId) return { success: false, error: 'NO_MESSAGE_ID' };
+  const query = `
+    UPDATE email_outbox 
+    SET status = 'delivered', provider_status = 'delivered', delivered_at = $2, updated_at = NOW() 
+    WHERE provider_message_id = $1
+    RETURNING id, event_key, recipient_email, delivered_at
+  `;
+  const { rows } = await poolOrClient.query(query, [providerMessageId, deliveredAt]);
+  return {
+    success: rows.length > 0,
+    count: rows.length,
+    delivered: rows[0] || null
+  };
+}
+
+/**
+ * Send order confirmation emails to both customer and admin.
+ * Requires authoritative PostgreSQL payment evidence and confirmed order status.
+ * Dispatches via durable transactional email_outbox.
  */
 export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
   if (!pool) {
@@ -517,16 +1210,65 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
     );
 
     if (!res.rowCount) {
-      console.warn('[Resend] Order not found for email dispatch:', orderId);
-      return { success: false, error: 'ORDER_NOT_FOUND' };
+      console.warn('[Email Guard] Order not found for email dispatch:', orderId);
+      return { success: false, error: 'ORDER_NOT_FOUND', message: 'Order not found' };
     }
 
     const order = res.rows[0];
 
-    // Check if confirmation email was already sent
-    if (order.confirmation_email_sent) {
-      console.log(`[Resend] Confirmation email already sent for order #${order.order_number}. Skipping.`);
-      return { success: true, skipped: true, alreadySent: true };
+    // REQUIREMENT 1: Never send confirmation unless:
+    // 1. Order confirmed, not payment_review
+    if (order.order_status === 'payment_review') {
+      console.warn(`[Email Guard] Order #${order.order_number} is in payment_review. Paid confirmation blocked.`);
+      return { success: false, error: 'ORDER_IN_REVIEW', message: 'Order is under manual review and cannot send paid confirmation emails.' };
+    }
+
+    // 2. Payment captured and order confirmed (reject pending, authorized, failed)
+    if (order.payment_status !== 'paid' || order.order_status !== 'confirmed') {
+      console.warn(`[Email Guard] Order #${order.order_number} is not paid/confirmed (payment_status=${order.payment_status}, order_status=${order.order_status}). Dispatch blocked.`);
+      return { success: false, error: 'ORDER_NOT_PAID', message: 'Order payment is not paid or order is not confirmed.' };
+    }
+
+    // 3. Authoritative PostgreSQL payment evidence in payment_orders
+    const payRes = await client.query(
+      `SELECT razorpay_payment_id, razorpay_order_id, amount_paise, currency, status 
+       FROM payment_orders 
+       WHERE customer_order_id = $1`,
+      [order.id]
+    );
+
+    const capturedRows = payRes.rows.filter(p => p.status === 'captured');
+    const validCaptured = capturedRows.filter(p =>
+      Number(p.amount_paise) === Number(order.total_paise) &&
+      p.currency === 'INR'
+    );
+
+    if (!validCaptured.length) {
+      console.warn(`[Email Guard] No verified captured payment evidence found for order #${order.order_number}`);
+      return { success: false, error: 'UNVERIFIED_PAYMENT_EVIDENCE', message: 'No authoritative captured payment record matches this order.' };
+    }
+
+    // 4. No unresolved payment conflict
+    if (capturedRows.length > 1 && capturedRows.some(p => p.razorpay_payment_id !== validCaptured[0].razorpay_payment_id)) {
+      console.warn(`[Email Guard] Unresolved payment conflict: multiple distinct captured payments for order #${order.order_number}`);
+      return { success: false, error: 'PAYMENT_CONFLICT', message: 'Unresolved payment conflict detected.' };
+    }
+
+    // STRICT: Ignore any external paymentId argument; strictly use authoritative captured payment from payment_orders
+    const verifiedPaymentId = validCaptured[0].razorpay_payment_id;
+
+    // Check if BOTH customer and admin emails were ALREADY sent
+    if (order.confirmation_email_sent && order.customer_email_sent && order.admin_email_sent) {
+      console.log(`[Email Outbox] Both confirmation emails already sent for order #${order.order_number}. Skipping duplicate run.`);
+      return {
+        success: true,
+        skipped: true,
+        alreadySent: true,
+        results: {
+          customerEmail: { success: true, status: 'accepted', alreadySent: true, providerAccepted: true },
+          adminEmail: { success: true, status: 'accepted', alreadySent: true, providerAccepted: true }
+        }
+      };
     }
 
     const address = typeof order.address === 'string' ? JSON.parse(order.address) : (order.address || {});
@@ -537,79 +1279,59 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
       phone: address.phone || order.customer_phone
     };
 
-    const recipientCustomerEmail = customer.email?.trim();
-    const adminEmail = process.env.ADMIN_EMAIL?.trim() || 'projects@milvanta.in';
-    const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+    const isPureSubscriptionOrder = Array.isArray(items) && items.length > 0 && items.every(item => item.isCustomDaysPlan === true);
+    const hasSubscriptionItems = Array.isArray(items) && items.some(item => item.isCustomDaysPlan === true);
 
-    const results = {
-      customerEmail: null,
-      adminEmail: null
-    };
-
-    // 1. Send Customer Email
-    if (recipientCustomerEmail && recipientCustomerEmail.includes('@')) {
-      const customerHtml = buildCustomerOrderEmail({
-        order,
-        customer,
-        address,
-        items,
-        paymentId
-      });
-
-      const customerText = `Thank you for your order, ${customer.name || 'Valued Customer'}!\n\nYour order #${order.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(order.total_paise, true)}\n\nDelivering To:\n${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nTeam Milvanta\nHafeezpet Hub, Hyderabad`;
-
-      results.customerEmail = await sendEmail({
-        to: recipientCustomerEmail,
-        subject: `Order Confirmed: #${order.order_number} - Milvanta Farm Fresh`,
-        html: customerHtml,
-        text: customerText,
-        from: sender
-      });
-    } else {
-      console.warn('[Resend] No valid customer email found for order #' + order.order_number);
-    }
-
-    // 2. Send Admin Notification Email
-    if (adminEmail && adminEmail.includes('@')) {
-      const adminHtml = buildAdminOrderEmail({
-        order,
-        customer,
-        address,
-        items,
-        paymentId
-      });
-
-      const adminText = `ALERT: New Paid Order #${order.order_number}\nAmount: ${formatInr(order.total_paise, true)}\nCustomer: ${customer.name} (${customer.phone}, ${customer.email})\nAddress: ${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
-
-      results.adminEmail = await sendEmail({
-        to: adminEmail,
-        subject: `🚨 New Paid Order #${order.order_number} - ${formatInr(order.total_paise, true)} (${customer.name})`,
-        html: adminHtml,
-        text: adminText,
-        from: sender
-      });
-    }
-
-    // Mark email sent in DB if at least one attempt succeeded or Resend was called
-    try {
-      await client.query(
-        `UPDATE customer_orders 
-         SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
-         WHERE id = $1`,
-        [order.id]
+    if (hasSubscriptionItems) {
+      const subRes = await client.query(
+        `SELECT * FROM customer_subscriptions WHERE (notes->>'sourceOrderId') = $1::text`,
+        [String(order.id)]
       );
-    } catch (dbErr) {
-      // If columns don't exist yet, ignore
-      console.warn('[Resend] Could not update confirmation_email_sent column (migration might be pending):', dbErr.message);
+      for (const sub of subRes.rows) {
+        await enqueueSubscriptionOutbox(client, {
+          subscription: sub,
+          customer,
+          address,
+          paymentId: verifiedPaymentId,
+          sourceOrderId: order.id
+        });
+      }
     }
+
+    if (!isPureSubscriptionOrder) {
+      await enqueueOrderPaidOutbox(client, {
+        order,
+        customer,
+        address,
+        items,
+        paymentId: verifiedPaymentId
+      });
+    }
+
+    // Process the outbox for this order
+    const outboxResult = await processEmailOutbox(client, { orderId: order.id });
+
+    // Fetch refreshed order status to see recipient states
+    const { rows: [refreshedOrder] } = await client.query(
+      `SELECT confirmation_email_sent, customer_email_sent, admin_email_sent FROM customer_orders WHERE id = $1`,
+      [order.id]
+    );
+
+    const customerSent = Boolean(refreshedOrder?.customer_email_sent);
+    const adminSent = Boolean(refreshedOrder?.admin_email_sent);
+    const bothSent = customerSent && adminSent;
 
     return {
-      success: true,
-      results
+      success: bothSent,
+      customerEmailSent: customerSent,
+      adminEmailSent: adminSent,
+      results: {
+        customerEmail: outboxResult.customerEmail || (customerSent ? { success: true, status: 'accepted' } : { success: false, status: 'failed' }),
+        adminEmail: outboxResult.adminEmail || (adminSent ? { success: true, status: 'accepted' } : { success: false, status: 'failed' })
+      }
     };
-
   } catch (err) {
-    console.error('[Resend] Failed to send order emails:', err);
+    console.error('[Email Outbox] Failed to send order emails:', err);
     return { success: false, error: err.message };
   } finally {
     client.release();
@@ -1269,9 +1991,14 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
              COALESCE(notes, '{}'::jsonb),
              '{emailConfirmations}',
              COALESCE(notes->'emailConfirmations', '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb)
-           )
+           ),
+           customer_email_sent = CASE WHEN $4::text = 'accepted' THEN TRUE ELSE customer_email_sent END,
+           customer_email_at = CASE WHEN $4::text = 'accepted' THEN NOW() ELSE customer_email_at END,
+           admin_email_sent = CASE WHEN $5::text = 'accepted' THEN TRUE ELSE admin_email_sent END,
+           admin_email_at = CASE WHEN $5::text = 'accepted' THEN NOW() ELSE admin_email_at END,
+           updated_at = NOW()
            WHERE id = $3`,
-          [paymentKey, JSON.stringify(eventData), subId]
+          [paymentKey, JSON.stringify(eventData), subId, results.customerEmail?.status || '', results.adminEmail?.status || '']
         );
       } catch (dbErr) {
         console.warn('[Subscription Email] Database tracking update error:', dbErr.message);
@@ -1382,7 +2109,7 @@ export function buildPasswordResetEmail({ customerName, otp }) {
  * Send password reset email with OTP to customer
  */
 export async function sendPasswordResetEmail({ to, customerName, otp }) {
-  const subject = `Your Milvanta Password Reset OTP: ${otp}`;
+  const subject = 'Your Milvanta Password Reset Code';
   const html = buildPasswordResetEmail({ customerName, otp });
   const text = `Hello ${customerName || 'Valued Customer'},\n\nYour Milvanta password reset OTP is: ${otp}\n\nThis OTP is valid for 10 minutes. If you did not request this, please ignore this email.\n\nTeam Milvanta`;
 
@@ -1396,5 +2123,70 @@ export async function sendPasswordResetEmail({ to, customerName, otp }) {
   });
 }
 
+/**
+ * Generate Customer Welcome Email HTML
+ */
+export function buildWelcomeEmail({ customerName }) {
+  const name = escapeHtml(customerName || 'Valued Customer');
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Welcome to Milvanta</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" style="max-width: 520px; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 16px rgba(15,23,42,0.06);">
+          <tr style="background: linear-gradient(135deg, #0a3d66 0%, #065f46 100%); color: #ffffff; text-align: center;">
+            <td style="padding: 28px 24px;">
+              <h1 style="margin: 0 0 6px; font-size: 24px; font-weight: 800;">🥛 Welcome to Milvanta</h1>
+              <p style="margin: 0; font-size: 14px; color: #d1fae5;">Pure Fresh Farm Milk & Artisanal Goodness</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 28px 24px; color: #0f172a;">
+              <h2 style="margin: 0 0 12px; font-size: 18px;">Hello ${name},</h2>
+              <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #475569;">
+                Thank you for joining Milvanta! Your account has been created successfully.
+              </p>
+              <p style="margin: 0 0 20px; font-size: 14px; line-height: 1.6; color: #475569;">
+                You can now log in anytime to order fresh morning milk, homemade pickles, and artisanal dairy delivered directly to your doorstep across Hyderabad between <strong>6:00 AM – 7:00 AM</strong>.
+              </p>
+              <div style="text-align: center; margin: 24px 0;">
+                <a href="https://milvanta.in" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">Start Exploring</a>
+              </div>
+              <p style="margin: 0; font-size: 13px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                Connecting Farms to Families<br>
+                <strong>Team Milvanta · Hafeezpet Hub, Hyderabad</strong>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+}
 
+/**
+ * Send welcome email to new customer via Resend / SMTP
+ */
+export async function sendWelcomeEmail({ to, customerName }) {
+  const subject = 'Welcome to Milvanta — Pure Fresh Milk & Dairy';
+  const html = buildWelcomeEmail({ customerName });
+  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in and order fresh morning milk, homemade pickles, and artisanal dairy delivered between 6:00 AM – 7:00 AM across Hyderabad.\n\nConnecting Farms to Families\nTeam Milvanta`;
+  const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+  return sendEmail({
+    to,
+    subject,
+    html,
+    text,
+    from: sender
+  });
+}
 

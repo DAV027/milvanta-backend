@@ -1280,8 +1280,8 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
   const sub = await getVerifiedSubscription(pool, subscriptionId, customerId);
   if (!sub) return null;
 
-  const y = Number(year) || getNowInIST().getFullYear();
-  const m = Number(month) !== undefined ? Number(month) : getNowInIST().getMonth();
+  const y = (year !== undefined && year !== null && !isNaN(Number(year))) ? Number(year) : getNowInIST().getFullYear();
+  const m = (month !== undefined && month !== null && !isNaN(Number(month))) ? Number(month) : getNowInIST().getMonth();
   const daysInMonth = new Date(y, m + 1, 0).getDate();
 
   const startDateStr = `${y}-${String(m + 1).padStart(2, '0')}-01`;
