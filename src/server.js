@@ -3526,11 +3526,17 @@ app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
         request.log.error({ err }, 'Failed to dispatch order confirmation emails after reconciliation');
       });
     }
+    const paymentBreakdown = verifyRazorpayOrderAmount(amount, payment);
     return reply.send({
       state: after?.payment_status === 'paid' && after?.order_status === 'confirmed'
         ? 'confirmed' : 'payment_review',
       orderNumber: order.order_number,
-      orderStatus: after?.order_status || 'payment_review'
+      orderStatus: after?.order_status || 'payment_review',
+      paymentBreakdown: paymentBreakdown.matched ? {
+        orderAmountPaise: amount,
+        razorpayCustomerFeePaise: paymentBreakdown.customerFeePaise,
+        totalChargedPaise: Number(payment.amount)
+      } : null
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
@@ -5159,10 +5165,16 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       }
     }
 
+    const paymentBreakdown = verifyRazorpayOrderAmount(expectedPaise, gatewayPayment);
     return {
       verified: true, orderId, paymentId, status: gatewayPayment.status,
       orderStatus: orderState?.order_status || null,
-      requiresManualReview: orderState?.order_status === 'payment_review'
+      requiresManualReview: orderState?.order_status === 'payment_review',
+      paymentBreakdown: paymentBreakdown.matched && gatewayPayment.status === 'captured' ? {
+        orderAmountPaise: expectedPaise,
+        razorpayCustomerFeePaise: paymentBreakdown.customerFeePaise,
+        totalChargedPaise: Number(gatewayPayment.amount)
+      } : null
     };
   } catch (error) {
     console.error('[WEBHOOK CATCH ERROR]:', error);
