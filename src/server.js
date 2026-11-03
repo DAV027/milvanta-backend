@@ -3535,6 +3535,9 @@ app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
       paymentBreakdown: paymentBreakdown.matched ? {
         orderAmountPaise: amount,
         razorpayCustomerFeePaise: paymentBreakdown.customerFeePaise,
+        razorpayCustomerFeeTaxPaise: paymentBreakdown.customerFeePaise > 0 && payment.tax != null &&
+          Number.isSafeInteger(Number(payment.tax)) && Number(payment.tax) >= 0 &&
+          Number(payment.tax) <= paymentBreakdown.customerFeePaise ? Number(payment.tax) : null,
         totalChargedPaise: Number(payment.amount)
       } : null
     });
@@ -5173,6 +5176,9 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       paymentBreakdown: paymentBreakdown.matched && gatewayPayment.status === 'captured' ? {
         orderAmountPaise: expectedPaise,
         razorpayCustomerFeePaise: paymentBreakdown.customerFeePaise,
+        razorpayCustomerFeeTaxPaise: paymentBreakdown.customerFeePaise > 0 && gatewayPayment.tax != null &&
+          Number.isSafeInteger(Number(gatewayPayment.tax)) && Number(gatewayPayment.tax) >= 0 &&
+          Number(gatewayPayment.tax) <= paymentBreakdown.customerFeePaise ? Number(gatewayPayment.tax) : null,
         totalChargedPaise: Number(gatewayPayment.amount)
       } : null
     };
