@@ -9,6 +9,7 @@ import jwt from '@fastify/jwt';
 import nodemailer from 'nodemailer';
 import pg from 'pg';
 import Razorpay from 'razorpay';
+import { verifyRazorpayOrderAmount } from './paymentAmount.js';
 import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
@@ -404,14 +405,17 @@ async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
   }
 }
 
-async function applyPaymentStatus(client, orderId, paymentId, status, amount, currency) {
+async function applyPaymentStatus(client, orderId, paymentId, status, amount, currency, gatewayEvidence = null) {
   if (!['authorized', 'captured', 'failed'].includes(status)) return false;
   const found = await client.query(
     'SELECT customer_order_id, razorpay_payment_id, amount_paise, currency, status FROM payment_orders WHERE razorpay_order_id = $1 FOR UPDATE',
     [orderId]
   );
   const payment = found.rows[0];
-  if (!payment || Number(payment.amount_paise) !== Number(amount) || payment.currency !== currency) return false;
+  const amountEvidence = verifyRazorpayOrderAmount(payment?.amount_paise, {
+    ...(gatewayEvidence || {}), amount, currency, status
+  });
+  if (!payment || payment.currency !== currency || !amountEvidence.matched) return false;
   if (['captured', 'refunded'].includes(payment.status)) return payment.status === status && payment.razorpay_payment_id === paymentId;
   await client.query(
     'UPDATE payment_orders SET razorpay_payment_id = $2, status = $3, updated_at = NOW() WHERE razorpay_order_id = $1',
@@ -3486,7 +3490,8 @@ app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
   const payments = Array.isArray(collection?.items) ? collection.items : [];
   const captured = payments.filter(p => p?.status === 'captured');
   const validCaptured = captured.filter(p =>
-    p.order_id === order.razorpay_order_id && Number(p.amount) === amount && p.currency === 'INR'
+    p.order_id === order.razorpay_order_id && p.currency === 'INR' &&
+    verifyRazorpayOrderAmount(amount, p).matched
   );
   if (captured.length !== validCaptured.length || validCaptured.length > 1) {
     request.log.error({
@@ -3506,7 +3511,7 @@ app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const applied = await applyPaymentStatus(client, order.razorpay_order_id, payment.id, 'captured', payment.amount, payment.currency);
+    const applied = await applyPaymentStatus(client, order.razorpay_order_id, payment.id, 'captured', payment.amount, payment.currency, payment);
     if (!applied) {
       await client.query('ROLLBACK');
       return reply.code(409).send({ state: 'payment_review', error: 'payment_state_conflict' });
@@ -5100,7 +5105,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
   const checks = {
     paymentOrderId: gatewayPayment?.order_id === orderId,
     gatewayOrderAmount: Number.isSafeInteger(Number(gatewayOrder?.amount)) && Number(gatewayOrder.amount) === expectedPaise,
-    gatewayPaymentAmount: Number.isSafeInteger(Number(gatewayPayment?.amount)) && Number(gatewayPayment.amount) === expectedPaise,
+    gatewayPaymentAmount: verifyRazorpayOrderAmount(expectedPaise, gatewayPayment).matched,
     gatewayOrderCurrency: (gatewayOrder?.currency || 'INR') === 'INR',
     gatewayPaymentCurrency: gatewayPayment?.currency === 'INR'
   };
@@ -5128,7 +5133,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       [orderId]
     );
     const wasPaid = beforeRows.rows[0]?.payment_status === 'paid';
-    applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency, gatewayPayment);
     if (applied) {
       const afterRows = await client.query(
         'SELECT co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
@@ -5236,7 +5241,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             [entity.order_id]
           );
           const wasPaid = beforeRow.rows[0]?.payment_status === 'paid';
-          await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency);
+          await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency, entity);
           if (status === 'captured') {
             const foundOrder = await client.query(
               'SELECT co.id, co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
