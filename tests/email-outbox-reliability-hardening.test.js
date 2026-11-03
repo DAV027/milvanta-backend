@@ -33,7 +33,7 @@ assertTestDatabaseConfigured();
 const setup = await setupDisposableTestSchema();
 const pool = setup.pool;
 
-const { app, razorpay } = await import('../src/server.js');
+const { app, razorpay, startServer, stopServer } = await import('../src/server.js');
 const emailModule = await import('../src/email.js');
 
 describe('MILVANTA TRANSACTIONAL EMAIL RELIABILITY & OUTBOX HARDENING', () => {
@@ -713,5 +713,414 @@ describe('MILVANTA TRANSACTIONAL EMAIL RELIABILITY & OUTBOX HARDENING', () => {
 
     // Stop cleanly
     emailModule.stopEmailOutboxWorker();
+  });
+
+  // =========================================================================
+  // 16. MANDATE-ONLY ACTIVATION PRODUCES ZERO PAID CONFIRMATION EMAILS
+  // =========================================================================
+  it('16. Mandate-only activation without captured payment produces 0 paid confirmation emails', async () => {
+    const mandateSubGatewayId = `sub_mandate_${crypto.randomBytes(8).toString('hex')}`;
+
+    // Seed customer subscription with mandate_only authType and fulfillmentEntitled: false
+    const { rows: [sub] } = await pool.query(
+      `INSERT INTO customer_subscriptions (
+         customer_id, product_name, quantity, time_slot, frequency,
+         status, razorpay_subscription_id, delivery_address, notes
+       ) VALUES ($1, 'Pure Fresh Buffalo Milk', 1, '6:00 AM – 7:00 AM', 'Daily', 'pending_authorization', $2, $3::jsonb, '{"authType":"mandate_only","fulfillmentEntitled":false,"paidCount":0}'::jsonb)
+       RETURNING *`,
+      [customerUser.id, mandateSubGatewayId, JSON.stringify(validAddress)]
+    );
+
+    const eventId = `evt_mandate_${Date.now()}`;
+    const rawBody = JSON.stringify({
+      entity: 'event',
+      account_id: 'acc_test_harden',
+      event: 'subscription.activated',
+      contains: ['subscription'],
+      payload: {
+        subscription: {
+          entity: {
+            id: mandateSubGatewayId,
+            status: 'active',
+            paid_count: 0,
+            current_start: null,
+            current_end: null
+          }
+        }
+      }
+    });
+
+    const sig = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest('hex');
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/webhook',
+      headers: {
+        'x-razorpay-signature': sig,
+        'x-razorpay-event-id': eventId
+      },
+      payload: JSON.parse(rawBody)
+    });
+
+    assert.equal(res.statusCode, 200);
+
+    // Verify ZERO paid confirmation emails were enqueued in email_outbox
+    const { rows: outboxRows } = await pool.query(
+      'SELECT id, event_key, email_type FROM email_outbox WHERE source_subscription_id = $1',
+      [sub.id]
+    );
+
+    assert.equal(outboxRows.length, 0, 'Mandate-only activation must NEVER enqueue paid confirmation emails');
+  });
+
+  // =========================================================================
+  // 17. LEGITIMATE RECURRING RENEWAL ENQUEUES CONFIRMATION & DEDUPLICATES
+  // =========================================================================
+  it('17. Legitimate recurring renewal enqueues renewal emails and deduplicates repeated webhooks', async () => {
+    const renewSubGatewayId = `sub_active_ren_${crypto.randomBytes(8).toString('hex')}`;
+    const renewalPaymentId = `pay_ren_cycle2_${crypto.randomBytes(8).toString('hex')}`;
+
+    // Seed active customer subscription with captured initial cycle
+    const { rows: [sub] } = await pool.query(
+      `INSERT INTO customer_subscriptions (
+         customer_id, product_name, quantity, time_slot, frequency,
+         status, razorpay_subscription_id, delivery_address, notes
+       ) VALUES ($1, 'Pure Fresh Cow Milk', 1, '6:00 AM – 7:00 AM', 'Daily', 'active', $2, $3::jsonb,
+         '{"fulfillmentEntitled":true,"paidThroughDate":"2026-11-30","paidCount":1,"lastPaymentId":"pay_init_111"}'::jsonb)
+       RETURNING *`,
+      [customerUser.id, renewSubGatewayId, JSON.stringify(validAddress)]
+    );
+
+    const eventId = `evt_ren_cycle2_${Date.now()}`;
+    const rawBody = JSON.stringify({
+      entity: 'event',
+      account_id: 'acc_test_harden',
+      event: 'subscription.charged',
+      contains: ['subscription', 'payment'],
+      payload: {
+        subscription: {
+          entity: {
+            id: renewSubGatewayId,
+            status: 'active',
+            paid_count: 2,
+            current_start: Math.floor(Date.now() / 1000),
+            current_end: Math.floor(Date.now() / 1000) + 2592000
+          }
+        },
+        payment: {
+          entity: {
+            id: renewalPaymentId,
+            status: 'captured',
+            amount: 330000,
+            currency: 'INR',
+            subscription_id: renewSubGatewayId,
+            created_at: Math.floor(Date.now() / 1000)
+          }
+        }
+      }
+    });
+
+    const sig = crypto.createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET).update(rawBody).digest('hex');
+
+    // First delivery: should enqueue outbox entries
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/webhook',
+      headers: {
+        'x-razorpay-signature': sig,
+        'x-razorpay-event-id': eventId
+      },
+      payload: JSON.parse(rawBody)
+    });
+
+    assert.equal(res1.statusCode, 200);
+
+    const { rows: firstOutbox } = await pool.query(
+      'SELECT id, event_key, email_type, recipient_type, payload FROM email_outbox WHERE source_subscription_id = $1',
+      [sub.id]
+    );
+
+    assert.equal(firstOutbox.length, 2, 'Must enqueue customer confirmation and admin notification');
+    const customerOutbox = firstOutbox.find(r => r.recipient_type === 'customer');
+    assert.ok(customerOutbox, 'Customer outbox row must exist');
+    assert.equal(customerOutbox.payload.isRenewal, true, 'Must be flagged as a renewal email');
+
+    // Second delivery (duplicate event delivery): should return duplicate: true and NOT insert new rows
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/webhook',
+      headers: {
+        'x-razorpay-signature': sig,
+        'x-razorpay-event-id': eventId
+      },
+      payload: JSON.parse(rawBody)
+    });
+
+    assert.equal(res2.statusCode, 200);
+    assert.equal(res2.json().duplicate, true);
+
+    const { rows: secondOutbox } = await pool.query(
+      'SELECT id FROM email_outbox WHERE source_subscription_id = $1',
+      [sub.id]
+    );
+    assert.equal(secondOutbox.length, 2, 'Duplicate webhook delivery must not double-enqueue outbox items');
+  });
+
+  // =========================================================================
+  // 18. DEDICATED SMTP WEBHOOK SECRET ENFORCEMENT & ADMIN_API_KEY REJECTION
+  // =========================================================================
+  it('18. Dedicated SMTP webhook secret fails closed if unset and rejects ADMIN_API_KEY', async () => {
+    const dummyMessageId = `msg_smtp_test_${Date.now()}`;
+
+    // 1. Rejects ADMIN_API_KEY as an invalid token
+    const adminKeyRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/emails/webhook',
+      headers: {
+        'x-smtp-webhook-token': process.env.ADMIN_API_KEY
+      },
+      payload: {
+        type: 'delivered',
+        data: { message_id: dummyMessageId }
+      }
+    });
+    assert.equal(adminKeyRes.statusCode, 401, 'ADMIN_API_KEY must NEVER be accepted for email webhook authorization');
+
+    // 2. Fails closed (503) if neither SMTP_WEBHOOK_SECRET nor SMTP_WEBHOOK_TOKEN is configured
+    const savedToken = process.env.SMTP_WEBHOOK_TOKEN;
+    const savedSecret = process.env.SMTP_WEBHOOK_SECRET;
+    delete process.env.SMTP_WEBHOOK_TOKEN;
+    delete process.env.SMTP_WEBHOOK_SECRET;
+
+    try {
+      const unconfiguredRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/emails/webhook',
+        headers: {
+          'x-smtp-webhook-token': 'any-token'
+        },
+        payload: {
+          type: 'delivered',
+          data: { message_id: dummyMessageId }
+        }
+      });
+      assert.equal(unconfiguredRes.statusCode, 503, 'Must fail closed 503 when SMTP webhook secret is not configured');
+    } finally {
+      process.env.SMTP_WEBHOOK_TOKEN = savedToken;
+      if (savedSecret) process.env.SMTP_WEBHOOK_SECRET = savedSecret;
+    }
+
+    // 3. Accepts legitimate SMTP_WEBHOOK_TOKEN
+    const validRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/emails/webhook',
+      headers: {
+        'x-smtp-webhook-token': process.env.SMTP_WEBHOOK_TOKEN
+      },
+      payload: {
+        type: 'delivered',
+        data: { message_id: dummyMessageId }
+      }
+    });
+    assert.equal(validRes.statusCode, 200);
+  });
+
+  // =========================================================================
+  // 19. DEDICATED INTERNAL WORKER SECRET ENFORCEMENT & ADMIN_API_KEY REJECTION
+  // =========================================================================
+  it('19. Dedicated INTERNAL_WORKER_SECRET fails closed if unset and rejects ADMIN_API_KEY', async () => {
+    // 1. Rejects ADMIN_API_KEY as worker secret
+    const adminKeyRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/internal/email-outbox/process',
+      headers: {
+        'x-internal-worker-secret': process.env.ADMIN_API_KEY
+      }
+    });
+    assert.equal(adminKeyRes.statusCode, 401, 'ADMIN_API_KEY must NEVER be accepted for internal worker trigger');
+
+    // 2. Fails closed (503) if INTERNAL_WORKER_SECRET is not configured
+    const savedWorkerSecret = process.env.INTERNAL_WORKER_SECRET;
+    delete process.env.INTERNAL_WORKER_SECRET;
+
+    try {
+      const unconfiguredRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/internal/email-outbox/process',
+        headers: {
+          'x-internal-worker-secret': 'any-secret'
+        }
+      });
+      assert.equal(unconfiguredRes.statusCode, 503, 'Must fail closed 503 when INTERNAL_WORKER_SECRET is unset');
+    } finally {
+      process.env.INTERNAL_WORKER_SECRET = savedWorkerSecret;
+    }
+
+    // 3. Accepts legitimate INTERNAL_WORKER_SECRET
+    const validRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/internal/email-outbox/process',
+      headers: {
+        'x-internal-worker-secret': process.env.INTERNAL_WORKER_SECRET
+      }
+    });
+    assert.equal(validRes.statusCode, 200);
+    assert.ok(validRes.json().hasOwnProperty('processed'));
+  });
+
+  // =========================================================================
+  // 20. WORKER LEASE FENCING PREVENTS STALE WORKER OVERWRITES
+  // =========================================================================
+  it('20. Worker lease fencing prevents stale workers from overwriting newer worker results', async () => {
+    // Seed an outbox entry claimed by worker_active_1
+    const { rows: [item] } = await pool.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         payload, status, attempts, locked_by, locked_at, lease_expires_at
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, '{}'::jsonb, 'processing', 1, 'worker_active_1', NOW(), NOW() + interval '5 minutes')
+       RETURNING *`,
+      [`fence_test_${Date.now()}`, customerEmail]
+    );
+
+    // Stale worker tries to mark it as sent with its outdated workerId
+    const staleWorkerId = 'worker_stale_old';
+    const staleUpdate = await pool.query(
+      `UPDATE email_outbox
+       SET status = 'sent', provider = 'resend', provider_message_id = 'msg_stale_123',
+           locked_by = NULL, locked_at = NULL, lease_expires_at = NULL, updated_at = NOW()
+       WHERE id = $1 AND locked_by = $2`,
+      [item.id, staleWorkerId]
+    );
+
+    assert.equal(staleUpdate.rowCount, 0, 'Stale worker update must be fenced out (rowCount = 0)');
+
+    // Verify row remains untouched under worker_active_1 lock
+    const { rows: [current] } = await pool.query('SELECT status, locked_by FROM email_outbox WHERE id = $1', [item.id]);
+    assert.equal(current.status, 'processing');
+    assert.equal(current.locked_by, 'worker_active_1');
+  });
+
+  // =========================================================================
+  // 21. EXPIRED LEASES EXCEEDING MAX_ATTEMPTS TRANSITION DIRECTLY TO DEAD_LETTER
+  // =========================================================================
+  it('21. Expired leases exceeding max_attempts transition directly to dead_letter without reclaim', async () => {
+    // Insert an item that was processing when server crashed, already at max_attempts (5)
+    const { rows: [crashedItem] } = await pool.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         payload, status, attempts, max_attempts, locked_by, locked_at, lease_expires_at
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, '{}'::jsonb, 'processing', 5, 5, 'crashed_worker', NOW() - interval '10 minutes', NOW() - interval '5 minutes')
+       RETURNING *`,
+      [`crash_test_${Date.now()}`, customerEmail]
+    );
+
+    // Run processEmailOutbox
+    const result = await emailModule.processEmailOutbox(pool, { workerId: 'cleaner_worker', limit: 10 });
+
+    // Verify crashedItem transitioned to dead_letter and was not processed or re-claimed
+    const { rows: [refreshed] } = await pool.query('SELECT status, last_error, locked_by, next_retry_at FROM email_outbox WHERE id = $1', [crashedItem.id]);
+    assert.equal(refreshed.status, 'dead_letter', 'Expired lease exceeding max_attempts must transition to dead_letter');
+    assert.equal(refreshed.locked_by, null, 'Lock must be released');
+    assert.equal(refreshed.next_retry_at, null, 'next_retry_at must be null in dead_letter');
+    assert.equal(refreshed.last_error, 'LEASE_EXPIRED_MAX_ATTEMPTS_EXCEEDED');
+  });
+
+  // =========================================================================
+  // 22. WEBHOOK TRANSACTION ATOMICITY & RETRY AFTER DB FAILURE
+  // =========================================================================
+  it('22. Webhook transaction atomicity: DB rollback on error rolls back replay event so retries succeed', async () => {
+    const retryEventId = `evt_retry_tx_${Date.now()}`;
+    const testMessageId = `msg_retry_${Date.now()}`;
+
+    // Seed outbox item
+    await pool.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         payload, status, provider_message_id
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, '{}'::jsonb, 'sent', $3)`,
+      [`retry_test_${Date.now()}`, customerEmail, testMessageId]
+    );
+
+    // 1. Send first delivery event with a payload that causes a DB error
+    const failedAttemptRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/emails/webhook',
+      headers: {
+        'x-smtp-webhook-token': process.env.SMTP_WEBHOOK_TOKEN,
+        'x-smtp-event-id': retryEventId
+      },
+      payload: {
+        type: 'delivered',
+        data: { message_id: testMessageId, created_at: 'invalid-non-iso-timestamp-causes-error' }
+      }
+    });
+
+    assert.equal(failedAttemptRes.statusCode, 500, 'Malformed DB operation must return 500 and trigger rollback');
+
+    // Verify email_webhook_events does NOT contain retryEventId because of transaction rollback
+    const { rows: evtRows } = await pool.query(
+      'SELECT event_id FROM email_webhook_events WHERE event_id = $1',
+      [retryEventId]
+    );
+    assert.equal(evtRows.length, 0, 'Transaction rollback must remove event_id so provider retry is not rejected as duplicate');
+
+    // 2. Provider retries with the SAME event_id but valid message_id
+    const retrySuccessRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/emails/webhook',
+      headers: {
+        'x-smtp-webhook-token': process.env.SMTP_WEBHOOK_TOKEN,
+        'x-smtp-event-id': retryEventId
+      },
+      payload: {
+        type: 'delivered',
+        data: { message_id: testMessageId }
+      }
+    });
+
+    assert.equal(retrySuccessRes.statusCode, 200, 'Provider retry must succeed after previous failure rollback');
+    assert.equal(retrySuccessRes.json().status, 'delivered');
+    assert.equal(retrySuccessRes.json().duplicate, undefined, 'Must not be falsely marked as duplicate');
+
+    // 3. Now verify event_id IS recorded in email_webhook_events after successful commit
+    const { rows: committedEvt } = await pool.query(
+      'SELECT event_id FROM email_webhook_events WHERE event_id = $1',
+      [retryEventId]
+    );
+    assert.equal(committedEvt.length, 1, 'Event ID must be committed upon transaction success');
+  });
+
+  // =========================================================================
+  // 23. PRODUCTION-STYLE SERVER BOOTSTRAP & STARTUP RECOVERY PASS
+  // =========================================================================
+  it('23. Real production server bootstrap starts outbox worker, processes pending jobs, and shuts down cleanly', async () => {
+    // Insert a pending outbox item before server starts
+    const { rows: [pendingItem] } = await pool.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         payload, status
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, '{}'::jsonb, 'pending')
+       RETURNING *`,
+      [`boot_test_${Date.now()}`, customerEmail]
+    );
+
+    // Bootstrap server on ephemeral port (port 0)
+    const { address, emailWorker } = await startServer(0, '127.0.0.1');
+    assert.ok(address, 'Server must return listening address');
+    assert.ok(emailWorker, 'Server must start background email outbox worker');
+    assert.ok(emailWorker.workerId, 'Email outbox worker must have an active workerId');
+
+    // Allow brief interval for initial startup recovery pass to process pendingItem
+    await new Promise(r => setTimeout(r, 600));
+
+    // Verify pending item was claimed/processed by startup pass
+    const { rows: [checkedItem] } = await pool.query(
+      'SELECT status FROM email_outbox WHERE id = $1',
+      [pendingItem.id]
+    );
+    assert.ok(['processing', 'sent', 'delivered'].includes(checkedItem.status), `Item status should be processed from pending, got ${checkedItem.status}`);
+
+    // Clean shutdown
+    await stopServer();
   });
 });

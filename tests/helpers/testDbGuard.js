@@ -158,10 +158,17 @@ export async function setupDisposableTestSchema() {
   // Apply migrations in order within the disposable schema
   const migrationsDir = path.resolve(process.cwd(), 'migrations');
   if (fs.existsSync(migrationsDir)) {
+    await schemaPool.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
     const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
     for (const file of files) {
       const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
       await schemaPool.query(sql);
+      await schemaPool.query('INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
     }
   }
 

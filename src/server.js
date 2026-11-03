@@ -3408,6 +3408,7 @@ app.post('/api/v1/orders', {
       });
     }
   } catch (error) {
+    console.error('[WEBHOOK CATCH ERROR]:', error);
     await client.query('ROLLBACK');
     throw error;
   } finally {
@@ -5157,6 +5158,7 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       requiresManualReview: orderState?.order_status === 'payment_review'
     };
   } catch (error) {
+    console.error('[WEBHOOK CATCH ERROR]:', error);
     await client.query('ROLLBACK');
     throw error;
   } finally {
@@ -5185,6 +5187,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   const subEntity = request.body?.payload?.subscription?.entity;
   const rawPaymentEntity = request.body?.payload?.payment?.entity;
   const rawInvoiceEntity = request.body?.payload?.invoice?.entity;
+  let hasPaymentEvidence = false;
+  let confirmedPaymentId = null;
 
   if (
     ['subscription.activated', 'subscription.charged'].includes(eventName) &&
@@ -5273,7 +5277,6 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
 
       // B. Razorpay Subscription Lifecycle Events
-      const subEntity = request.body?.payload?.subscription?.entity;
       if (subEntity?.id) {
         if (['subscription.authenticated'].includes(eventName)) {
           // Mandate authorization alone must NOT authorize unpaid deliveries.
@@ -5298,8 +5301,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
 
           // Defensible captured billing-cycle evidence requirement:
           // Must match subscription ID, be captured/paid, and belong to current billing cycle.
-          let hasPaymentEvidence = false;
-          let confirmedPaymentId = null;
+          hasPaymentEvidence = false;
+          confirmedPaymentId = null;
 
           if (rawPaymentEntity?.id && typeof rawPaymentEntity.id === 'string' && rawPaymentEntity.id.startsWith('pay_')) {
             const isCaptured = rawPaymentEntity.status === 'captured';
@@ -5569,23 +5572,87 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
     }
     if (seen.rowCount && subEntity?.id) {
-      const {rows: notificationSubs}=await client.query(`SELECT s.*,c.phone, c.email AS customer_email, c.full_name AS customer_name FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id WHERE s.razorpay_subscription_id=$1 OR s.notes->>'subscriptionId'=$1 OR s.notes->>'razorpay_subscription_id'=$1`,[subEntity.id]);
-      for(const s of notificationSubs) {
-        if(['subscription.activated','subscription.charged'].includes(eventName)) {
-          await queuePaidSubscriptionActivation(client,s.id);
-          const paymentIdForNotice = rawPaymentEntity?.id || (s.notes?.lastPaymentId) || '';
-          const cycleForNotice = subEntity?.paid_count || subEntity?.current_start || '';
+      const { rows: notificationSubs } = await client.query(
+        `SELECT s.*, c.phone, c.email AS customer_email, c.full_name AS customer_name 
+         FROM customer_subscriptions s 
+         JOIN customers c ON c.id = s.customer_id 
+         WHERE s.razorpay_subscription_id = $1 OR s.notes->>'subscriptionId' = $1 OR s.notes->>'razorpay_subscription_id' = $1`,
+        [subEntity.id]
+      );
+
+      for (const s of notificationSubs) {
+        if (['subscription.activated', 'subscription.charged'].includes(eventName)) {
+          const notes = typeof s.notes === 'object' && s.notes !== null ? s.notes : {};
+          const isMandateOnly = notes.authType === 'mandate_only' || notes.fulfillmentEntitled === false;
+
+          // Strict payment verification: require captured payment evidence, valid paidCount, and paid-through date
+          const paidCount = Number(subEntity?.paid_count) || Number(notes.paidCount) || 0;
+          const paidThroughDate = notes.paidThroughDate;
+          const todayYMD = new Date().toISOString().slice(0, 10);
+          const hasValidPaidThrough = Boolean(paidThroughDate && typeof paidThroughDate === 'string' && paidThroughDate >= todayYMD);
+
+          // Payment entity verification when raw payment is present in webhook
+          let paymentEntityValid = true;
+          if (rawPaymentEntity?.id) {
+            const isCaptured = rawPaymentEntity.status === 'captured';
+            const isINR = !rawPaymentEntity.currency || rawPaymentEntity.currency === 'INR';
+            const hasAmount = rawPaymentEntity.amount !== undefined ? Number(rawPaymentEntity.amount) > 0 : true;
+            const subMatch = !rawPaymentEntity.subscription_id || rawPaymentEntity.subscription_id === subEntity.id;
+            paymentEntityValid = isCaptured && isINR && hasAmount && subMatch;
+          }
+
+          const hasConfirmedPayment = Boolean(
+            (hasPaymentEvidence || rawPaymentEntity?.status === 'captured' || notes.lastPaymentId) &&
+            paymentEntityValid
+          );
+
+          const isFulfillmentEntitled = notes.fulfillmentEntitled === true && !isMandateOnly && paidCount > 0 && hasValidPaidThrough && hasConfirmedPayment;
+
+          if (!isFulfillmentEntitled) {
+            app.log.info({
+              subId: s.id,
+              eventName,
+              isMandateOnly,
+              paidCount,
+              hasValidPaidThrough,
+              hasConfirmedPayment
+            }, '[Webhook] Subscription missing captured billing or fulfillment entitlement; skipping paid confirmation emails.');
+            continue;
+          }
+
+          // Verified captured billing confirmed!
+          await queuePaidSubscriptionActivation(client, s.id);
+
+          const paymentIdForNotice = confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null) || (notes.lastPaymentId) || '';
+          const cycleForNotice = paidCount || subEntity?.paid_count || subEntity?.current_start || 1;
+          const isRenewal = eventName === 'subscription.charged' || paidCount > 1;
+
           await enqueueRecurringSubscriptionOutbox(client, {
             subscription: s,
             customer: { phone: s.phone, email: s.customer_email, name: s.customer_name },
             address: s.delivery_address || {},
             paymentId: paymentIdForNotice,
             billingCycle: cycleForNotice,
+            isRenewal,
             eventName
           });
         } else {
-          const templateKey=({'subscription.cancelled':'SUBSCRIPTION_CANCELLED','subscription.paused':'SUBSCRIPTION_PAUSED','subscription.resumed':'SUBSCRIPTION_RESUMED','subscription.halted':'BILLING_ISSUE','subscription.pending':'BILLING_ISSUE'})[eventName];
-          if(templateKey) await queueNotification(client,{customerId:s.customer_id,phone:s.phone,templateKey,params:{productName:s.product_name,dueDate:s.notes?.paidThroughDate},idempotencyKey:templateKey==='SUBSCRIPTION_CANCELLED'?`sms_sub_cancel_${s.id}`:`gateway_${eventName}_${s.id}_${eventId}`});
+          const templateKey = ({
+            'subscription.cancelled': 'SUBSCRIPTION_CANCELLED',
+            'subscription.paused': 'SUBSCRIPTION_PAUSED',
+            'subscription.resumed': 'SUBSCRIPTION_RESUMED',
+            'subscription.halted': 'BILLING_ISSUE',
+            'subscription.pending': 'BILLING_ISSUE'
+          })[eventName];
+          if (templateKey) {
+            await queueNotification(client, {
+              customerId: s.customer_id,
+              phone: s.phone,
+              templateKey,
+              params: { productName: s.product_name, dueDate: s.notes?.paidThroughDate },
+              idempotencyKey: templateKey === 'SUBSCRIPTION_CANCELLED' ? `sms_sub_cancel_${s.id}` : `gateway_${eventName}_${s.id}_${eventId}`
+            });
+          }
         }
       }
     }
@@ -5597,7 +5664,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
         app.log.error({ err }, '[Resend] Failed to send order emails after webhook commit');
       });
     }
-    if (subEntity?.id && ['subscription.activated','subscription.charged'].includes(eventName)) {
+    if (subEntity?.id && ['subscription.activated', 'subscription.charged'].includes(eventName) && hasPaymentEvidence) {
       processEmailOutbox(pool, { limit: 10 }).catch((err) => {
         app.log.error({ err }, '[Resend] Failed to process subscription outbox after webhook commit');
       });
@@ -5712,8 +5779,14 @@ app.post('/api/v1/emails/webhook', async (request, reply) => {
     provider = 'resend';
     eventId = verification.svixId;
   } else if (smtpToken) {
-    const expectedToken = (process.env.SMTP_WEBHOOK_TOKEN || process.env.ADMIN_API_KEY || '').trim();
-    if (!expectedToken || smtpToken !== expectedToken) {
+    const expectedToken = (process.env.SMTP_WEBHOOK_SECRET || process.env.SMTP_WEBHOOK_TOKEN || '').trim();
+    if (!expectedToken) {
+      return reply.code(503).send({
+        error: 'smtp_webhook_not_configured',
+        message: 'SMTP_WEBHOOK_SECRET / SMTP_WEBHOOK_TOKEN is not configured'
+      });
+    }
+    if (smtpToken !== expectedToken) {
       return reply.code(401).send({ error: 'invalid_smtp_webhook_token' });
     }
     provider = 'smtp';
@@ -5734,39 +5807,57 @@ app.post('/api/v1/emails/webhook', async (request, reply) => {
     return reply.code(400).send({ error: 'missing_message_id' });
   }
 
-  // Replay protection: record eventId in email_webhook_events
-  if (eventId) {
-    const dedup = await pool.query(
-      `INSERT INTO email_webhook_events (event_id, provider, event_type)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (event_id) DO NOTHING
-       RETURNING event_id`,
-      [eventId, provider, event]
-    );
+  // Atomically process deduplication event recording and delivery status updates in a single transaction
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-    if (dedup.rowCount === 0) {
-      // Replay detected
-      return reply.send({ received: true, duplicate: true, eventId });
+    if (eventId) {
+      const dedup = await client.query(
+        `INSERT INTO email_webhook_events (event_id, provider, event_type)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (event_id) DO NOTHING
+         RETURNING event_id`,
+        [eventId, provider, event]
+      );
+
+      if (dedup.rowCount === 0) {
+        // Replay detected: commit and return duplicate response safely
+        await client.query('COMMIT');
+        return reply.send({ received: true, duplicate: true, eventId });
+      }
     }
-  }
 
-  if (['email.delivered', 'delivered'].includes(event)) {
-    const res = await markOutboxDelivered(pool, { providerMessageId: messageId, deliveredAt: new Date() });
-    return reply.send({ received: true, status: 'delivered', messageId, ...res });
-  }
+    let responseData = { received: true, event, provider };
 
-  if (['email.bounced', 'bounced', 'email.complained'].includes(event)) {
-    const reason = data?.bounce?.message || data?.complaint?.message || 'Bounced/Spam complaint';
-    await pool.query(
-      `UPDATE email_outbox 
-       SET status = 'bounced', provider_status = 'bounced', last_error = $2, updated_at = NOW() 
-       WHERE provider_message_id = $1`,
-      [messageId, reason]
-    );
-    return reply.send({ received: true, status: 'bounced', messageId });
-  }
+    if (['email.delivered', 'delivered'].includes(event)) {
+      const rawDeliveredAt = data?.created_at || data?.delivered_at;
+      const deliveredAt = rawDeliveredAt ? new Date(rawDeliveredAt) : new Date();
+      if (isNaN(deliveredAt.getTime())) {
+        throw new Error('invalid_delivered_at_timestamp');
+      }
+      const res = await markOutboxDelivered(client, { providerMessageId: messageId, deliveredAt });
+      responseData = { received: true, status: 'delivered', messageId, ...res };
+    } else if (['email.bounced', 'bounced', 'email.complained'].includes(event)) {
+      const reason = data?.bounce?.message || data?.complaint?.message || 'Bounced/Spam complaint';
+      await client.query(
+        `UPDATE email_outbox 
+         SET status = 'bounced', provider_status = 'bounced', last_error = $2, updated_at = NOW() 
+         WHERE provider_message_id = $1`,
+        [messageId, reason]
+      );
+      responseData = { received: true, status: 'bounced', messageId };
+    }
 
-  return reply.send({ received: true, event, provider });
+    await client.query('COMMIT');
+    return reply.send(responseData);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    request.log.error({ err: err?.message || err }, 'Failed to process email delivery webhook transaction');
+    return reply.code(500).send({ error: 'webhook_processing_failed', message: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 // Admin Email Outbox Inspection & Dead-Letter Visibility
@@ -5825,9 +5916,16 @@ app.get('/api/v1/admin/emails/outbox', { preHandler: app.requireAdmin }, async (
 app.post('/api/v1/internal/email-outbox/process', async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const providedSecret = request.headers['x-internal-worker-secret'];
-  const expectedSecret = (process.env.INTERNAL_WORKER_SECRET || process.env.ADMIN_API_KEY || '').trim();
+  const expectedSecret = (process.env.INTERNAL_WORKER_SECRET || '').trim();
 
-  if (!expectedSecret || providedSecret !== expectedSecret) {
+  if (!expectedSecret) {
+    return reply.code(503).send({
+      error: 'worker_trigger_not_configured',
+      message: 'INTERNAL_WORKER_SECRET is not configured'
+    });
+  }
+
+  if (!providedSecret || providedSecret !== expectedSecret) {
     return reply.code(401).send({ error: 'unauthorized', message: 'Invalid or missing worker secret' });
   }
 
@@ -6452,12 +6550,14 @@ async function releaseExpiredReservations() {
   }
 }
 
-const port = Number(process.env.PORT || 10000);
-const host = process.env.HOST || '0.0.0.0';
+const defaultPort = Number(process.env.PORT || 10000);
+const defaultHost = process.env.HOST || '0.0.0.0';
 
 let reservationSweep = null;
 let outboxSweep = null;
-if (process.env.NODE_ENV !== 'test') {
+let emailWorkerInstance = null;
+
+export async function startServer(customPort = defaultPort, customHost = defaultHost) {
   // 1. Controlled migration execution before HTTP listener is opened
   if (pool) {
     if (process.env.APP_ENV === 'staging') {
@@ -6489,24 +6589,71 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   // 2. Open HTTP listener only after database migrations succeed
-  await app.listen({ port, host });
-  reservationSweep = setInterval(releaseExpiredReservations, 60_000);
-  reservationSweep.unref();
+  const address = await app.listen({ port: customPort, host: customHost });
 
-  outboxSweep = setInterval(async () => {
-    try {
-      if (pool) await processNotificationOutbox(pool, 25);
-    } catch (err) {
-      app.log.warn({ err: err?.message || err }, 'Background outbox sweep error');
-    }
-  }, 30_000);
-  outboxSweep.unref();
+  if (!reservationSweep) {
+    reservationSweep = setInterval(releaseExpiredReservations, 60_000);
+    reservationSweep.unref();
+  }
+
+  if (!outboxSweep) {
+    outboxSweep = setInterval(async () => {
+      try {
+        if (pool) await processNotificationOutbox(pool, 25);
+      } catch (err) {
+        app.log.warn({ err: err?.message || err }, 'Background outbox sweep error');
+      }
+    }, 30_000);
+    outboxSweep.unref();
+  }
+
+  // 3. Start transactional email outbox worker & trigger recovery pass for persisted pending jobs
+  if (pool) {
+    emailWorkerInstance = startEmailOutboxWorker(pool, { intervalMs: 15_000 });
+    // Process persisted pending jobs after application restart (e.g. Render wake-up)
+    processEmailOutbox(pool, { limit: 50 }).catch((err) => {
+      app.log.warn({ err: err?.message || err }, 'Initial email outbox startup recovery pass error');
+    });
+  }
+
+  return { app, address, emailWorker: emailWorkerInstance };
+}
+
+export async function stopServer() {
+  stopEmailOutboxWorker();
+  emailWorkerInstance = null;
+  if (reservationSweep) {
+    clearInterval(reservationSweep);
+    reservationSweep = null;
+  }
+  if (outboxSweep) {
+    clearInterval(outboxSweep);
+    outboxSweep = null;
+  }
+  try {
+    await app.close();
+  } catch (_) {}
+}
+
+app.addHook('onClose', async () => {
+  stopEmailOutboxWorker();
+  emailWorkerInstance = null;
+  if (reservationSweep) {
+    clearInterval(reservationSweep);
+    reservationSweep = null;
+  }
+  if (outboxSweep) {
+    clearInterval(outboxSweep);
+    outboxSweep = null;
+  }
+});
+
+if (process.env.NODE_ENV !== 'test') {
+  await startServer();
 
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, async () => {
-      if (reservationSweep) clearInterval(reservationSweep);
-      if (outboxSweep) clearInterval(outboxSweep);
-      await app.close();
+      await stopServer();
       await pool?.end();
       process.exit(0);
     });

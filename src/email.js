@@ -732,6 +732,7 @@ export async function enqueueRecurringSubscriptionOutbox(client, {
   address,
   paymentId = '',
   billingCycle = '',
+  isRenewal = true,
   eventName = 'subscription.charged'
 }) {
   if (!client || !subscription) return [];
@@ -768,7 +769,7 @@ export async function enqueueRecurringSubscriptionOutbox(client, {
     paymentId: paymentId || '',
     billingCycle: cycleToken,
     eventName,
-    isRenewal: true
+    isRenewal: Boolean(isRenewal)
   };
 
   const enqueued = [];
@@ -828,9 +829,24 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       workerId = `worker_${process.pid}_${crypto.randomUUID().slice(0, 8)}`
     } = options;
 
+    // 1. Transition expired leases exceeding max_attempts directly to dead_letter state
+    await client.query(`
+      UPDATE email_outbox
+      SET status = 'dead_letter',
+          last_error = COALESCE(last_error, 'LEASE_EXPIRED_MAX_ATTEMPTS_EXCEEDED'),
+          next_retry_at = NULL,
+          locked_by = NULL,
+          locked_at = NULL,
+          lease_expires_at = NULL,
+          updated_at = NOW()
+      WHERE status = 'processing'
+        AND lease_expires_at <= NOW()
+        AND attempts >= max_attempts
+    `);
+
     let filterClauses = `
-      ((status IN ('pending', 'failed') AND next_retry_at <= NOW())
-       OR (status = 'processing' AND lease_expires_at <= NOW()))
+      ((status IN ('pending', 'failed') AND next_retry_at <= NOW() AND attempts < max_attempts)
+       OR (status = 'processing' AND lease_expires_at <= NOW() AND attempts < max_attempts))
     `;
     const params = [limit, workerId, leaseMinutes];
 
@@ -937,7 +953,8 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       if (sendResult.success) {
         // Record provider acceptance (status = 'sent', provider_status = 'accepted').
         // Note: delivered_at remains NULL until webhook confirms inbox delivery.
-        await client.query(
+        // Fencing guard: ONLY succeed if this worker still holds the lock!
+        const updateRes = await client.query(
           `UPDATE email_outbox 
            SET status = 'sent',
                provider = $2,
@@ -948,9 +965,14 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
                locked_at = NULL,
                lease_expires_at = NULL,
                updated_at = NOW()
-           WHERE id = $1`,
-          [item.id, sendResult.provider || 'resend', sendResult.id || null]
+           WHERE id = $1 AND locked_by = $4`,
+          [item.id, sendResult.provider || 'resend', sendResult.id || null, workerId]
         );
+
+        if (updateRes.rowCount === 0) {
+          console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id}; ignoring stale update`);
+          continue;
+        }
 
         // Update independent recipient tracking
         if (item.source_order_id) {
@@ -1021,7 +1043,7 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
 
         if (currentAttempts >= maxAttempts) {
           // Transition to terminal dead_letter state
-          await client.query(
+          const dlRes = await client.query(
             `UPDATE email_outbox 
              SET status = 'dead_letter',
                  last_error = $2,
@@ -1030,13 +1052,17 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
                  locked_at = NULL,
                  lease_expires_at = NULL,
                  updated_at = NOW()
-             WHERE id = $1`,
-            [item.id, errMsg]
+             WHERE id = $1 AND locked_by = $3`,
+            [item.id, errMsg, workerId]
           );
+          if (dlRes.rowCount === 0) {
+            console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id} during dead-letter transition`);
+            continue;
+          }
         } else {
           // Exponential backoff: min(60, 2^(attempts-1)) minutes
           const backoffMinutes = Math.min(60, Math.pow(2, Math.max(0, currentAttempts - 1)));
-          await client.query(
+          const failRes = await client.query(
             `UPDATE email_outbox 
              SET status = 'failed',
                  last_error = $2,
@@ -1045,9 +1071,13 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
                  locked_at = NULL,
                  lease_expires_at = NULL,
                  updated_at = NOW()
-             WHERE id = $1`,
-            [item.id, errMsg, backoffMinutes]
+             WHERE id = $1 AND locked_by = $4`,
+            [item.id, errMsg, backoffMinutes, workerId]
           );
+          if (failRes.rowCount === 0) {
+            console.warn(`[Email Outbox] Worker ${workerId} lost lease for outbox item ${item.id} during failure transition`);
+            continue;
+          }
         }
 
         const outboxSummary = {

@@ -24,6 +24,7 @@ process.env.RAZORPAY_KEY_SECRET = 'test_razorpay_secret_key_audit_32_chars';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'test_razorpay_webhook_secret_key_outbox';
 process.env.WHATSAPP_ENABLED = 'false';
 process.env.ADMIN_EMAIL = 'projects@milvanta.in';
+process.env.SMTP_WEBHOOK_TOKEN = 'test_smtp_webhook_token_blockers';
 
 assertTestDatabaseConfigured();
 
@@ -1017,7 +1018,7 @@ describe('RELEASE BLOCKERS: TRANSACTIONAL EMAIL OUTBOX & PAYMENT INTEGRITY', () 
       method: 'POST',
       url: '/api/v1/emails/webhook',
       headers: {
-        'x-smtp-webhook-token': process.env.ADMIN_API_KEY
+        'x-smtp-webhook-token': process.env.SMTP_WEBHOOK_TOKEN
       },
       payload: {
         type: 'email.delivered',
