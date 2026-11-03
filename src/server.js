@@ -46,6 +46,7 @@ import {
   derivePaidThroughDate,
   getEffectivePaidThroughDate,
   formatDateYMD,
+  addDaysToYMD,
   resolveSubscriptionDeliveryAddress,
   normalizeDeliveryAddress
 } from './services/subscriptionService.js';
@@ -344,6 +345,69 @@ function safeAddress(input) {
   return address;
 }
 
+// Create prepaid custom-days subscriptions only from a captured, matching
+// Razorpay order. The original paid order and subscription records commit
+// atomically, with one server-authoritative source order line per delivery plan.
+async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
+  const lines = Array.isArray(order?.items) ? order.items : [];
+  const startDate = getTomorrowDeliveryDateYMD();
+  const address = order.address && typeof order.address === 'object' ? order.address : null;
+  if (!startDate || !address) throw new Error('paid_subscription_address_or_start_missing');
+
+  for (let i = 0; i < lines.length; i++) {
+    const item = lines[i];
+    if (item.isCustomDaysPlan !== true) continue;
+    const days = Number(item.subscriptionDays);
+    const dailyRate = Number(item.subscriptionDailyRatePaise);
+    const quantity = Number(item.quantity);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 90 ||
+        !Number.isSafeInteger(dailyRate) || dailyRate <= 0 ||
+        !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 25 ||
+        Number(item.lineTotalPaise) !== days * dailyRate * quantity) {
+      throw new Error('invalid_server_subscription_plan');
+    }
+    const paidThroughDate = addDaysToYMD(startDate, days - 1);
+    if (!paidThroughDate) throw new Error('invalid_paid_through_date');
+    const itemSize = String(item.subscriptionSize || '').trim();
+    if (!itemSize) throw new Error('missing_subscription_size');
+
+    for (let unitIndex = 0; unitIndex < quantity; unitIndex++) {
+      const notes = {
+        sourceOrderId: String(order.id),
+        sourceOrderLineKey: String(i) + ':' + String(unitIndex),
+        sourceOrderNumber: order.order_number,
+        paymentId: capturedPaymentId,
+        lastPaymentId: capturedPaymentId,
+        fulfillmentEntitled: true,
+        authType: 'one_time',
+        paidCount: 1,
+        startDate,
+        paidThroughDate,
+        days,
+        customDays: days,
+        dailyRatePaise: dailyRate,
+        deliveryAddress: address,
+        verifiedAt: new Date().toISOString()
+      };
+      await client.query(
+        'INSERT INTO customer_subscriptions (' +
+        'customer_id, product_id, product_name, image_url, frequency, time_slot, ' +
+        'quantity, quantity_num, cost_per_day_paise, plan_type, duration_label, ' +
+        'total_amount_paise, delivery_address, notes, status, next_delivery' +
+        ') VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16) ' +
+        'ON CONFLICT DO NOTHING',
+        [
+          order.customer_id, item.productId, item.name, item.imageUrl || null,
+          'Daily (Every Morning)', '6:00 AM – 7:00 AM',
+          itemSize, 1, dailyRate, 'custom',
+          String(days) + ' Days Custom Plan', days * dailyRate,
+          JSON.stringify(address), JSON.stringify(notes), 'active', 'Tomorrow, 6:00 AM'
+        ]
+      );
+    }
+  }
+}
+
 async function applyPaymentStatus(client, orderId, paymentId, status, amount, currency) {
   if (!['authorized', 'captured', 'failed'].includes(status)) return false;
   const found = await client.query(
@@ -359,7 +423,7 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
   );
   if (!payment.customer_order_id) return true;
   const result = await client.query(
-    'SELECT id, order_number, items, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
+    'SELECT id, customer_id, order_number, address, items, payment_status, order_status, reservation_expires_at FROM customer_orders WHERE id = $1 FOR UPDATE',
     [payment.customer_order_id]
   );
   const order = result.rows[0];
@@ -394,6 +458,7 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
         );
         if (!changed.rowCount) throw new Error('reserved_stock_invariant_failed');
       }
+      await materializeCustomDaysPlans(client, order, paymentId);
       await client.query(
         "UPDATE customer_orders SET payment_status = 'paid', order_status = 'confirmed', updated_at = NOW() WHERE id = $1",
         [payment.customer_order_id]
@@ -3193,6 +3258,16 @@ app.post('/api/v1/orders', {
         await client.query('ROLLBACK');
         return reply.code(400).send({ error: 'invalid_item_pricing', message: error.message });
       }
+      // Recurring mandates must use Razorpay Subscriptions checkout, never
+      // ordinary one-time order payments.
+      if (line.metadata.isContinuousMonthsPlan || line.metadata.variant?.isContinuousMonthsPlan) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'recurring_plan_requires_subscription_checkout' });
+      }
+      const isCustomDaysPlan = pricing.isSubscription === true && Boolean(
+        line.metadata.isCustomDaysPlan || line.metadata.variant?.isCustomDaysPlan ||
+        line.metadata.subscriptionPlan?.days
+      );
       const unitPricePaise = pricing.unitPricePaise;
       const lineTotalPaise = unitPricePaise * quantity;
       if (!Number.isSafeInteger(lineTotalPaise) || lineTotalPaise <= 0) {
@@ -3208,7 +3283,13 @@ app.post('/api/v1/orders', {
         imageUrl: product.image_url,
         quantity,
         unitPricePaise,
-        lineTotalPaise
+        lineTotalPaise,
+        isCustomDaysPlan,
+        ...(isCustomDaysPlan ? {
+          subscriptionDays: pricing.totalDays,
+          subscriptionDailyRatePaise: pricing.dailyRatePaise,
+          subscriptionSize: pricing.effectiveSize
+        } : {})
       });
     }
     // Total amount in Razorpay includes subtotal plus delivery fee (₹50 / ₹80 based on Hafeezpet hub distance)
