@@ -916,6 +916,7 @@
     try {
       let orderConfirmed = false;
       let requiresReview = false;
+      let verifiedPaymentBreakdown = null;
       try {
         const response = await api('/api/v1/orders/' + encodeURIComponent(pending.orderNumber));
         orderConfirmed = response?.order?.payment_status === 'paid' &&
@@ -939,6 +940,7 @@
           orderConfirmed = result?.verified === true && result.status === 'captured' &&
             result.orderStatus === 'confirmed' && result.requiresManualReview !== true;
           requiresReview = result?.requiresManualReview === true || result?.orderStatus === 'payment_review';
+          if (orderConfirmed) verifiedPaymentBreakdown = result?.paymentBreakdown || null;
         } catch (verifyError) {
           if (verifyError.status === 401) { showLoginRequired(); return; }
         }
@@ -953,6 +955,7 @@
           });
           orderConfirmed = result?.state === 'confirmed';
           requiresReview = result?.state === 'payment_review';
+          if (orderConfirmed) verifiedPaymentBreakdown = result?.paymentBreakdown || null;
         } catch (reconcileError) {
           if (reconcileError.status === 401) { showLoginRequired(); return; }
           if (reconcileError.status === 409) requiresReview = true;
@@ -989,7 +992,7 @@
       if (pending.customerId) {
         try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + pending.customerId); } catch {}
       }
-      showOrderSuccess(pending.orderNumber, false);
+      showOrderSuccess(pending.orderNumber, false, verifiedPaymentBreakdown);
     } catch (error) {
       if (error.status === 401) { showLoginRequired(); return; }
       if (errEl) errEl.textContent = 'Unable to confirm the payment now. Do not pay again yet; try status check or contact support.';
@@ -1088,6 +1091,10 @@
       </div>
 
       ${paymentMethodHtml}
+
+      <p id="checkoutRazorpayFeeNotice" role="note" style="margin:12px 0; color:#475569; font-size:0.82rem; line-height:1.55;">
+        <strong>Payment charges:</strong> The amount below is the Milvanta order total. Razorpay may add a convenience fee and applicable GST depending on the method selected. Razorpay will display its exact final payable amount before you authorize payment.
+      </p>
 
       <p id="checkoutErrorMessage" style="color: #b91c1c; font-size: 0.85rem; font-weight: 600; margin: 10px 0;"></p>
 
@@ -1573,7 +1580,7 @@
         amount: serverAmount > 0 ? serverAmount : totalAmountPaise,
         currency: order.currency || 'INR',
         name: 'Milvanta',
-        description: `Order ${order.orderNumber} (Total ₹${currentTotal.toFixed(0)} incl. delivery)`,
+        description: `Order ${order.orderNumber} (Milvanta total ₹${currentTotal.toFixed(0)}; any Razorpay fee shown before authorization)`,
         ...(order.orderId ? { order_id: order.orderId } : {}),
         prefill: {
           name: state.addressDraft.name,
@@ -1611,6 +1618,7 @@
           }
 
           // SEC-03 & PAY-01: Verify signature with backend before confirming
+          let verifiedPaymentBreakdown = null;
           try {
             const verifyRes = await api('/api/v1/payments/verify', {
               method: 'POST',
@@ -1620,6 +1628,7 @@
                 verifyRes.orderStatus !== 'confirmed' || verifyRes.requiresManualReview === true) {
               throw new Error(verifyRes?.error || 'Payment capture or fulfillment needs reconciliation.');
             }
+            verifiedPaymentBreakdown = verifyRes.paymentBreakdown || null;
           } catch (verifyErr) {
             console.error('Payment verification failed:', verifyErr);
             if (errEl) {
@@ -1654,7 +1663,7 @@
             try { localStorage.removeItem(PENDING_ORDER_PAYMENT_KEY + '-' + state.customer.id); } catch {}
           }
           state.isPaymentProcessing = false;
-          showOrderSuccess(order.orderNumber, false);
+          showOrderSuccess(order.orderNumber, false, verifiedPaymentBreakdown);
         },
         modal: {
           ondismiss: () => {
@@ -1700,7 +1709,7 @@
   }
 
   // Display Order Success Screen
-  function showOrderSuccess(orderNumber, isSubscription = false) {
+  function showOrderSuccess(orderNumber, isSubscription = false, verifiedPaymentBreakdown = null) {
     const continuousItem = state.cart.find((i) => i.isContinuousMonthsPlan || i.variant?.isContinuousMonthsPlan);
     const customItem = state.cart.find((i) => i.isCustomDaysPlan || i.variant?.isCustomDaysPlan);
     const hasContinuous = isSubscription || Boolean(continuousItem);
@@ -1782,6 +1791,29 @@
       successEl.classList.remove('hidden');
       $('#successOrderNumber').textContent = orderNumber;
       $('#successAddress').textContent = `${state.addressDraft.house}, ${state.addressDraft.building}, ${state.addressDraft.street}, ${state.addressDraft.city} - ${state.addressDraft.pincode}`;
+
+      // Financial proof comes exclusively from the authenticated backend.
+      // Never infer a charged convenience fee from the cart or Razorpay's callback alone.
+      const proof = verifiedPaymentBreakdown;
+      const orderPaise = Number(proof?.orderAmountPaise);
+      const feePaise = Number(proof?.razorpayCustomerFeePaise);
+      const chargedPaise = Number(proof?.totalChargedPaise);
+      const hasVerifiedCharges = proof !== null &&
+        [orderPaise, feePaise, chargedPaise].every(Number.isSafeInteger) &&
+        orderPaise > 0 && feePaise >= 0 &&
+        chargedPaise === orderPaise + feePaise;
+      const existingReceipt = $('#successRazorpayChargeReceipt');
+      if (existingReceipt) existingReceipt.remove();
+      if (hasVerifiedCharges && feePaise > 0) {
+        const chargesReceipt = document.createElement('div');
+        chargesReceipt.id = 'successRazorpayChargeReceipt';
+        chargesReceipt.style.cssText = 'background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:14px 18px;margin:16px 0;text-align:left;color:#334155;font-size:0.87rem;line-height:1.8;';
+        const fmt = (paise) => '₹' + (paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        chargesReceipt.textContent = 'Milvanta order: ' + fmt(orderPaise) +
+          ' | Razorpay convenience fee (incl. applicable tax): ' + fmt(feePaise) +
+          ' | Total charged by Razorpay: ' + fmt(chargedPaise);
+        successEl.appendChild(chargesReceipt);
+      }
 
       if (hasAnySub) {
         let subNotice = $('#successSubscriptionNotice');
