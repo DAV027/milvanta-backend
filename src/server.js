@@ -3304,6 +3304,98 @@ app.get('/api/v1/orders/:orderNumber', { preHandler: app.authenticate }, async (
   return { order: rows[0] };
 });
 
+// Reconcile an uncertain payment solely from the customer's recorded Razorpay
+// order. All status/amount evidence comes from Razorpay under server credentials.
+app.post('/api/v1/orders/:orderNumber/reconcile-payment', {
+  preHandler: app.authenticate,
+  config: { rateLimit: { max: 5, timeWindow: '1 minute' } }
+}, async (request, reply) => {
+  if (!pool || !razorpay || !process.env.RAZORPAY_KEY_SECRET) {
+    return reply.code(503).send({ error: 'payments_not_configured' });
+  }
+  const { rows: [order] } = await pool.query(
+    'SELECT co.id, co.order_number, co.payment_status, co.order_status, po.razorpay_order_id, po.amount_paise, po.currency ' +
+    'FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id ' +
+    'WHERE co.customer_id = $1 AND co.order_number = $2',
+    [request.customer.id, request.params.orderNumber]
+  );
+  if (!order) return reply.code(404).send({ error: 'order_not_found' });
+  if (order.payment_status === 'paid') {
+    return reply.send({
+      state: order.order_status === 'confirmed' ? 'confirmed' : 'payment_review',
+      orderNumber: order.order_number,
+      orderStatus: order.order_status
+    });
+  }
+
+  let gatewayOrder, collection;
+  try {
+    [gatewayOrder, collection] = await Promise.all([
+      razorpay.orders.fetch(order.razorpay_order_id),
+      razorpay.orders.fetchPayments(order.razorpay_order_id)
+    ]);
+  } catch (error) {
+    request.log.warn({ code: error?.statusCode || 'gateway_unavailable' }, 'Razorpay reconciliation unavailable');
+    return reply.code(503).send({
+      error: 'payment_reconciliation_unavailable',
+      message: 'Unable to confirm payment right now. Please do not pay again yet.'
+    });
+  }
+
+  const amount = Number(order.amount_paise);
+  if (!Number.isSafeInteger(amount) || Number(gatewayOrder?.amount) !== amount ||
+      gatewayOrder?.currency !== order.currency || order.currency !== 'INR') {
+    request.log.error({ expectedPaise: amount, actualPaise: Number(gatewayOrder?.amount) }, 'Razorpay order mismatch during reconciliation');
+    return reply.code(409).send({ state: 'payment_review', error: 'gateway_order_mismatch' });
+  }
+  const payments = Array.isArray(collection?.items) ? collection.items : [];
+  const captured = payments.filter(p => p?.status === 'captured');
+  const validCaptured = captured.filter(p =>
+    p.order_id === order.razorpay_order_id && Number(p.amount) === amount && p.currency === 'INR'
+  );
+  if (captured.length !== validCaptured.length || validCaptured.length > 1) {
+    request.log.error({
+      capturedCount: captured.length,
+      matchedCount: validCaptured.length
+    }, 'Unexpected captured payments during reconciliation');
+    return reply.code(409).send({ state: 'payment_review', error: 'captured_payment_mismatch' });
+  }
+  if (validCaptured.length === 0) {
+    return reply.send({
+      state: 'pending', orderNumber: order.order_number,
+      message: 'Payment is not yet confirmed as captured. Do not pay again until the status is resolved.'
+    });
+  }
+
+  const payment = validCaptured[0];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const applied = await applyPaymentStatus(client, order.razorpay_order_id, payment.id, 'captured', payment.amount, payment.currency);
+    if (!applied) {
+      await client.query('ROLLBACK');
+      return reply.code(409).send({ state: 'payment_review', error: 'payment_state_conflict' });
+    }
+    const { rows: [after] } = await client.query(
+      'SELECT payment_status, order_status FROM customer_orders WHERE id = $1',
+      [order.id]
+    );
+    await client.query('COMMIT');
+    return reply.send({
+      state: after?.payment_status === 'paid' && after?.order_status === 'confirmed'
+        ? 'confirmed' : 'payment_review',
+      orderNumber: order.order_number,
+      orderStatus: after?.order_status || 'payment_review'
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    request.log.error({ code: error?.code || 'reconciliation_error' }, 'Payment reconciliation transaction failed');
+    return reply.code(503).send({ error: 'payment_reconciliation_failed' });
+  } finally {
+    client.release();
+  }
+});
+
 // Order Tracking Timeline
 app.get('/api/v1/orders/:orderNumber/track', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
@@ -4864,21 +4956,49 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
   );
   if (!paymentOrder.rowCount) return reply.code(404).send({ verified: false, error: 'payment_order_not_found' });
   const [gatewayOrder, gatewayPayment] = await Promise.all([razorpay.orders.fetch(orderId), razorpay.payments.fetch(paymentId)]);
-  if (gatewayPayment.order_id !== orderId ||
-      gatewayOrder.amount !== Number(paymentOrder.rows[0].amount_paise) ||
-      gatewayPayment.amount !== Number(paymentOrder.rows[0].amount_paise) ||
-      gatewayPayment.currency !== 'INR') {
-    return reply.code(400).send({ verified: false, error: 'payment_details_mismatch' });
+  const expectedPaise = Number(paymentOrder.rows[0].amount_paise);
+  const checks = {
+    paymentOrderId: gatewayPayment?.order_id === orderId,
+    gatewayOrderAmount: Number.isSafeInteger(Number(gatewayOrder?.amount)) && Number(gatewayOrder.amount) === expectedPaise,
+    gatewayPaymentAmount: Number.isSafeInteger(Number(gatewayPayment?.amount)) && Number(gatewayPayment.amount) === expectedPaise,
+    gatewayOrderCurrency: gatewayOrder?.currency === 'INR',
+    gatewayPaymentCurrency: gatewayPayment?.currency === 'INR'
+  };
+  if (Object.values(checks).includes(false)) {
+    request.log.error({
+      mismatchedFields: Object.entries(checks).filter(([, passed]) => !passed).map(([field]) => field),
+      expectedPaise,
+      gatewayOrderPaise: Number(gatewayOrder?.amount),
+      gatewayPaymentPaise: Number(gatewayPayment?.amount),
+      gatewayPaymentStatus: gatewayPayment?.status
+    }, 'Razorpay payment verification mismatch; manual reconciliation required');
+    return reply.code(400).send({ verified: false, error: 'payment_details_mismatch',
+      message: 'We could not reconcile this payment safely. Do not pay again. Please use Check Payment Status or contact support.' });
   }
   const client = await pool.connect();
+  let applied;
+  let newlyConfirmed = false;
+  let orderState = null;
   try {
     await client.query('BEGIN');
-    const applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    const beforeRows = await client.query(
+      'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1 FOR UPDATE OF co, po',
+      [orderId]
+    );
+    const wasPaid = beforeRows.rows[0]?.payment_status === 'paid';
+    applied = await applyPaymentStatus(client, orderId, paymentId, gatewayPayment.status, gatewayPayment.amount, gatewayPayment.currency);
+    if (applied) {
+      const afterRows = await client.query(
+        'SELECT co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+        [orderId]
+      );
+      orderState = afterRows.rows[0] || null;
+      newlyConfirmed = !wasPaid && orderState?.payment_status === 'paid' && orderState?.order_status === 'confirmed';
+    }
     await client.query('COMMIT');
     if (!applied) return reply.code(409).send({ verified: false, error: 'payment_state_not_applicable' });
 
-    // Send order confirmation emails via Resend to customer & admin
-    if (gatewayPayment.status === 'captured') {
+    if (gatewayPayment.status === 'captured' && newlyConfirmed) {
       const customerOrderId = paymentOrder.rows[0]?.customer_order_id;
       if (customerOrderId) {
         sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
@@ -4888,7 +5008,11 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
       }
     }
 
-    return { verified: true, orderId, paymentId, status: gatewayPayment.status };
+    return {
+      verified: true, orderId, paymentId, status: gatewayPayment.status,
+      orderStatus: orderState?.order_status || null,
+      requiresManualReview: orderState?.order_status === 'payment_review'
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
