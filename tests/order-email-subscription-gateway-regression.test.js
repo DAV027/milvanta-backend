@@ -78,7 +78,8 @@ test('customer confirmation renders ₹1,549 subtotal, ₹50 delivery and ₹1,5
   });
   assert.match(html,/Items Subtotal[\s\S]*?₹1,549/);
   assert.match(html,/Cold-Chain Delivery Charges[\s\S]*?₹50/);
-  assert.match(html,/Total Paid[\s\S]*?₹1,599/);
+  assert.match(html,/Milvanta Order Total[\s\S]*?₹1,599/);
+  assert.match(html,/Any separate Razorpay convenience charges shown at checkout/);
   assert.match(html,/https:\/\/milvanta.in\/assets\/milvanta-curd.jpg/);
   assert.match(html,/https:\/\/milvanta.in\/assets\/milvanta-cow-ghee.jpg/);
 });
