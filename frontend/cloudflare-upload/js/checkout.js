@@ -862,125 +862,30 @@
     `;
   }
 
-  // Activate Subscriptions from Cart into localStorage & PostgreSQL Database
+  // Payments and subscription activation are authoritative in PostgreSQL.
+  // Never manufacture an "active" plan in localStorage or reuse a one-time
+  // order payment via POST /subscriptions (the backend intentionally rejects it).
   async function activateSubscriptionsFromCart(cartItems, paymentInfo = {}) {
-    let existingSubs = [];
+    const hasSubscription = cartItems.some(item =>
+      item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan ||
+      item.isCustomDaysPlan || item.variant?.isCustomDaysPlan ||
+      item.isSubscriptionPlan || item.variant?.isSubscriptionPlan
+    );
+    if (!hasSubscription) return { synced: true };
     try {
-      existingSubs = JSON.parse(localStorage.getItem('milvanta-subscriptions') || '[]');
-      if (!Array.isArray(existingSubs)) existingSubs = [];
-    } catch {
-      existingSubs = [];
-    }
-
-    for (const item of cartItems) {
-      const isContinuous = Boolean(item.isContinuousMonthsPlan || item.variant?.isContinuousMonthsPlan);
-      const isCustom = Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan);
-      const isSub = isContinuous || isCustom || Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan);
-      if (!isSub) continue;
-
-      const planType = isContinuous ? 'month' : 'custom';
-      const subData = item.subscriptionPlan || item.variant?.subscriptionPlan || {};
-      const prod = findProductInCatalog(item);
-      const productName = item.name || subData.productName || prod.name || 'Fresh Milk';
-      const sizeStr = item.size || item.variant?.size || prod.size || '500 ml';
-      const cleanSize = sizeStr.split('(')[0].trim();
-      const isBuffalo = productName.toLowerCase().includes('buffalo');
-      const is1L = cleanSize.toLowerCase().includes('1');
-      const defaultDailyRate = isBuffalo ? (is1L ? 125 : 65) : (is1L ? 105 : 55);
-
-      const days = subData.days || item.variant?.days || item.variant?.customDays || item.customDays || (isContinuous ? (subData.monthsCount || 1) * 30 : 7);
-      const dailyRate = subData.dailyRate || item.variant?.dailyRate || defaultDailyRate;
-      const durationLabel = isContinuous
-        ? (subData.rangeLabel || `${subData.monthsCount || 1} Month Continuous`)
-        : `${days} Days Custom Plan`;
-      const image = item.image || prod.image || (isBuffalo ? 'assets/milvanta-buffalo-milk.jpg' : 'assets/milvanta-cow-milk.jpg');
-      const totalPlanAmount = Number(item.variant?.price || item.price || (days * dailyRate));
-
-      const subId = paymentInfo.subscriptionId || ('sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6));
-
-      const deliveryFee = Number(paymentInfo.deliveryFee !== undefined ? paymentInfo.deliveryFee : 50);
-      const totalAmountPaid = Number(paymentInfo.totalPaid || (totalPlanAmount + deliveryFee));
-
-      const subItem = {
-        id: subId,
-        product: `${productName} (${cleanSize})`,
-        productName: productName,
-        productId: item.id || prod.id,
-        image: image,
-        size: cleanSize,
-        planType: planType,
-        durationLabel: durationLabel,
-        days: days,
-        customDays: days,
-        dailyRate: dailyRate,
-        costPerDay: dailyRate,
-        subtotalAmount: totalPlanAmount,
-        deliveryFee: deliveryFee,
-        totalAmount: totalPlanAmount,
-        totalPaid: totalAmountPaid,
-        frequency: 'Daily (Every Morning)',
-        timeSlot: '6:00 AM - 7:00 AM',
-        quantity: cleanSize,
-        qtyNum: 1,
-        status: 'active',
-        nextDelivery: 'Tomorrow',
-        paymentId: paymentInfo.paymentId || '',
-        created_at: new Date().toISOString()
-      };
-
-      existingSubs.unshift(subItem);
-
-      // Persist directly into PostgreSQL customer_subscriptions table
-      // If it's a continuous plan, the Razorpay checkout and verify endpoint already created and activated it.
-      // Only call POST /api/v1/subscriptions for custom-days one-time plans to avoid duplicate subscriptions.
-      if (!isContinuous) {
-        try {
-          await api('/api/v1/subscriptions', {
-            method: 'POST',
-            body: JSON.stringify({
-              productId: Number(item.id) === 102 ? 2 : 1,
-              productName: subItem.product,
-              imageUrl: subItem.image,
-              frequency: subItem.frequency,
-              timeSlot: subItem.timeSlot,
-              quantity: subItem.quantity,
-              quantityNum: 1,
-              costPerDayPaise: dailyRate * 100,
-              planType: subItem.planType,
-              durationLabel: subItem.durationLabel,
-              totalAmountPaise: totalPlanAmount * 100,
-              notes: {
-                subscriptionId: subId,
-                planType: subItem.planType,
-                durationLabel: subItem.durationLabel,
-                days: days,
-                dailyRate: dailyRate,
-                subtotalPaise: totalPlanAmount * 100,
-                deliveryFeePaise: deliveryFee * 100,
-                totalPaidPaise: totalAmountPaid * 100,
-                paymentId: paymentInfo.paymentId || ''
-              },
-              status: 'active'
-            })
-          });
-        } catch (dbErr) {
-          console.warn('Backend subscription PostgreSQL sync notice:', dbErr.message);
-        }
+      const result = await api('/api/v1/subscriptions');
+      if (!result || !Array.isArray(result.subscriptions)) {
+        throw new Error('The server did not return subscription records.');
       }
+      localStorage.setItem('milvanta-subscriptions', JSON.stringify(result.subscriptions));
+      return { synced: true, subscriptions: result.subscriptions };
+    } catch (error) {
+      // Preserve the paid order record while refusing to display fake active
+      // subscriptions. A background refresh or support may still be needed.
+      try { localStorage.removeItem('milvanta-subscriptions'); } catch {}
+      console.warn('Subscription records could not be refreshed after payment:', error.message);
+      return { synced: false, message: 'Payment status is preserved; subscriptions will be shown after server synchronization.' };
     }
-
-    // Refresh authoritative subscriptions from backend if available
-    try {
-      const serverSubs = await api('/api/v1/subscriptions');
-      if (serverSubs && Array.isArray(serverSubs.subscriptions) && serverSubs.subscriptions.length > 0) {
-        localStorage.setItem('milvanta-subscriptions', JSON.stringify(serverSubs.subscriptions));
-        return;
-      }
-    } catch {}
-
-    try {
-      localStorage.setItem('milvanta-subscriptions', JSON.stringify(existingSubs));
-    } catch {}
   }
 
   // If Razorpay returned a payment reference but the backend verification
