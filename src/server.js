@@ -1539,10 +1539,16 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   } catch (err) {
     const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);
     const gatewayErrorCode = String(err?.error?.code || err?.code || 'unknown').slice(0, 80);
+    // Record only the public key *mode*, never the key itself or the secret.
+    // An HTTP 401 can mean invalid or mismatched credentials; it does not
+    // prove that subscriptions are disabled on the merchant account.
+    const keyMode = process.env.RAZORPAY_KEY_ID?.startsWith('rzp_live_')
+      ? 'live' : (process.env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') ? 'test' : 'unrecognized');
     request.log.error({
       stage: subscriptionCreationStage,
       gatewayStatus: Number.isSafeInteger(gatewayStatus) ? gatewayStatus : null,
-      gatewayErrorCode
+      gatewayErrorCode,
+      keyMode
     }, 'Razorpay subscription setup failed');
 
     // Do not reveal gateway credentials, provider response bodies or internal
@@ -1551,7 +1557,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
     if (subscriptionCreationStage !== 'database_persistence' && [401, 403].includes(gatewayStatus)) {
       return reply.code(503).send({
         error: 'razorpay_subscription_access_denied',
-        message: 'Recurring payments are unavailable on the configured Razorpay account. Please contact Milvanta support.'
+        message: 'Razorpay could not authorize subscription setup. Please contact Milvanta support to check gateway credentials and account access.'
       });
     }
     if (subscriptionCreationStage === 'database_persistence') {
