@@ -231,6 +231,29 @@ export async function sendEmailViaResend({ to, subject, html, text, from }) {
   }
 }
 
+// Only embed absolute HTTPS images in emails. Relative website paths do not
+// resolve in Gmail/Outlook message bodies.
+export function publicEmailImageUrl(value) {
+  const raw = String(value || '').trim();
+  if (/^https:\/\//i.test(raw)) return raw;
+  if (/^\/?assets\/[a-z0-9_./?=&%-]+$/i.test(raw) && !raw.includes('..')) {
+    return 'https://milvanta.in/' + raw.replace(/^\//, '');
+  }
+  return '';
+}
+
+export function validOrderReceiptFinancials(order) {
+  if (!order) return false;
+  const subtotal = Number(order.subtotal_paise);
+  const delivery = Number(order.delivery_charge_paise);
+  const total = Number(order.total_paise);
+  return order.subtotal_paise != null &&
+    order.delivery_charge_paise != null &&
+    order.total_paise != null &&
+    [subtotal, delivery, total].every(Number.isSafeInteger) &&
+    subtotal > 0 && delivery >= 0 && total === subtotal + delivery;
+}
+
 /**
  * Format currency helper
  */
@@ -250,6 +273,7 @@ export function buildCustomerOrderEmail({ order, customer, address, items, payme
   const deliveryStr = Number(order.delivery_charge_paise) > 0 ? formatInr(order.delivery_charge_paise, true) : 'FREE';
 
   const orderDate = new Date(order.created_at || Date.now()).toLocaleDateString('en-IN', {
+    timeZone: 'Asia/Kolkata',
     weekday: 'short',
     year: 'numeric',
     month: 'short',
@@ -272,7 +296,7 @@ export function buildCustomerOrderEmail({ order, customer, address, items, payme
     const qty = Number(item.quantity || 1);
     const unitPrice = formatInr(item.unitPricePaise || Math.round((item.price || 0) * 100), true);
     const lineTotal = formatInr(item.lineTotalPaise || Math.round((item.price || 0) * qty * 100), true);
-    const imgUrl = item.imageUrl || item.image || '';
+    const imgUrl = publicEmailImageUrl(item.imageUrl || item.image || '');
 
     return `
       <tr style="border-bottom: 1px solid #eef2f6;">
@@ -582,6 +606,15 @@ export function buildAdminOrderEmail({ order, customer, address, items, paymentI
  */
 export async function enqueueOrderPaidOutbox(client, { order, customer, address, items, paymentId }) {
   if (!client || !order) return [];
+  if (!validOrderReceiptFinancials(order)) {
+    // A missing SQL projection must NEVER produce a false ₹0 receipt.
+    // Do not throw inside the payment transaction; preserve the captured
+    // payment and allow separate recovery of the unsent email instead.
+    console.error('[Email Outbox] Skipped order email with absent or inconsistent receipt totals', {
+      orderId: order.id || null
+    });
+    return [];
+  }
   const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
   const customerEmail = (customer?.email || address?.email || order?.customer_email || '').trim();
 
