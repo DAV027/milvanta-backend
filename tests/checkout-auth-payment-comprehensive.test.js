@@ -988,6 +988,42 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
     });
   });
 
+  describe('Variant pricing and stock reservation', () => {
+    it('prices 500 ml and 1 litre of the SAME cow-milk product separately', async t => {
+      const gatewayId = 'order_variants_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+      t.mock.method(razorpay.orders, 'create', async params => ({
+        id: gatewayId, amount: params.amount, currency: params.currency, status: 'created'
+      }));
+      const stockBefore = (await pool.query(
+        'SELECT reserved_stock FROM products WHERE id=$1', [cowMilkProduct.id]
+      )).rows[0];
+      const response = await app.inject({
+        method: 'POST', url: '/api/v1/orders',
+        headers: { Authorization: 'Bearer ' + tokenA },
+        payload: {
+          address: validHydAddress,
+          idempotencyKey: crypto.randomUUID(),
+          items: [
+            { productId: Number(cowMilkProduct.id), quantity: 1, size: '500 ml' },
+            { productId: Number(cowMilkProduct.id), quantity: 1, size: '1 Litre' }
+          ]
+        }
+      });
+      assert.equal(response.statusCode, 201, response.body);
+      assert.equal(response.json().amount, 22000, '₹60 + ₹110 + ₹50 delivery must be ₹220');
+      const orderRow = (await pool.query(
+        'SELECT items FROM customer_orders WHERE order_number=$1',
+        [response.json().orderNumber]
+      )).rows[0];
+      assert.equal(orderRow.items.length, 2, 'Each variant must retain a separate line');
+      assert.deepEqual(orderRow.items.map(item => item.unitPricePaise).sort((a,b)=>a-b), [6000,11000]);
+      const stockAfter = (await pool.query(
+        'SELECT reserved_stock FROM products WHERE id=$1', [cowMilkProduct.id]
+      )).rows[0];
+      assert.equal(Number(stockAfter.reserved_stock), Number(stockBefore.reserved_stock) + 2);
+    });
+  });
+
   // =========================================================================
   // PHASE 7 — ORDER AND SUBSCRIPTION CONFIRMATION & PROFILE SYNC
   // =========================================================================
