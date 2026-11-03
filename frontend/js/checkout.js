@@ -98,6 +98,70 @@
     return productsCatalog.find(p => Number(p.id) === numId) || {};
   }
 
+  // Resolve a legacy cart entry to exactly one ACTIVE server product.
+  // Never use historical frontend IDs as database IDs: legacy id=1 was a brownie
+  // while production id=1 is Cow Milk. Names must independently match.
+  function canonicalCheckoutProductName(value) {
+    const raw = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const aliases = {
+      'pure farm cow milk': 'cow milk',
+      'pure farm buffalo milk': 'buffalo milk',
+      'heritage kowa cake': 'kowa cake',
+      'organic raagi millet cookies': 'raagi cookies',
+      'sprouted millet muesli': 'muesli',
+      'butter cake chocolate chips': 'butter cake with couverture chocolate chips',
+      'pure desi cow ghee': 'pure cow ghee',
+      'pure desi buffalo ghee': 'pure buffalo ghee'
+    };
+    return aliases[raw] || raw;
+  }
+
+  async function resolveCheckoutCartAgainstServer() {
+    // A fresh catalog is mandatory at payment time; render-only fallback
+    // products are not allowed to create chargeable orders.
+    const { products: liveProducts } = await api('/api/v1/products');
+    if (!Array.isArray(liveProducts) || liveProducts.length === 0) {
+      throw new Error('Live product catalog is temporarily unavailable. Please retry when connected.');
+    }
+    const requested = state.cart.map(item => {
+      const itemName = canonicalCheckoutProductName(item.name || item.product_name);
+      const liveMatches = liveProducts.filter(product =>
+        canonicalCheckoutProductName(product.name) === itemName
+      );
+      if (!itemName || liveMatches.length !== 1) {
+        throw new Error('Cart item "' + String(item.name || 'Unknown item') +
+          '" is no longer available in our live catalog. Please refresh your cart before paying.');
+      }
+      const product = liveMatches[0];
+      const qty = Number(item.quantity);
+      if (!Number.isSafeInteger(qty) || qty < 1 || qty > 25) {
+        throw new Error('Invalid cart quantity for ' + product.name + '.');
+      }
+      return {
+        productId: Number(product.id),
+        quantity: qty,
+        size: item.variant?.size || item.size || product.selling_unit || '',
+        variant: item.variant || null,
+        isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan),
+        isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan),
+        subscriptionPlan: item.subscriptionPlan || item.variant?.subscriptionPlan || null,
+        productName: product.name,
+        availableStock: Number(product.stock_quantity)
+      };
+    });
+    const grouped = new Map();
+    for (const item of requested) {
+      grouped.set(item.productId, (grouped.get(item.productId) || 0) + item.quantity);
+    }
+    for (const [id, quantity] of grouped) {
+      const item = requested.find(entry => entry.productId === id);
+      if (!Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(item.availableStock) || quantity > item.availableStock) {
+        throw new Error(item.productName + ' has insufficient live stock for this order. Please adjust your cart.');
+      }
+    }
+    return requested.map(({ productName, availableStock, ...item }) => item);
+  }
+
   // Store Policy Contents for Compliance Dialog (Same as index.html)
   const POLICIES = {
     terms: {
@@ -1523,15 +1587,8 @@
       // NORMAL PAYMENT: Custom Days Plan or Regular Products
       const orderBody = {
         address: state.addressDraft,
-        items: state.cart.map((item) => ({
-          productId: Number(item.id || item.productId),
-          quantity: Number(item.quantity || 1),
-          size: item.size || item.variant?.size || '',
-          variant: item.variant || null,
-          isSubscriptionPlan: Boolean(item.isSubscriptionPlan || item.variant?.isSubscriptionPlan),
-          isCustomDaysPlan: Boolean(item.isCustomDaysPlan || item.variant?.isCustomDaysPlan),
-          subscriptionPlan: item.subscriptionPlan || item.variant?.subscriptionPlan || null
-        }))
+        // Resolve against the authoritative live catalog before reserving stock.
+        items: await resolveCheckoutCartAgainstServer()
       };
 
       let order;
