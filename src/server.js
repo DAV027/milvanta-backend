@@ -4981,8 +4981,10 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
   let orderState = null;
   try {
     await client.query('BEGIN');
+    // Match webhook lock order: payment_orders first, customer_orders second.
+    await client.query('SELECT razorpay_order_id FROM payment_orders WHERE razorpay_order_id = $1 FOR UPDATE', [orderId]);
     const beforeRows = await client.query(
-      'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1 FOR UPDATE OF co, po',
+      'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1 FOR UPDATE OF co',
       [orderId]
     );
     const wasPaid = beforeRows.rows[0]?.payment_status === 'paid';
