@@ -20,7 +20,11 @@ import {
   enqueueOrderPaidOutbox,
   enqueueSubscriptionOutbox,
   processEmailOutbox,
-  markOutboxDelivered
+  markOutboxDelivered,
+  verifyResendWebhookSignature,
+  enqueueRecurringSubscriptionOutbox,
+  startEmailOutboxWorker,
+  stopEmailOutboxWorker
 } from './email.js';
 import {
   resolveItemPricing,
@@ -5565,10 +5569,21 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
     }
     if (seen.rowCount && subEntity?.id) {
-      const {rows: notificationSubs}=await client.query(`SELECT s.*,c.phone FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id WHERE s.razorpay_subscription_id=$1 OR s.notes->>'subscriptionId'=$1 OR s.notes->>'razorpay_subscription_id'=$1`,[subEntity.id]);
+      const {rows: notificationSubs}=await client.query(`SELECT s.*,c.phone, c.email AS customer_email, c.full_name AS customer_name FROM customer_subscriptions s JOIN customers c ON c.id=s.customer_id WHERE s.razorpay_subscription_id=$1 OR s.notes->>'subscriptionId'=$1 OR s.notes->>'razorpay_subscription_id'=$1`,[subEntity.id]);
       for(const s of notificationSubs) {
-        if(['subscription.activated','subscription.charged'].includes(eventName)) await queuePaidSubscriptionActivation(client,s.id);
-        else {
+        if(['subscription.activated','subscription.charged'].includes(eventName)) {
+          await queuePaidSubscriptionActivation(client,s.id);
+          const paymentIdForNotice = rawPaymentEntity?.id || (s.notes?.lastPaymentId) || '';
+          const cycleForNotice = subEntity?.paid_count || subEntity?.current_start || '';
+          await enqueueRecurringSubscriptionOutbox(client, {
+            subscription: s,
+            customer: { phone: s.phone, email: s.customer_email, name: s.customer_name },
+            address: s.delivery_address || {},
+            paymentId: paymentIdForNotice,
+            billingCycle: cycleForNotice,
+            eventName
+          });
+        } else {
           const templateKey=({'subscription.cancelled':'SUBSCRIPTION_CANCELLED','subscription.paused':'SUBSCRIPTION_PAUSED','subscription.resumed':'SUBSCRIPTION_RESUMED','subscription.halted':'BILLING_ISSUE','subscription.pending':'BILLING_ISSUE'})[eventName];
           if(templateKey) await queueNotification(client,{customerId:s.customer_id,phone:s.phone,templateKey,params:{productName:s.product_name,dueDate:s.notes?.paidThroughDate},idempotencyKey:templateKey==='SUBSCRIPTION_CANCELLED'?`sms_sub_cancel_${s.id}`:`gateway_${eventName}_${s.id}_${eventId}`});
         }
@@ -5580,6 +5595,11 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
     for (const { orderId, paymentId } of ordersToNotify) {
       sendOrderPaidEmails(pool, orderId, paymentId).catch((err) => {
         app.log.error({ err }, '[Resend] Failed to send order emails after webhook commit');
+      });
+    }
+    if (subEntity?.id && ['subscription.activated','subscription.charged'].includes(eventName)) {
+      processEmailOutbox(pool, { limit: 10 }).catch((err) => {
+        app.log.error({ err }, '[Resend] Failed to process subscription outbox after webhook commit');
       });
     }
 
@@ -5597,7 +5617,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
 app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { orderNumber } = request.params;
-  const paymentId = request.body?.paymentId || '';
+  // Strictly ignore untrusted paymentId from body; strictly query captured payment from database
 
   const { rows } = await pool.query(
     `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name 
@@ -5650,15 +5670,63 @@ app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.auth
     return reply.code(409).send({ error: 'payment_conflict', message: 'Unresolved payment conflict detected.' });
   }
 
-  const verifiedPaymentId = paymentId || validCaptured[0].razorpay_payment_id;
+  const verifiedPaymentId = validCaptured[0].razorpay_payment_id;
   const result = await sendOrderPaidEmails(pool, order.id, verifiedPaymentId);
   return reply.send(result);
 });
 
-// Email delivery webhook (Resend / SMTP delivery events)
+// Email delivery webhook (Resend Svix / SMTP authenticated events)
+// Fail closed when signing secret missing; rejects anonymous delivery/bounce events; deduplicates via email_webhook_events
 app.post('/api/v1/emails/webhook', async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
-  const event = request.body?.type || request.body?.event;
+
+  const headers = request.headers || {};
+  const isResend = Boolean(headers['svix-id'] || headers['Svix-Id'] || headers['SVIX-ID']);
+  const smtpToken = headers['x-smtp-webhook-token'] || headers['X-SMTP-Webhook-Token'];
+
+  let provider = null;
+  let eventId = null;
+
+  if (isResend) {
+    const resendSecret = (process.env.RESEND_WEBHOOK_SECRET || '').trim();
+    if (!resendSecret) {
+      return reply.code(503).send({
+        error: 'resend_webhook_not_configured',
+        message: 'RESEND_WEBHOOK_SECRET is not configured'
+      });
+    }
+
+    const verification = verifyResendWebhookSignature({
+      headers,
+      rawBody: request.rawBody,
+      secret: resendSecret,
+      toleranceSeconds: 300
+    });
+
+    if (!verification.valid) {
+      return reply.code(400).send({
+        error: 'invalid_webhook_signature',
+        reason: verification.reason
+      });
+    }
+    provider = 'resend';
+    eventId = verification.svixId;
+  } else if (smtpToken) {
+    const expectedToken = (process.env.SMTP_WEBHOOK_TOKEN || process.env.ADMIN_API_KEY || '').trim();
+    if (!expectedToken || smtpToken !== expectedToken) {
+      return reply.code(401).send({ error: 'invalid_smtp_webhook_token' });
+    }
+    provider = 'smtp';
+    eventId = headers['x-smtp-event-id'] || request.body?.event_id || request.body?.data?.id || ('smtp_' + Date.now() + '_' + crypto.randomUUID().slice(0, 8));
+  } else {
+    // Reject anonymous webhook requests
+    return reply.code(401).send({
+      error: 'unauthorized_email_webhook',
+      message: 'Email webhook requests require Svix signature verification or SMTP authorization token.'
+    });
+  }
+
+  const event = request.body?.type || request.body?.event || 'unknown';
   const data = request.body?.data || request.body;
   const messageId = data?.email_id || data?.id || data?.message_id;
 
@@ -5666,22 +5734,110 @@ app.post('/api/v1/emails/webhook', async (request, reply) => {
     return reply.code(400).send({ error: 'missing_message_id' });
   }
 
+  // Replay protection: record eventId in email_webhook_events
+  if (eventId) {
+    const dedup = await pool.query(
+      `INSERT INTO email_webhook_events (event_id, provider, event_type)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (event_id) DO NOTHING
+       RETURNING event_id`,
+      [eventId, provider, event]
+    );
+
+    if (dedup.rowCount === 0) {
+      // Replay detected
+      return reply.send({ received: true, duplicate: true, eventId });
+    }
+  }
+
   if (['email.delivered', 'delivered'].includes(event)) {
     const res = await markOutboxDelivered(pool, { providerMessageId: messageId, deliveredAt: new Date() });
     return reply.send({ received: true, status: 'delivered', messageId, ...res });
   }
 
-  if (['email.bounced', 'bounced'].includes(event)) {
+  if (['email.bounced', 'bounced', 'email.complained'].includes(event)) {
+    const reason = data?.bounce?.message || data?.complaint?.message || 'Bounced/Spam complaint';
     await pool.query(
       `UPDATE email_outbox 
        SET status = 'bounced', provider_status = 'bounced', last_error = $2, updated_at = NOW() 
        WHERE provider_message_id = $1`,
-      [messageId, data?.bounce?.message || 'Bounced']
+      [messageId, reason]
     );
     return reply.send({ received: true, status: 'bounced', messageId });
   }
 
-  return reply.send({ received: true, event });
+  return reply.send({ received: true, event, provider });
+});
+
+// Admin Email Outbox Inspection & Dead-Letter Visibility
+app.get('/api/v1/admin/emails/outbox', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { status, email_type, recipient_email, limit = 50, offset = 0 } = request.query || {};
+
+  let query = `
+    SELECT id, event_key, email_type, recipient_type, recipient_email,
+           source_order_id, source_subscription_id, payment_id,
+           status, provider, provider_message_id, provider_status,
+           attempts, max_attempts, last_error, locked_by, locked_at, lease_expires_at,
+           next_retry_at, sent_at, delivered_at, created_at, updated_at
+    FROM email_outbox
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (status && status !== 'all') {
+    params.push(status);
+    query += ' AND status = $' + params.length;
+  }
+  if (email_type) {
+    params.push(email_type);
+    query += ' AND email_type = $' + params.length;
+  }
+  if (recipient_email && recipient_email.trim()) {
+    params.push(`%${recipient_email.trim().toLowerCase()}%`);
+    query += ' AND LOWER(recipient_email) LIKE $' + params.length;
+  }
+
+  const safeLimit = Math.min(200, Math.max(1, Number(limit) || 50));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+
+  params.push(safeLimit);
+  const limitIdx = params.length;
+  params.push(safeOffset);
+  const offsetIdx = params.length;
+
+  query += ' ORDER BY id DESC LIMIT $' + limitIdx + ' OFFSET $' + offsetIdx;
+
+  const { rows: items } = await pool.query(query, params);
+  const { rows: [countRow] } = await pool.query(
+    `SELECT count(*)::int AS total FROM email_outbox`
+  );
+
+  return reply.send({
+    success: true,
+    total: countRow?.total || items.length,
+    count: items.length,
+    items
+  });
+});
+
+// Internal scheduled worker trigger (for Cloudflare Worker Cron / external ping)
+app.post('/api/v1/internal/email-outbox/process', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const providedSecret = request.headers['x-internal-worker-secret'];
+  const expectedSecret = (process.env.INTERNAL_WORKER_SECRET || process.env.ADMIN_API_KEY || '').trim();
+
+  if (!expectedSecret || providedSecret !== expectedSecret) {
+    return reply.code(401).send({ error: 'unauthorized', message: 'Invalid or missing worker secret' });
+  }
+
+  const limit = Math.min(100, Math.max(1, Number(request.query?.limit) || 50));
+  const result = await processEmailOutbox(pool, {
+    workerId: 'cf_cron_trigger',
+    limit
+  });
+
+  return reply.send(result);
 });
 
 // ---------- Admin Inventory & Store Products Management ----------

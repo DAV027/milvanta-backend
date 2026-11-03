@@ -1016,6 +1016,9 @@ describe('RELEASE BLOCKERS: TRANSACTIONAL EMAIL OUTBOX & PAYMENT INTEGRITY', () 
     const webhookRes = await app.inject({
       method: 'POST',
       url: '/api/v1/emails/webhook',
+      headers: {
+        'x-smtp-webhook-token': process.env.ADMIN_API_KEY
+      },
       payload: {
         type: 'email.delivered',
         data: {

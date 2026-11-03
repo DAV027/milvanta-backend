@@ -1,7 +1,92 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
 
 const RESEND_API_URL = 'https://api.resend.com/emails';
+
+/**
+ * Verify Resend webhook signature following the Svix standard.
+ * svix-id, svix-timestamp, svix-signature (v1,<base64>)
+ * Signed content: `${svix_id}.${svix_timestamp}.${rawBody}`
+ */
+export function verifyResendWebhookSignature({ headers = {}, rawBody, secret, toleranceSeconds = 300 }) {
+  if (!secret || typeof secret !== 'string' || !secret.trim()) {
+    return { valid: false, reason: 'missing_secret' };
+  }
+
+  // Normalize header names (case-insensitive lookup)
+  const headerKeys = Object.keys(headers);
+  const findHeader = (name) => {
+    const key = headerKeys.find(k => k.toLowerCase() === name.toLowerCase());
+    return key ? headers[key] : undefined;
+  };
+
+  const svixId = findHeader('svix-id');
+  const svixTimestamp = findHeader('svix-timestamp');
+  const svixSignature = findHeader('svix-signature');
+
+  if (!svixId || !svixTimestamp || !svixSignature) {
+    return { valid: false, reason: 'missing_svix_headers' };
+  }
+
+  // Validate timestamp within tolerance
+  const ts = parseInt(svixTimestamp, 10);
+  if (Number.isNaN(ts)) {
+    return { valid: false, reason: 'invalid_timestamp' };
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - ts) > toleranceSeconds) {
+    return { valid: false, reason: 'timestamp_out_of_tolerance' };
+  }
+
+  if (rawBody === undefined || rawBody === null) {
+    return { valid: false, reason: 'missing_raw_body' };
+  }
+
+  const bodyStr = Buffer.isBuffer(rawBody)
+    ? rawBody.toString('utf8')
+    : (typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody));
+
+  const toSign = `${svixId}.${svixTimestamp}.${bodyStr}`;
+
+  // Resend/Svix secrets are base64 encoded, often prefixed with 'whsec_'
+  const trimmedSecret = secret.trim();
+  let secretKey;
+  if (trimmedSecret.startsWith('whsec_')) {
+    secretKey = Buffer.from(trimmedSecret.slice(6), 'base64');
+  } else {
+    try {
+      const b64 = Buffer.from(trimmedSecret, 'base64');
+      secretKey = b64.length >= 16 ? b64 : Buffer.from(trimmedSecret, 'utf8');
+    } catch {
+      secretKey = Buffer.from(trimmedSecret, 'utf8');
+    }
+  }
+
+  const computedSig = crypto.createHmac('sha256', secretKey).update(toSign).digest('base64');
+
+  // svix-signature contains space-separated versions: e.g. "v1,signature1 v1,signature2"
+  const sigParts = svixSignature.split(' ');
+  let isValid = false;
+
+  for (const part of sigParts) {
+    const [version, sig] = part.split(',');
+    if (version === 'v1' && sig) {
+      const computedBuf = Buffer.from(computedSig);
+      const expectedBuf = Buffer.from(sig);
+      if (computedBuf.length === expectedBuf.length && crypto.timingSafeEqual(computedBuf, expectedBuf)) {
+        isValid = true;
+        break;
+      }
+    }
+  }
+
+  if (!isValid) {
+    return { valid: false, reason: 'signature_mismatch' };
+  }
+
+  return { valid: true, svixId, timestamp: ts };
+}
 
 const escapeHtml = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -638,9 +723,94 @@ export async function enqueueSubscriptionOutbox(client, { subscription, customer
 }
 
 /**
- * Process pending/failed records in email_outbox.
- * Independent recipient handling: only retries recipients that failed.
- * Distinguishes provider acceptance (provider_status = 'accepted') from delivery.
+ * Enqueue durable transactional email outbox records for recurring monthly subscription charges
+ * Using renewal-specific event keys to guarantee idempotent delivery per billing cycle.
+ */
+export async function enqueueRecurringSubscriptionOutbox(client, {
+  subscription,
+  customer,
+  address,
+  paymentId = '',
+  billingCycle = '',
+  eventName = 'subscription.charged'
+}) {
+  if (!client || !subscription) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || subscription?.customer_email || subscription?.email || '').trim();
+
+  const subId = subscription.id;
+  const cycleToken = paymentId || billingCycle || (subscription.notes?.paidThroughDate) || 'renewal';
+  const customerKey = `sub_charged:customer:${subId}:${cycleToken}`;
+  const adminKey = `sub_charged:admin:${subId}:${cycleToken}`;
+
+  const payload = {
+    subscription: {
+      id: subscription.id,
+      productName: subscription.product_name || subscription.productName || 'Pure Fresh Milk',
+      quantity: subscription.quantity,
+      frequency: subscription.frequency || 'Daily (Every Morning)',
+      timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
+      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      planType: subscription.plan_type || subscription.planType || 'monthly',
+      durationLabel: subscription.duration_label || subscription.durationLabel || 'Monthly Recurring',
+      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      image: subscription.image_url || subscription.image,
+      status: subscription.status || 'active',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      notes: subscription.notes || {}
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Subscriber',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || subscription?.phone || ''
+    },
+    address: address || (typeof subscription.delivery_address === 'object' ? subscription.delivery_address : {}),
+    paymentId: paymentId || '',
+    billingCycle: cycleToken,
+    eventName,
+    isRenewal: true
+  };
+
+  const enqueued = [];
+
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_confirmation', 'customer', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_notification', 'admin', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Process pending/failed/recoverable records in email_outbox.
+ * Supports worker concurrency leases, timeout recovery, exponential backoff and dead-letter state.
  */
 export async function processEmailOutbox(poolOrClient, options = {}) {
   if (!poolOrClient) return { success: false, error: 'NO_DATABASE_POOL' };
@@ -649,32 +819,60 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
   const shouldRelease = isPool;
 
   try {
-    const { orderId, subscriptionId, eventKey, limit = 50 } = options;
+    const {
+      orderId,
+      subscriptionId,
+      eventKey,
+      limit = 50,
+      leaseMinutes = 5,
+      workerId = `worker_${process.pid}_${crypto.randomUUID().slice(0, 8)}`
+    } = options;
 
-    let query = `
-      SELECT * FROM email_outbox 
-      WHERE status IN ('pending', 'failed')
-        AND next_retry_at <= NOW()
+    let filterClauses = `
+      ((status IN ('pending', 'failed') AND next_retry_at <= NOW())
+       OR (status = 'processing' AND lease_expires_at <= NOW()))
     `;
-    const params = [];
+    const params = [limit, workerId, leaseMinutes];
+
     if (orderId) {
       params.push(orderId);
-      query += ` AND source_order_id = $${params.length}`;
+      filterClauses += ` AND source_order_id = $${params.length}`;
     }
     if (subscriptionId) {
       params.push(subscriptionId);
-      query += ` AND source_subscription_id = $${params.length}`;
+      filterClauses += ` AND source_subscription_id = $${params.length}`;
     }
     if (eventKey) {
       params.push(eventKey);
-      query += ` AND event_key = $${params.length}`;
+      filterClauses += ` AND event_key = $${params.length}`;
     }
-    params.push(limit);
-    query += ` ORDER BY id ASC LIMIT $${params.length} FOR UPDATE SKIP LOCKED`;
 
-    const { rows: pendingItems } = await client.query(query, params);
+    // Atomic claim query with row-level locks and lease recovery
+    const claimQuery = `
+      WITH claimable AS (
+        SELECT id
+        FROM email_outbox
+        WHERE ${filterClauses}
+        ORDER BY id ASC
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE email_outbox
+      SET status = 'processing',
+          locked_by = $2,
+          locked_at = NOW(),
+          lease_expires_at = NOW() + ($3 || ' minutes')::interval,
+          attempts = attempts + 1,
+          updated_at = NOW()
+      FROM claimable
+      WHERE email_outbox.id = claimable.id
+      RETURNING email_outbox.*;
+    `;
+
+    const { rows: pendingItems } = await client.query(claimQuery, params);
 
     const results = {
+      workerId,
       processed: pendingItems.length,
       customerEmail: null,
       adminEmail: null,
@@ -684,14 +882,6 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
     const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
 
     for (const item of pendingItems) {
-      // Mark item processing and increment attempts count
-      await client.query(
-        `UPDATE email_outbox 
-         SET status = 'processing', attempts = attempts + 1, updated_at = NOW() 
-         WHERE id = $1`,
-        [item.id]
-      );
-
       const payload = item.payload || {};
       let subject = '';
       let html = '';
@@ -709,16 +899,20 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
         const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
         subject = isRefundable
           ? `🥛 Subscription E-Mandate Registered: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
-          : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`;
+          : (payload.isRenewal
+              ? `🥛 Subscription Renewal Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
+              : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`);
         html = buildCustomerSubscriptionEmail(payload);
         text = `Your Milvanta Milk Subscription is Confirmed!\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name}\nTeam Milvanta`;
       } else if (item.email_type === 'subscription_notification') {
         const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
         subject = isRefundable
           ? `🚨 ACTION REQUIRED: New Morning Milk Mandate Registered`
-          : `🚨 ACTION REQUIRED: New Morning Milk Subscription`;
+          : (payload.isRenewal
+              ? `🚨 NOTICE: Morning Milk Subscription Renewed`
+              : `🚨 ACTION REQUIRED: New Morning Milk Subscription`);
         html = buildAdminSubscriptionEmail(payload);
-        text = `ALERT: New Morning Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
+        text = `ALERT: Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
       }
 
       const toEmail = item.recipient_email?.trim();
@@ -750,6 +944,9 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
                provider_message_id = $3,
                provider_status = 'accepted',
                sent_at = NOW(),
+               locked_by = NULL,
+               locked_at = NULL,
+               lease_expires_at = NULL,
                updated_at = NOW()
            WHERE id = $1`,
           [item.id, sendResult.provider || 'resend', sendResult.id || null]
@@ -818,22 +1015,47 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
         if (item.recipient_type === 'admin') results.adminEmail = outboxSummary;
         results.items.push({ id: item.id, recipientType: item.recipient_type, ...outboxSummary });
       } else {
-        // Mark failed and set exponential backoff retry
         const errMsg = sendResult.error || 'DISPATCH_FAILED';
-        await client.query(
-          `UPDATE email_outbox 
-           SET status = 'failed',
-               last_error = $2,
-               next_retry_at = NOW() + (INTERVAL '1 minute' * POWER(2, attempts)),
-               updated_at = NOW()
-           WHERE id = $1`,
-          [item.id, errMsg]
-        );
+        const currentAttempts = item.attempts;
+        const maxAttempts = item.max_attempts || 5;
+
+        if (currentAttempts >= maxAttempts) {
+          // Transition to terminal dead_letter state
+          await client.query(
+            `UPDATE email_outbox 
+             SET status = 'dead_letter',
+                 last_error = $2,
+                 next_retry_at = NULL,
+                 locked_by = NULL,
+                 locked_at = NULL,
+                 lease_expires_at = NULL,
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [item.id, errMsg]
+          );
+        } else {
+          // Exponential backoff: min(60, 2^(attempts-1)) minutes
+          const backoffMinutes = Math.min(60, Math.pow(2, Math.max(0, currentAttempts - 1)));
+          await client.query(
+            `UPDATE email_outbox 
+             SET status = 'failed',
+                 last_error = $2,
+                 next_retry_at = NOW() + ($3 || ' minutes')::interval,
+                 locked_by = NULL,
+                 locked_at = NULL,
+                 lease_expires_at = NULL,
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [item.id, errMsg, backoffMinutes]
+          );
+        }
 
         const outboxSummary = {
           success: false,
-          status: 'failed',
+          status: currentAttempts >= maxAttempts ? 'dead_letter' : 'failed',
           providerAccepted: false,
+          attempts: currentAttempts,
+          maxAttempts,
           error: errMsg
         };
         if (item.recipient_type === 'customer') results.customerEmail = outboxSummary;
@@ -848,6 +1070,66 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       client.release();
     }
   }
+}
+
+let outboxWorkerTimer = null;
+let isWorkerExecuting = false;
+
+/**
+ * Start the background worker for processing email outbox records.
+ * Uses recursive setTimeout to guarantee runs never overlap.
+ */
+export function startEmailOutboxWorker(pool, options = {}) {
+  if (outboxWorkerTimer) {
+    return { workerId: options.workerId || 'running', status: 'already_running' };
+  }
+
+  const intervalMs = Math.max(1000, options.intervalMs || 10000);
+  const workerId = options.workerId || `worker_${process.pid}_${crypto.randomUUID().slice(0, 8)}`;
+  const limit = options.limit || 50;
+  const leaseMinutes = options.leaseMinutes || 5;
+
+  const scheduleNext = () => {
+    outboxWorkerTimer = setTimeout(async () => {
+      if (isWorkerExecuting) {
+        scheduleNext();
+        return;
+      }
+      isWorkerExecuting = true;
+      try {
+        await processEmailOutbox(pool, { workerId, limit, leaseMinutes });
+      } catch (err) {
+        console.error('[Email Outbox Worker] Error during scheduled pass:', err.message);
+      } finally {
+        isWorkerExecuting = false;
+        if (outboxWorkerTimer !== null) {
+          scheduleNext();
+        }
+      }
+    }, intervalMs);
+    if (outboxWorkerTimer?.unref) {
+      outboxWorkerTimer.unref();
+    }
+  };
+
+  scheduleNext();
+
+  return {
+    workerId,
+    intervalMs,
+    stop: () => stopEmailOutboxWorker()
+  };
+}
+
+/**
+ * Stop the background email outbox worker.
+ */
+export function stopEmailOutboxWorker() {
+  if (outboxWorkerTimer) {
+    clearTimeout(outboxWorkerTimer);
+    outboxWorkerTimer = null;
+  }
+  isWorkerExecuting = false;
 }
 
 /**
@@ -942,7 +1224,8 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
       return { success: false, error: 'PAYMENT_CONFLICT', message: 'Unresolved payment conflict detected.' };
     }
 
-    const verifiedPaymentId = paymentId || validCaptured[0].razorpay_payment_id;
+    // STRICT: Ignore any external paymentId argument; strictly use authoritative captured payment from payment_orders
+    const verifiedPaymentId = validCaptured[0].razorpay_payment_id;
 
     // Check if BOTH customer and admin emails were ALREADY sent
     if (order.confirmation_email_sent && order.customer_email_sent && order.admin_email_sent) {
