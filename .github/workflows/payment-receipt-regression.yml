@@ -6,6 +6,9 @@ on:
       - 'src/email.js'
       - 'src/server.js'
       - 'tests/order-email-subscription-gateway-regression.test.js'
+      - 'tests/checkout-auth-payment-comprehensive.test.js'
+      - 'tests/helpers/testDbGuard.js'
+      - 'migrations/**'
       - '.github/workflows/payment-receipt-regression.yml'
   workflow_dispatch:
 
@@ -30,3 +33,41 @@ jobs:
           node --check tests/order-email-subscription-gateway-regression.test.js
       - name: Test email outbox and Razorpay error handling (no credentials or database)
         run: node --test tests/order-email-subscription-gateway-regression.test.js
+
+  isolated-postgres-payment-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: milvanta_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d milvanta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/milvanta_test
+      DATABASE_SSL: 'false'
+      # Intentionally no production DATABASE_URL, payment keys, or email secrets.
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install lockfile dependencies
+        run: npm ci
+      - name: Verify database isolation before integration tests
+        run: |
+          node --input-type=module -e "import {testDbConfig,assertTestDatabaseConfigured} from './tests/helpers/testDbGuard.js'; assertTestDatabaseConfigured(); if (testDbConfig.dbName !== 'milvanta_test' || !['localhost','127.0.0.1'].includes(testDbConfig.hostname)) process.exit(1); console.log('Disposable local PostgreSQL database confirmed')"
+      - name: Run captured-payment to email-outbox regression with disposable schema
+        run: node --test tests/checkout-auth-payment-comprehensive.test.js
