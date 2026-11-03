@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
-const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8');
+const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 function emailHelpers() {
   const start = email.indexOf('export function publicEmailImageUrl(');
