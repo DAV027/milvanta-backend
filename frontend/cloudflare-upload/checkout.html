@@ -239,9 +239,17 @@
                   <span id="summaryDeliveryFee">₹50</span>
                 </div>
                 <div class="bill-breakdown-row total">
-                  <span>Total</span>
+                  <span>Milvanta order total</span>
                   <span id="summaryTotal">₹0</span>
                 </div>
+                <div class="bill-breakdown-row" id="razorpayFeeDisclosure" style="align-items:flex-start; gap:12px;">
+                  <span>Razorpay convenience fee (if applicable)</span>
+                  <span style="text-align:right; font-size:0.8rem; white-space:nowrap;">Shown in Razorpay</span>
+                </div>
+                <p id="razorpayFeeNote" style="margin:8px 0 0; color:#64748b; font-size:0.76rem; line-height:1.5;">
+                  Razorpay may add payment-processing charges and applicable GST based on the payment method.
+                  The final payable total is shown in Razorpay before you confirm payment. This fee is not included in the Milvanta order total.
+                </p>
               </div>
             </div>
           </aside>
@@ -428,6 +436,6 @@
     <!-- Backend & Payment Config Scripts -->
     <script src="js/config.js?v=20261019-1"></script>
     <script src="js/delivery.js?v=20261016-2"></script>
-    <script src="js/checkout.js?v=20261103-payment-integrity-1"></script>
+    <script src="js/checkout.js?v=20261103-payment-fee-transparency-2"></script>
   </body>
 </html>

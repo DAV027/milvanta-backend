@@ -893,6 +893,60 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       return { ...order, gatewayId };
     }
 
+    it('reconciles a ₹120 order captured as ₹122.84 only when Razorpay confirms ₹2.84 fee', async t => {
+      const order = await createPendingBuffaloOrder();
+      const paymentId = 'pay_fee_' + crypto.randomUUID().replaceAll('-', '').slice(0,14);
+      t.mock.method(razorpay.orders, 'fetch', async id => ({
+        id, amount: 12000, currency: 'INR', status: 'paid'
+      }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async id => ({
+        items: [{
+          id:paymentId, order_id:id, amount:12284, fee:284, tax:43,
+          currency:'INR', status:'captured', refund_status:null, amount_refunded:0
+        }]
+      }));
+      const res = await app.inject({
+        method:'POST', url:'/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers:{Authorization:'Bearer ' + tokenA}
+      });
+      assert.equal(res.statusCode,200,res.body);
+      assert.equal(res.json().state,'confirmed');
+      const payment = (await pool.query(
+        'SELECT amount_paise,status,razorpay_payment_id FROM payment_orders WHERE razorpay_order_id=$1',
+        [order.gatewayId]
+      )).rows[0];
+      assert.equal(payment.amount_paise, 12000, 'Merchant order remains ₹120');
+      assert.equal(payment.status, 'captured');
+      assert.equal(payment.razorpay_payment_id, paymentId);
+      const again = await app.inject({
+        method:'POST',url:'/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers:{Authorization:'Bearer ' + tokenA}
+      });
+      assert.equal(again.statusCode,200,again.body);
+      assert.equal(again.json().state,'confirmed');
+    });
+
+    it('rejects ₹122.84 captured when Razorpay does not prove fee of ₹2.84', async t => {
+      const order = await createPendingBuffaloOrder();
+      t.mock.method(razorpay.orders, 'fetch', async id => ({
+        id,amount:12000,currency:'INR',status:'paid'
+      }));
+      t.mock.method(razorpay.orders, 'fetchPayments', async id => ({
+        items:[{id:'pay_bad_fee',order_id:id,amount:12284,fee:283,tax:43,
+          currency:'INR',status:'captured'}]
+      }));
+      const res = await app.inject({
+        method:'POST', url:'/api/v1/orders/' + order.order_number + '/reconcile-payment',
+        headers:{Authorization:'Bearer ' + tokenA}
+      });
+      assert.equal(res.statusCode,409,res.body);
+      assert.equal(res.json().error,'captured_payment_mismatch');
+      const row = (await pool.query(
+        'SELECT payment_status FROM customer_orders WHERE id=$1',[order.id]
+      )).rows[0];
+      assert.equal(row.payment_status,'pending');
+    });
+
     it('recovers a captured ₹120 payment exactly once', async t => {
       const order = await createPendingBuffaloOrder();
       const paymentId = 'pay_rec_' + crypto.randomUUID().replaceAll('-', '').slice(0, 14);
