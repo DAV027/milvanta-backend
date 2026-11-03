@@ -493,7 +493,387 @@ export function buildAdminOrderEmail({ order, customer, address, items, paymentI
 }
 
 /**
- * Send order confirmation emails to both customer and admin
+ * Enqueue transactional email outbox records for a confirmed paid order
+ */
+export async function enqueueOrderPaidOutbox(client, { order, customer, address, items, paymentId }) {
+  if (!client || !order) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || order?.customer_email || '').trim();
+
+  const customerKey = `order_paid:customer:${order.id}`;
+  const adminKey = `order_paid:admin:${order.id}`;
+
+  const payload = {
+    order: {
+      id: order.id,
+      order_number: order.order_number,
+      total_paise: order.total_paise,
+      subtotal_paise: order.subtotal_paise,
+      delivery_charge_paise: order.delivery_charge_paise,
+      created_at: order.created_at
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Customer',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || ''
+    },
+    address: address || {},
+    items: Array.isArray(items) ? items : [],
+    paymentId: paymentId || ''
+  };
+
+  const enqueued = [];
+
+  // 1. Enqueue Customer Confirmation
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, payment_id, payload, status
+       ) VALUES ($1, 'order_confirmation', 'customer', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, order.id, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  // 2. Enqueue Admin Notification
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, payment_id, payload, status
+       ) VALUES ($1, 'order_notification', 'admin', $2, $3, $4, $5::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, order.id, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Enqueue transactional email outbox records for a confirmed milk subscription
+ */
+export async function enqueueSubscriptionOutbox(client, { subscription, customer, address, paymentId, sourceOrderId = null }) {
+  if (!client || !subscription) return [];
+  const adminEmail = (process.env.ADMIN_EMAIL || 'projects@milvanta.in').trim();
+  const customerEmail = (customer?.email || address?.email || subscription?.customer_email || subscription?.email || '').trim();
+
+  const subId = subscription.id;
+  const customerKey = `sub_confirmed:customer:${subId}`;
+  const adminKey = `sub_notification:admin:${subId}`;
+
+  const payload = {
+    subscription: {
+      id: subscription.id,
+      productName: subscription.product_name || subscription.productName || 'Pure Fresh Milk',
+      quantity: subscription.quantity,
+      frequency: subscription.frequency || 'Daily (Every Morning)',
+      timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
+      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      planType: subscription.plan_type || subscription.planType || 'custom',
+      durationLabel: subscription.duration_label || subscription.durationLabel || '7 Days Custom Plan',
+      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      image: subscription.image_url || subscription.image,
+      status: subscription.status || 'active',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      notes: subscription.notes || {}
+    },
+    customer: {
+      name: customer?.name || customer?.full_name || address?.name || 'Valued Customer',
+      email: customerEmail,
+      phone: customer?.phone || address?.phone || subscription?.phone || ''
+    },
+    address: address || (typeof subscription.delivery_address === 'object' ? subscription.delivery_address : {}),
+    paymentId: paymentId || ''
+  };
+
+  const enqueued = [];
+
+  // 1. Enqueue Customer Subscription Confirmation
+  if (customerEmail && customerEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_confirmation', 'customer', $2, $3, $4, $5, $6::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [customerKey, customerEmail, sourceOrderId, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  // 2. Enqueue Admin Subscription Notification
+  if (adminEmail && adminEmail.includes('@')) {
+    const { rows } = await client.query(
+      `INSERT INTO email_outbox (
+         event_key, email_type, recipient_type, recipient_email,
+         source_order_id, source_subscription_id, payment_id, payload, status
+       ) VALUES ($1, 'subscription_notification', 'admin', $2, $3, $4, $5, $6::jsonb, 'pending')
+       ON CONFLICT (event_key) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             updated_at = NOW()
+         WHERE email_outbox.status = 'failed'
+       RETURNING id, event_key, status`,
+      [adminKey, adminEmail, sourceOrderId, subId, paymentId, JSON.stringify(payload)]
+    );
+    if (rows[0]) enqueued.push(rows[0]);
+  }
+
+  return enqueued;
+}
+
+/**
+ * Process pending/failed records in email_outbox.
+ * Independent recipient handling: only retries recipients that failed.
+ * Distinguishes provider acceptance (provider_status = 'accepted') from delivery.
+ */
+export async function processEmailOutbox(poolOrClient, options = {}) {
+  if (!poolOrClient) return { success: false, error: 'NO_DATABASE_POOL' };
+  const isPool = Boolean(poolOrClient && typeof poolOrClient.connect === 'function' && typeof poolOrClient.totalCount === 'number');
+  const client = isPool ? await poolOrClient.connect() : poolOrClient;
+  const shouldRelease = isPool;
+
+  try {
+    const { orderId, subscriptionId, eventKey, limit = 50 } = options;
+
+    let query = `
+      SELECT * FROM email_outbox 
+      WHERE status IN ('pending', 'failed')
+        AND next_retry_at <= NOW()
+    `;
+    const params = [];
+    if (orderId) {
+      params.push(orderId);
+      query += ` AND source_order_id = $${params.length}`;
+    }
+    if (subscriptionId) {
+      params.push(subscriptionId);
+      query += ` AND source_subscription_id = $${params.length}`;
+    }
+    if (eventKey) {
+      params.push(eventKey);
+      query += ` AND event_key = $${params.length}`;
+    }
+    params.push(limit);
+    query += ` ORDER BY id ASC LIMIT $${params.length} FOR UPDATE SKIP LOCKED`;
+
+    const { rows: pendingItems } = await client.query(query, params);
+
+    const results = {
+      processed: pendingItems.length,
+      customerEmail: null,
+      adminEmail: null,
+      items: []
+    };
+
+    const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+
+    for (const item of pendingItems) {
+      // Mark item processing and increment attempts count
+      await client.query(
+        `UPDATE email_outbox 
+         SET status = 'processing', attempts = attempts + 1, updated_at = NOW() 
+         WHERE id = $1`,
+        [item.id]
+      );
+
+      const payload = item.payload || {};
+      let subject = '';
+      let html = '';
+      let text = '';
+
+      if (item.email_type === 'order_confirmation') {
+        subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
+        html = buildCustomerOrderEmail(payload);
+        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(payload.order?.total_paise, true)}`;
+      } else if (item.email_type === 'order_notification') {
+        subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
+        html = buildAdminOrderEmail(payload);
+        text = `ALERT: New Paid Order #${payload.order?.order_number}\nAmount: ${formatInr(payload.order?.total_paise, true)}\nCustomer: ${payload.customer?.name} (${payload.customer?.phone}, ${payload.customer?.email})`;
+      } else if (item.email_type === 'subscription_confirmation') {
+        const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
+        subject = isRefundable
+          ? `🥛 Subscription E-Mandate Registered: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
+          : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`;
+        html = buildCustomerSubscriptionEmail(payload);
+        text = `Your Milvanta Milk Subscription is Confirmed!\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name}\nTeam Milvanta`;
+      } else if (item.email_type === 'subscription_notification') {
+        const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
+        subject = isRefundable
+          ? `🚨 ACTION REQUIRED: New Morning Milk Mandate Registered`
+          : `🚨 ACTION REQUIRED: New Morning Milk Subscription`;
+        html = buildAdminSubscriptionEmail(payload);
+        text = `ALERT: New Morning Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
+      }
+
+      const toEmail = item.recipient_email?.trim();
+      let sendResult;
+
+      if (!toEmail || !toEmail.includes('@')) {
+        sendResult = { success: false, skipped: true, error: 'INVALID_RECIPIENT_EMAIL' };
+      } else {
+        try {
+          sendResult = await sendEmail({
+            to: toEmail,
+            subject,
+            html,
+            text,
+            from: sender
+          });
+        } catch (dispatchErr) {
+          sendResult = { success: false, error: dispatchErr.message };
+        }
+      }
+
+      if (sendResult.success) {
+        // Record provider acceptance (status = 'sent', provider_status = 'accepted').
+        // Note: delivered_at remains NULL until webhook confirms inbox delivery.
+        await client.query(
+          `UPDATE email_outbox 
+           SET status = 'sent',
+               provider = $2,
+               provider_message_id = $3,
+               provider_status = 'accepted',
+               sent_at = NOW(),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [item.id, sendResult.provider || 'resend', sendResult.id || null]
+        );
+
+        // Update independent recipient tracking
+        if (item.source_order_id) {
+          if (item.recipient_type === 'customer') {
+            await client.query(
+              `UPDATE customer_orders 
+               SET customer_email_sent = TRUE, customer_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          } else if (item.recipient_type === 'admin') {
+            await client.query(
+              `UPDATE customer_orders 
+               SET admin_email_sent = TRUE, admin_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          }
+
+          // Mark confirmation_email_sent ONLY when BOTH customer and admin dispatches have succeeded
+          const { rows: [ordCheck] } = await client.query(
+            `SELECT customer_email_sent, admin_email_sent FROM customer_orders WHERE id = $1`,
+            [item.source_order_id]
+          );
+          if (ordCheck && ordCheck.customer_email_sent && ordCheck.admin_email_sent) {
+            await client.query(
+              `UPDATE customer_orders 
+               SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
+               WHERE id = $1`,
+              [item.source_order_id]
+            );
+          }
+        }
+
+        if (item.source_subscription_id) {
+          if (item.recipient_type === 'customer') {
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET customer_email_sent = TRUE, customer_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_subscription_id]
+            );
+          } else if (item.recipient_type === 'admin') {
+            await client.query(
+              `UPDATE customer_subscriptions 
+               SET admin_email_sent = TRUE, admin_email_at = NOW(), updated_at = NOW() 
+               WHERE id = $1`,
+              [item.source_subscription_id]
+            );
+          }
+        }
+
+        const outboxSummary = {
+          success: true,
+          status: 'accepted',
+          providerAccepted: true,
+          id: sendResult.id,
+          provider: sendResult.provider || 'resend',
+          acceptedAt: new Date().toISOString()
+        };
+        if (item.recipient_type === 'customer') results.customerEmail = outboxSummary;
+        if (item.recipient_type === 'admin') results.adminEmail = outboxSummary;
+        results.items.push({ id: item.id, recipientType: item.recipient_type, ...outboxSummary });
+      } else {
+        // Mark failed and set exponential backoff retry
+        const errMsg = sendResult.error || 'DISPATCH_FAILED';
+        await client.query(
+          `UPDATE email_outbox 
+           SET status = 'failed',
+               last_error = $2,
+               next_retry_at = NOW() + (INTERVAL '1 minute' * POWER(2, attempts)),
+               updated_at = NOW()
+           WHERE id = $1`,
+          [item.id, errMsg]
+        );
+
+        const outboxSummary = {
+          success: false,
+          status: 'failed',
+          providerAccepted: false,
+          error: errMsg
+        };
+        if (item.recipient_type === 'customer') results.customerEmail = outboxSummary;
+        if (item.recipient_type === 'admin') results.adminEmail = outboxSummary;
+        results.items.push({ id: item.id, recipientType: item.recipient_type, ...outboxSummary });
+      }
+    }
+
+    return results;
+  } finally {
+    if (shouldRelease) {
+      client.release();
+    }
+  }
+}
+
+/**
+ * Mark an outbox email record as delivered upon receipt of webhook delivery confirmation.
+ * Strictly separates provider acceptance from actual inbox delivery.
+ */
+export async function markOutboxDelivered(poolOrClient, { providerMessageId, deliveredAt = new Date() }) {
+  if (!providerMessageId) return { success: false, error: 'NO_MESSAGE_ID' };
+  const query = `
+    UPDATE email_outbox 
+    SET status = 'delivered', provider_status = 'delivered', delivered_at = $2, updated_at = NOW() 
+    WHERE provider_message_id = $1
+    RETURNING id, event_key, recipient_email, delivered_at
+  `;
+  const { rows } = await poolOrClient.query(query, [providerMessageId, deliveredAt]);
+  return {
+    success: rows.length > 0,
+    count: rows.length,
+    delivered: rows[0] || null
+  };
+}
+
+/**
+ * Send order confirmation emails to both customer and admin.
+ * Requires authoritative PostgreSQL payment evidence and confirmed order status.
+ * Dispatches via durable transactional email_outbox.
  */
 export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
   if (!pool) {
@@ -518,16 +898,64 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
     );
 
     if (!res.rowCount) {
-      console.warn('[Resend] Order not found for email dispatch:', orderId);
-      return { success: false, error: 'ORDER_NOT_FOUND' };
+      console.warn('[Email Guard] Order not found for email dispatch:', orderId);
+      return { success: false, error: 'ORDER_NOT_FOUND', message: 'Order not found' };
     }
 
     const order = res.rows[0];
 
-    // Check if confirmation email was already sent
-    if (order.confirmation_email_sent) {
-      console.log(`[Resend] Confirmation email already sent for order #${order.order_number}. Skipping.`);
-      return { success: true, skipped: true, alreadySent: true };
+    // REQUIREMENT 1: Never send confirmation unless:
+    // 1. Order confirmed, not payment_review
+    if (order.order_status === 'payment_review') {
+      console.warn(`[Email Guard] Order #${order.order_number} is in payment_review. Paid confirmation blocked.`);
+      return { success: false, error: 'ORDER_IN_REVIEW', message: 'Order is under manual review and cannot send paid confirmation emails.' };
+    }
+
+    // 2. Payment captured and order confirmed (reject pending, authorized, failed)
+    if (order.payment_status !== 'paid' || order.order_status !== 'confirmed') {
+      console.warn(`[Email Guard] Order #${order.order_number} is not paid/confirmed (payment_status=${order.payment_status}, order_status=${order.order_status}). Dispatch blocked.`);
+      return { success: false, error: 'ORDER_NOT_PAID', message: 'Order payment is not paid or order is not confirmed.' };
+    }
+
+    // 3. Authoritative PostgreSQL payment evidence in payment_orders
+    const payRes = await client.query(
+      `SELECT razorpay_payment_id, razorpay_order_id, amount_paise, currency, status 
+       FROM payment_orders 
+       WHERE customer_order_id = $1`,
+      [order.id]
+    );
+
+    const capturedRows = payRes.rows.filter(p => p.status === 'captured');
+    const validCaptured = capturedRows.filter(p =>
+      Number(p.amount_paise) === Number(order.total_paise) &&
+      p.currency === 'INR'
+    );
+
+    if (!validCaptured.length) {
+      console.warn(`[Email Guard] No verified captured payment evidence found for order #${order.order_number}`);
+      return { success: false, error: 'UNVERIFIED_PAYMENT_EVIDENCE', message: 'No authoritative captured payment record matches this order.' };
+    }
+
+    // 4. No unresolved payment conflict
+    if (capturedRows.length > 1 && capturedRows.some(p => p.razorpay_payment_id !== validCaptured[0].razorpay_payment_id)) {
+      console.warn(`[Email Guard] Unresolved payment conflict: multiple distinct captured payments for order #${order.order_number}`);
+      return { success: false, error: 'PAYMENT_CONFLICT', message: 'Unresolved payment conflict detected.' };
+    }
+
+    const verifiedPaymentId = paymentId || validCaptured[0].razorpay_payment_id;
+
+    // Check if BOTH customer and admin emails were ALREADY sent
+    if (order.confirmation_email_sent && order.customer_email_sent && order.admin_email_sent) {
+      console.log(`[Email Outbox] Both confirmation emails already sent for order #${order.order_number}. Skipping duplicate run.`);
+      return {
+        success: true,
+        skipped: true,
+        alreadySent: true,
+        results: {
+          customerEmail: { success: true, status: 'accepted', alreadySent: true, providerAccepted: true },
+          adminEmail: { success: true, status: 'accepted', alreadySent: true, providerAccepted: true }
+        }
+      };
     }
 
     const address = typeof order.address === 'string' ? JSON.parse(order.address) : (order.address || {});
@@ -538,87 +966,59 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
       phone: address.phone || order.customer_phone
     };
 
-    const recipientCustomerEmail = customer.email?.trim();
-    const adminEmail = process.env.ADMIN_EMAIL?.trim() || 'projects@milvanta.in';
-    const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
+    const isPureSubscriptionOrder = Array.isArray(items) && items.length > 0 && items.every(item => item.isCustomDaysPlan === true);
+    const hasSubscriptionItems = Array.isArray(items) && items.some(item => item.isCustomDaysPlan === true);
 
-    const results = {
-      customerEmail: null,
-      adminEmail: null
-    };
-
-    // 1. Send Customer Email
-    if (recipientCustomerEmail && recipientCustomerEmail.includes('@')) {
-      const customerHtml = buildCustomerOrderEmail({
-        order,
-        customer,
-        address,
-        items,
-        paymentId
-      });
-
-      const customerText = `Thank you for your order, ${customer.name || 'Valued Customer'}!\n\nYour order #${order.order_number} has been paid and confirmed.\nTotal Paid: ${formatInr(order.total_paise, true)}\n\nDelivering To:\n${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nTeam Milvanta\nHafeezpet Hub, Hyderabad`;
-
-      results.customerEmail = await sendEmail({
-        to: recipientCustomerEmail,
-        subject: `Order Confirmed: #${order.order_number} - Milvanta Farm Fresh`,
-        html: customerHtml,
-        text: customerText,
-        from: sender
-      });
-    } else {
-      console.warn('[Resend] No valid customer email found for order #' + order.order_number);
-    }
-
-    // 2. Send Admin Notification Email
-    if (adminEmail && adminEmail.includes('@')) {
-      const adminHtml = buildAdminOrderEmail({
-        order,
-        customer,
-        address,
-        items,
-        paymentId
-      });
-
-      const adminText = `ALERT: New Paid Order #${order.order_number}\nAmount: ${formatInr(order.total_paise, true)}\nCustomer: ${customer.name} (${customer.phone}, ${customer.email})\nAddress: ${address.house || ''}, ${address.building || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
-
-      results.adminEmail = await sendEmail({
-        to: adminEmail,
-        subject: `🚨 New Paid Order #${order.order_number} - ${formatInr(order.total_paise, true)} (${customer.name})`,
-        html: adminHtml,
-        text: adminText,
-        from: sender
-      });
-    }
-
-    const customerSent = Boolean(results.customerEmail && results.customerEmail.success);
-    const adminSent = Boolean(results.adminEmail && results.adminEmail.success);
-    const atLeastOneSent = customerSent || adminSent;
-
-    // Mark email sent in DB ONLY if at least one attempt succeeded
-    if (atLeastOneSent) {
-      try {
-        await client.query(
-          `UPDATE customer_orders 
-           SET confirmation_email_sent = TRUE, confirmation_email_at = NOW() 
-           WHERE id = $1`,
-          [order.id]
-        );
-      } catch (dbErr) {
-        console.warn('[Resend] Could not update confirmation_email_sent column:', dbErr.message);
+    if (hasSubscriptionItems) {
+      const subRes = await client.query(
+        `SELECT * FROM customer_subscriptions WHERE (notes->>'sourceOrderId') = $1::text`,
+        [String(order.id)]
+      );
+      for (const sub of subRes.rows) {
+        await enqueueSubscriptionOutbox(client, {
+          subscription: sub,
+          customer,
+          address,
+          paymentId: verifiedPaymentId,
+          sourceOrderId: order.id
+        });
       }
-    } else {
-      console.warn('[Resend] Confirmation email dispatch failed for both customer and admin for order #' + order.order_number);
     }
+
+    if (!isPureSubscriptionOrder) {
+      await enqueueOrderPaidOutbox(client, {
+        order,
+        customer,
+        address,
+        items,
+        paymentId: verifiedPaymentId
+      });
+    }
+
+    // Process the outbox for this order
+    const outboxResult = await processEmailOutbox(client, { orderId: order.id });
+
+    // Fetch refreshed order status to see recipient states
+    const { rows: [refreshedOrder] } = await client.query(
+      `SELECT confirmation_email_sent, customer_email_sent, admin_email_sent FROM customer_orders WHERE id = $1`,
+      [order.id]
+    );
+
+    const customerSent = Boolean(refreshedOrder?.customer_email_sent);
+    const adminSent = Boolean(refreshedOrder?.admin_email_sent);
+    const bothSent = customerSent && adminSent;
 
     return {
-      success: atLeastOneSent,
-      skipped: !atLeastOneSent && Boolean(results.customerEmail?.skipped || results.adminEmail?.skipped),
-      results
+      success: bothSent,
+      customerEmailSent: customerSent,
+      adminEmailSent: adminSent,
+      results: {
+        customerEmail: outboxResult.customerEmail || (customerSent ? { success: true, status: 'accepted' } : { success: false, status: 'failed' }),
+        adminEmail: outboxResult.adminEmail || (adminSent ? { success: true, status: 'accepted' } : { success: false, status: 'failed' })
+      }
     };
-
   } catch (err) {
-    console.error('[Resend] Failed to send order emails:', err);
+    console.error('[Email Outbox] Failed to send order emails:', err);
     return { success: false, error: err.message };
   } finally {
     client.release();
@@ -1278,9 +1678,14 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
              COALESCE(notes, '{}'::jsonb),
              '{emailConfirmations}',
              COALESCE(notes->'emailConfirmations', '{}'::jsonb) || jsonb_build_object($1::text, $2::jsonb)
-           )
+           ),
+           customer_email_sent = CASE WHEN $4::text = 'accepted' THEN TRUE ELSE customer_email_sent END,
+           customer_email_at = CASE WHEN $4::text = 'accepted' THEN NOW() ELSE customer_email_at END,
+           admin_email_sent = CASE WHEN $5::text = 'accepted' THEN TRUE ELSE admin_email_sent END,
+           admin_email_at = CASE WHEN $5::text = 'accepted' THEN NOW() ELSE admin_email_at END,
+           updated_at = NOW()
            WHERE id = $3`,
-          [paymentKey, JSON.stringify(eventData), subId]
+          [paymentKey, JSON.stringify(eventData), subId, results.customerEmail?.status || '', results.adminEmail?.status || '']
         );
       } catch (dbErr) {
         console.warn('[Subscription Email] Database tracking update error:', dbErr.message);

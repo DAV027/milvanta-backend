@@ -12,7 +12,16 @@ import Razorpay from 'razorpay';
 import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
-import { sendOrderPaidEmails, sendSubscriptionConfirmationEmails, sendPasswordResetEmail, sendWelcomeEmail } from './email.js';
+import {
+  sendOrderPaidEmails,
+  sendSubscriptionConfirmationEmails,
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+  enqueueOrderPaidOutbox,
+  enqueueSubscriptionOutbox,
+  processEmailOutbox,
+  markOutboxDelivered
+} from './email.js';
 import {
   resolveItemPricing,
   isFreshMilkProduct,
@@ -451,6 +460,48 @@ async function applyPaymentStatus(client, orderId, paymentId, status, amount, cu
          VALUES ($1, $2, $3, 'confirmed', 'payment_gateway', 'Payment verified and order confirmed')`,
         [order.id, order.order_number, order.order_status]
       );
+
+      // Persist transactional email outbox records within transaction client
+      const orderAddress = typeof order.address === 'string' ? JSON.parse(order.address) : (order.address || {});
+      const orderItems = Array.isArray(order.items) ? order.items : [];
+      const { rows: [custRow] } = await client.query(
+        'SELECT email, full_name, phone FROM customers WHERE id = $1',
+        [order.customer_id]
+      );
+      const customer = {
+        name: custRow?.full_name || orderAddress.name,
+        email: custRow?.email || orderAddress.email,
+        phone: custRow?.phone || orderAddress.phone
+      };
+
+      const isPureSub = orderItems.length > 0 && orderItems.every(it => it.isCustomDaysPlan === true);
+      const hasSub = orderItems.some(it => it.isCustomDaysPlan === true);
+
+      if (hasSub) {
+        const { rows: subRows } = await client.query(
+          `SELECT * FROM customer_subscriptions WHERE (notes->>'sourceOrderId') = $1::text`,
+          [String(order.id)]
+        );
+        for (const sub of subRows) {
+          await enqueueSubscriptionOutbox(client, {
+            subscription: sub,
+            customer,
+            address: orderAddress,
+            paymentId,
+            sourceOrderId: order.id
+          });
+        }
+      }
+
+      if (!isPureSub) {
+        await enqueueOrderPaidOutbox(client, {
+          order,
+          customer,
+          address: orderAddress,
+          items: orderItems,
+          paymentId
+        });
+      }
     } else {
       await client.query(
         "UPDATE customer_orders SET payment_status = 'paid', order_status = 'payment_review', updated_at = NOW() WHERE id = $1",
@@ -5087,9 +5138,11 @@ app.post('/api/v1/payments/verify', { preHandler: app.authenticate }, async (req
     if (gatewayPayment.status === 'captured' && newlyConfirmed) {
       const customerOrderId = paymentOrder.rows[0]?.customer_order_id;
       if (customerOrderId) {
-        sendOrderPaidEmails(pool, customerOrderId, paymentId).catch((err) => {
+        try {
+          await sendOrderPaidEmails(pool, customerOrderId, paymentId);
+        } catch (err) {
           app.log.error({ err }, '[Resend] Failed to send order emails on payment verify');
-        });
+        }
         await dispatchOrderPaidNotification(pool, customerOrderId);
       }
     }
@@ -5160,6 +5213,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
   try {
     await client.query('BEGIN');
     const seen = await client.query('INSERT INTO payment_webhook_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id', [eventId]);
+    const ordersToNotify = [];
     if (seen.rowCount) {
       const eventName = request.body?.event;
       // A. Standard Order Payment Events
@@ -5169,15 +5223,23 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           : request.body.event === 'payment.failed' ? 'failed'
             : request.body.event === 'payment.authorized' ? 'authorized' : null;
         if (status) {
+          const beforeRow = await client.query(
+            'SELECT co.payment_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+            [entity.order_id]
+          );
+          const wasPaid = beforeRow.rows[0]?.payment_status === 'paid';
           await applyPaymentStatus(client, entity.order_id, entity.id, status, entity.amount, entity.currency);
           if (status === 'captured') {
-            const foundOrder = await client.query('SELECT customer_order_id FROM payment_orders WHERE razorpay_order_id = $1', [entity.order_id]);
-            const orderId = foundOrder.rows[0]?.customer_order_id;
-            if (orderId) {
-              sendOrderPaidEmails(pool, orderId, entity.id).catch((err) => {
-                app.log.error({ err }, '[Resend] Failed to send order emails on webhook capture');
-              });
-              await dispatchOrderPaidNotification(client, orderId, false);
+            const foundOrder = await client.query(
+              'SELECT co.id, co.payment_status, co.order_status FROM customer_orders co JOIN payment_orders po ON po.customer_order_id = co.id WHERE po.razorpay_order_id = $1',
+              [entity.order_id]
+            );
+            const ord = foundOrder.rows[0];
+            if (ord) {
+              if (!wasPaid && ord.payment_status === 'paid' && ord.order_status === 'confirmed') {
+                ordersToNotify.push({ orderId: ord.id, paymentId: entity.id });
+              }
+              await dispatchOrderPaidNotification(client, ord.id, false);
             }
           }
         }
@@ -5513,6 +5575,14 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
       }
     }
     await client.query('COMMIT');
+
+    // Asynchronously dispatch transactional emails strictly AFTER database transaction commit
+    for (const { orderId, paymentId } of ordersToNotify) {
+      sendOrderPaidEmails(pool, orderId, paymentId).catch((err) => {
+        app.log.error({ err }, '[Resend] Failed to send order emails after webhook commit');
+      });
+    }
+
     return { received: true, duplicate: !seen.rowCount };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -5523,17 +5593,95 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
 });
 
 // Explicit endpoint to trigger or resend order confirmation emails (authenticated)
+// Enforces authoritative PostgreSQL & Razorpay payment evidence and status guards.
 app.post('/api/v1/orders/:orderNumber/send-confirmation', { preHandler: app.authenticate }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { orderNumber } = request.params;
   const paymentId = request.body?.paymentId || '';
-  if (pool) {
-    const { rows } = await pool.query('SELECT customer_id FROM customer_orders WHERE order_number = $1', [orderNumber]);
-    if (!rows.length || (Number(rows[0].customer_id) !== Number(request.customer.id) && !request.isAdmin)) {
-      return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
-    }
+
+  const { rows } = await pool.query(
+    `SELECT co.*, c.email AS customer_email, c.full_name AS customer_name 
+     FROM customer_orders co
+     LEFT JOIN customers c ON c.id = co.customer_id
+     WHERE co.order_number = $1`,
+    [orderNumber]
+  );
+
+  if (!rows.length) {
+    return reply.code(404).send({ error: 'order_not_found', message: 'Order record does not exist.' });
   }
-  const result = await sendOrderPaidEmails(pool, orderNumber, paymentId);
+
+  const order = rows[0];
+
+  // Reject unauthorized customers
+  if (Number(order.customer_id) !== Number(request.customer.id) && !request.isAdmin) {
+    return reply.code(403).send({ error: 'forbidden', message: 'You do not have permission to trigger confirmation for this order.' });
+  }
+
+  // Reject payment_review orders
+  if (order.order_status === 'payment_review') {
+    return reply.code(409).send({ error: 'order_in_review', message: 'Order is under manual review and cannot send paid confirmation emails.' });
+  }
+
+  // Reject unconfirmed or unpaid orders (pending, authorized, failed)
+  if (order.payment_status !== 'paid' || order.order_status !== 'confirmed') {
+    return reply.code(400).send({ error: 'order_not_paid', message: 'Order payment is not paid or order is not confirmed.' });
+  }
+
+  // Verify authoritative captured payment evidence in payment_orders
+  const payRes = await pool.query(
+    `SELECT razorpay_payment_id, amount_paise, currency, status 
+     FROM payment_orders 
+     WHERE customer_order_id = $1`,
+    [order.id]
+  );
+
+  const capturedRows = payRes.rows.filter(p => p.status === 'captured');
+  const validCaptured = capturedRows.filter(p =>
+    Number(p.amount_paise) === Number(order.total_paise) &&
+    p.currency === 'INR'
+  );
+
+  if (!validCaptured.length) {
+    return reply.code(409).send({ error: 'unverified_payment_evidence', message: 'No authoritative captured payment record matches this order.' });
+  }
+
+  if (capturedRows.length > 1 && capturedRows.some(p => p.razorpay_payment_id !== validCaptured[0].razorpay_payment_id)) {
+    return reply.code(409).send({ error: 'payment_conflict', message: 'Unresolved payment conflict detected.' });
+  }
+
+  const verifiedPaymentId = paymentId || validCaptured[0].razorpay_payment_id;
+  const result = await sendOrderPaidEmails(pool, order.id, verifiedPaymentId);
   return reply.send(result);
+});
+
+// Email delivery webhook (Resend / SMTP delivery events)
+app.post('/api/v1/emails/webhook', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const event = request.body?.type || request.body?.event;
+  const data = request.body?.data || request.body;
+  const messageId = data?.email_id || data?.id || data?.message_id;
+
+  if (!messageId) {
+    return reply.code(400).send({ error: 'missing_message_id' });
+  }
+
+  if (['email.delivered', 'delivered'].includes(event)) {
+    const res = await markOutboxDelivered(pool, { providerMessageId: messageId, deliveredAt: new Date() });
+    return reply.send({ received: true, status: 'delivered', messageId, ...res });
+  }
+
+  if (['email.bounced', 'bounced'].includes(event)) {
+    await pool.query(
+      `UPDATE email_outbox 
+       SET status = 'bounced', provider_status = 'bounced', last_error = $2, updated_at = NOW() 
+       WHERE provider_message_id = $1`,
+      [messageId, data?.bounce?.message || 'Bounced']
+    );
+    return reply.send({ received: true, status: 'bounced', messageId });
+  }
+
+  return reply.send({ received: true, event });
 });
 
 // ---------- Admin Inventory & Store Products Management ----------
