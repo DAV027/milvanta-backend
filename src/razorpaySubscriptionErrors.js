@@ -8,6 +8,7 @@
 
 export const GATEWAY_REASON_STANDARDS = Object.freeze({
   subscription_endpoint_unavailable: 'subscription_feature_unavailable',
+  invoices_disabled_customer_fee_bearer: 'invoices_disabled_customer_fee_bearer',
   plan_reference_rejected: 'invalid_plan_reference',
   invalid_subscription_start: 'invalid_start_timestamp',
   invalid_billing_cycle_count: 'invalid_total_count',
@@ -52,6 +53,14 @@ export function classifySubscriptionGatewayError(err) {
     // Normalize both underscores and whitespace
     const value = candidate.toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
     if (!value) continue;
+
+    // Documented invoice creation error also returned by subscription setup:
+    // Customer Fee Bearer model disables Razorpay invoice creation. Keep the
+    // reason as a safe fixed identifier; never log provider descriptions.
+    if (value.includes('invoices disabled because fee bearer is customer') ||
+        (value.includes('invoices disabled') && value.includes('fee bearer is customer'))) {
+      return 'invoices_disabled_customer_fee_bearer';
+    }
 
     if (value.includes('requested url was not found on the server') ||
         value.includes('subscriptions are not enabled') ||
