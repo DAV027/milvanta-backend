@@ -1,176 +1,49 @@
-# MILVANTA — SUBSCRIPTION FIX REPORT: ARCHITECTURE, PAYLOAD SANITIZATION & PLAN REUSE
+# MILVANTA — Subscription payload and plan registry hardening
 
-**Date:** November 4, 2026  
-**Target Repository:** `DAV027/milvanta-backend`  
-**Branch:** `fix/razorpay-subscription-create-root-cause-400`  
-**Author:** Principal Full-Stack & Payment Security Architect  
-**Status:** Implemented, Tested & Verified (661/661 Passing Tests)  
+**Date:** November 4, 2026
+**Branch:** `fix/razorpay-subscription-create-root-cause-400`
+**Status:** Implemented on a draft PR. **Actual Razorpay Test Mode subscription creation not yet verified.**
 
----
+## Scope
 
-## 1. Overview of Fixes Implemented
+- Changed `customer_notify` from integer `1` to boolean `true`.
+- Omitted optional blank `notes.customerPhone` / `notes.startDate`; included `start_at` only when a future Unix timestamp is available.
+- Expanded sanitized Razorpay HTTP 400 classification without returning raw gateway descriptions or payment credentials to the browser.
+- Added an additive `subscription_plan_registry` migration and a canonical, indexed plan lookup.
+- Implemented PostgreSQL transaction-scoped advisory locking in `getOrCreateRazorpayPlan`. The deterministic lock key includes `keyMode`, product, size, amount and daily rate, and is held across the lookup, remote plan creation/fetch and local DB write.
+- Added a partial unique index for one active local plan row per canonical configuration.
+- Fail closed on registry read/write errors, ambiguous gateway fetch failures, or unknown payment mode. Do not create a replacement plan when a fetch times out or returns 401/5xx.
 
-To resolve the Razorpay Subscriptions HTTP 400 error and prevent orphan plan accumulation, the following architecture was implemented:
+## Plan resolution and lifecycle
 
-1. **Database Migration (`migrations/020_subscription_plan_registry.sql`)**:
-   - Introduced a dedicated `subscription_plan_registry` table to track verified Razorpay plans by `product_id`, `size`, `amount_per_month_paise`, and `key_mode`.
-2. **Authoritative Plan Resolution (`getOrCreateRazorpayPlan`)**:
-   - Added a plan resolution service in `src/server.js` that inspects the plan registry, verifies plan parameters against Razorpay (`razorpay.plans.fetch`), and reuses existing active plans before falling back to `razorpay.plans.create`.
-3. **Strict Payload Sanitization in Subscription Creation**:
-   - Corrected `customer_notify: true` to a strict boolean.
-   - Completely omitted empty/blank string properties (`startDate`, `customerPhone`) from the `notes` object.
-   - Guarded `start_at` to ensure it is only sent when positive, safe integer, and in the future.
-4. **Enhanced Error Classifier & Normalization**:
-   - Updated `src/razorpaySubscriptionErrors.js` to inspect `err.error.field` directly and normalize underscores in error descriptions.
+1. Validate product, authorized size, trusted price and whether the gateway is Test or Live.
+2. Take a dedicated PostgreSQL connection, begin a transaction and acquire a transaction advisory lock for the canonical plan tuple.
+3. Select a matching active registry plan; if none, check historical subscription records as candidates.
+4. A candidate is reusable **only** if it can be fetched with the current Razorpay credentials and its period, interval, currency and amount match.
+5. On a definitively missing plan (HTTP 404) or known attribute mismatch, deactivate its registry row for the current mode and create a replacement.
+6. Persist the newly created plan **before** committing, then release lock and connection. A failed DB write aborts the checkout, instead of reporting success with an untracked plan.
+7. **No actual Razorpay POST was used to verify this flow.** The gateway behavior in automated tests is mocked.
 
----
+### Residual concurrency / reconciliation limitations
 
-## 2. Detailed Technical Implementation
+The advisory lock prevents two cooperating instances from creating *the same plan* simultaneously, assuming PostgreSQL is available. It does not provide atomicity between Razorpay and PostgreSQL, nor prevent two concurrent checkouts by the same customer from independently creating *subscriptions* after the plan lock is released. The existing 15-minute pending-authorization lookup happens before gateway subscription creation, so customer-level concurrent subscription attempts still need an independent idempotency design.
 
-### 2.1 Database Plan Registry Schema
+Plan creation followed by a crash, timeout, or database failure can still leave a gateway plan to reconcile. Existing unlinked Razorpay plans created before this registry was introduced are **not automatically imported** without a verified lookup.
 
-`migrations/020_subscription_plan_registry.sql`:
+## Payment and billing semantics
 
-```sql
-CREATE TABLE IF NOT EXISTS subscription_plan_registry (
-  id SERIAL PRIMARY KEY,
-  product_id BIGINT REFERENCES products(id),
-  product_name TEXT NOT NULL,
-  size TEXT NOT NULL,
-  amount_per_month_paise BIGINT NOT NULL,
-  daily_rate_paise BIGINT NOT NULL,
-  currency TEXT NOT NULL DEFAULT 'INR',
-  period TEXT NOT NULL DEFAULT 'monthly',
-  interval INTEGER NOT NULL DEFAULT 1,
-  razorpay_plan_id TEXT NOT NULL UNIQUE,
-  key_mode TEXT NOT NULL DEFAULT 'test',
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+The current checkout uses `total_count: months`: a one-month plan has a single billing cycle; a two-month plan has two. It is a **fixed-term subscription**, not an endless monthly auto-renewal. Any switch to indefinite renewal requires explicit customer consent and an additional billing/entitlement design review.
 
-CREATE INDEX IF NOT EXISTS idx_sub_plan_registry_lookup 
-ON subscription_plan_registry(product_id, size, amount_per_month_paise, key_mode) 
-WHERE is_active = TRUE;
-```
+**Payment environment:** A `rzp_test_` configuration supports Test Mode validation only. Test Mode subscriptions and local `active` statuses are not proof of collected real funds. No real delivery should rely on Test Mode payment authorization.
 
-### 2.2 Plan Resolution Flow (`getOrCreateRazorpayPlan`)
+## Verification
 
-The resolution algorithm follows a resilient four-stage lookup:
+Isolated PostgreSQL CI validates the plan lookup, concurrency lock, failure paths, customer-facing sanitized responses and existing order-payment regressions. Record the actual latest GitHub CI count in `TEST_RESULTS.md` after the run completes.
 
-```
-[1. Check subscription_plan_registry]
-           |
-           v (If found)
-[2. Gateway Verification: razorpay.plans.fetch(planId)]
-   ├── Match verified: REUSE PLAN (reused = true)
-   └── Mismatch or 404: Deactivate in DB (is_active = FALSE)
-           |
-           v (If not found or invalid)
-[3. Check customer_subscriptions historical records]
-           |
-           v (If found)
-[4. Verify with Gateway & Register in subscription_plan_registry]
-           |
-           v (If still no valid candidate)
-[5. Create New Plan: razorpay.plans.create()]
-           |
-           v
-[6. Persist into subscription_plan_registry (is_active = TRUE)]
-```
+### Release checklist
 
-### 2.3 Subscription Creation Payload Sanitization
-
-In `src/server.js`:
-
-```javascript
-// Clean and validate notes: omit empty string values to prevent gateway rejection
-const safeNotes = {
-  customerId: String(request.customer.id),
-  productId: String(product.id),
-  productName: String(product.name),
-  size: normalizedSize,
-  months: String(months),
-  days: String(totalDays),
-  startOffset: String(offset),
-  dailyRate: String(dailyRatePaise / 100),
-  totalAmountPaise: String(calculatedTotalAmountPaise)
-};
-if (request.customer.phone && String(request.customer.phone).trim()) {
-  safeNotes.customerPhone = String(request.customer.phone).trim();
-}
-if (offset > 0 && futureStartDateYMD) {
-  safeNotes.startDate = futureStartDateYMD;
-}
-
-const subParams = {
-  plan_id: plan.id,
-  total_count: months,
-  quantity: 1,
-  customer_notify: true, // Strict boolean
-  notes: safeNotes
-};
-if (startAtTimestamp && Number.isSafeInteger(startAtTimestamp) && startAtTimestamp > Math.floor(Date.now() / 1000)) {
-  subParams.start_at = startAtTimestamp;
-}
-
-subscriptionCreationStage = 'subscription_create';
-const rzpSub = await razorpay.subscriptions.create(subParams);
-```
-
-### 2.4 Error Classifier Hardening
-
-In `src/razorpaySubscriptionErrors.js`:
-
-```javascript
-// Direct authoritative inspection of error field when available
-const field = String(
-  err?.error?.field || err?.response?.data?.error?.field || err?.field || ''
-).toLowerCase().trim();
-
-if (field === 'customer_notify') return 'invalid_customer_notify';
-if (field === 'total_count') return 'invalid_billing_cycle_count';
-if (field === 'plan_id') return 'plan_reference_rejected';
-if (field === 'start_at') return 'invalid_subscription_start';
-if (field === 'quantity') return 'invalid_quantity';
-if (field === 'notes' || field.startsWith('notes.') || field.startsWith('notes_')) {
-  return 'invalid_subscription_payload';
-}
-
-// Normalized inspection: converts underscores to spaces
-const value = candidate.toLowerCase().replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
-```
-
----
-
-## 3. Billing Design Review: `total_count: months` vs Indefinite Renewals
-
-In the Razorpay Subscriptions architecture, `total_count` governs the lifecycle duration of a subscription. A comparative analysis between Milvanta's current model and continuous auto-renewal is outlined below:
-
-### 3.1 Model A: Current Term-Based Contract (`total_count: months`)
-- **How it works:** When a customer selects a 1-Month continuous plan, `total_count: 1` is sent. Razorpay charges the customer upfront for 1 billing cycle. At the end of the billing cycle (30/31 days), the subscription transitions to `completed`.
-- **Advantages:**
-  1. Matches customer expectation: Customer selects a 1-month or 2-month pack with no surprise unannounced charges in month 2 or 3.
-  2. Aligns with Milvanta's daily delivery scheduling engine which generates deliveries strictly up to the selected duration (`derivedPaidThroughDate`).
-  3. Complies with Indian recurring payment regulations (RBI e-mandate guidelines) without requiring complex auto-debit customer mandates for 1-month customers.
-- **Limitation:** At the end of the term, the customer must initiate a renewal checkout to continue deliveries.
-
-### 3.2 Model B: Indefinite Auto-Renewing Model (`total_count: 120` or omitted)
-- **How it works:** `total_count` is set to an arbitrary high number (e.g. 120 cycles for 10 years). Razorpay issues recurring auto-debit charges against the customer's card/UPI mandate every month until explicitly paused or cancelled by the customer or admin via `razorpay.subscriptions.cancel()`.
-- **Advantages:**
-  1. Higher customer retention and seamless recurring milk delivery without monthly re-checkout.
-- **Requirements/Disadvantages:**
-  1. Requires full RBI recurring mandate registration and pre-debit notifications via SMS/email 24 hours prior to each debit.
-  2. If the customer does not intend to auto-renew, chargeback and refund disputes increase.
-
-### Recommendation
-For the current production release, **Model A (`total_count: months`) remains the safest and correct implementation**, preserving customer intent and existing fulfillment delivery scheduling. When indefinite recurring delivery is introduced as a business feature, it should be offered as an explicit customer checkbox ("Auto-renew monthly") rather than a forced default.
-
----
-
-## 4. Verification and Regression Summary
-
-- **New Test Suite:** `tests/razorpay-subscription-plan-reuse-and-payload.test.js` (14/14 tests pass).
-- **Diagnostics Tests:** `tests/razorpay-subscription-400-diagnostics.test.js` (7/7 pass).
-- **Existing Plan Diagnostic:** `tests/razorpay-existing-test-plan-diagnostic.test.js` (8/8 pass).
-- **Entire Repository Test Suite:** `npm test` — **661/661 tests passing** (0 failed, 0 skipped).
+- [ ] GitHub CI all jobs passing on the current PR head.
+- [ ] Root-cause report explicitly marks integer notify/blank notes as hypotheses rather than observed gateway rejection details.
+- [ ] One separately approved controlled Test Mode `POST /v1/subscriptions` with an existing verified plan succeeds; no payment authorization during the initial diagnostic.
+- [ ] Review customer-level subscription idempotency and prevent fulfillment based on Test Mode mandates.
+- [ ] Explicit approval before merge: Render auto-deploys `main`.
