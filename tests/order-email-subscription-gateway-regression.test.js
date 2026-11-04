@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { classifySubscriptionGatewayError } from '../src/razorpaySubscriptionErrors.js';
 
 const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -157,6 +158,7 @@ test('gateway error handler classifies auth, persistence and upstream failures w
   const cases = [
     {stage:'plan_create', err:{statusCode:401,error:'Unauthorized',message:'a secret to hide'}, status:503, code:'razorpay_subscription_access_denied'},
     {stage:'subscription_create',err:{statusCode:403,error:{code:'FORBIDDEN'}},status:503,code:'razorpay_subscription_access_denied'},
+    {stage:'subscription_create',err:{statusCode:400,error:{code:'BAD_REQUEST_ERROR',description:'The requested URL was not found on the server.'}},status:503,code:'razorpay_subscription_setup_rejected'},
     {stage:'database_persistence',err:{code:'23505',message:'private database error'},status:503,code:'subscription_requires_reconciliation'},
     {stage:'plan_create',err:{statusCode:500,message:'private upstream error'},status:502,code:'subscription_creation_failed'}
   ];
@@ -165,6 +167,8 @@ test('gateway error handler classifies auth, persistence and upstream failures w
     const context = vm.createContext({
       err:entry.err,
       subscriptionCreationStage:entry.stage,
+      razorpayPlanCreated: entry.stage === 'subscription_create',
+      classifySubscriptionGatewayError,
       process:{env:{RAZORPAY_KEY_ID:'rzp_test_not_a_real_credential'}},
       request:{log:{error:(value)=>logs.push(value)}},
       reply:{code:(status)=>({send:(body)=>({status,body})})}
@@ -176,5 +180,7 @@ test('gateway error handler classifies auth, persistence and upstream failures w
     assert.ok(!JSON.stringify(result.body).includes('secret'));
     assert.equal(logs[0].keyMode,'test');
     assert.equal(logs[0].stage,entry.stage);
+    assert.ok(['unclassified','subscription_endpoint_unavailable'].includes(logs[0].gatewayReason));
+    assert.equal(logs[0].planCreated,entry.stage === 'subscription_create');
   }
 });
