@@ -1347,6 +1347,119 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
   return reply.code(201).send({ subscription: createdSub });
 });
 
+/**
+ * Resolves an existing verified Razorpay recurring plan or creates a new one.
+ * Prevents orphan plan accumulation by inspecting the registry and customer history
+ * before calling razorpay.plans.create.
+ */
+export async function getOrCreateRazorpayPlan({
+  razorpayClient,
+  dbPool,
+  product,
+  normalizedSize,
+  amountPerMonthPaise,
+  dailyRatePaise,
+  keyMode = 'test'
+}) {
+  const planName = `Milvanta ${product.name} (${normalizedSize})`;
+  let candidatePlanId = null;
+
+  // 1. Check verified plan registry in database
+  if (dbPool) {
+    try {
+      const regRes = await dbPool.query(
+        `SELECT razorpay_plan_id FROM subscription_plan_registry
+         WHERE product_id = $1 AND size = $2 AND amount_per_month_paise = $3 AND key_mode = $4 AND is_active = TRUE
+         ORDER BY id DESC LIMIT 1`,
+        [product.id, normalizedSize, amountPerMonthPaise, keyMode]
+      );
+      if (regRes.rows[0]?.razorpay_plan_id) {
+        candidatePlanId = regRes.rows[0].razorpay_plan_id;
+      }
+    } catch {}
+
+    // 2. Check previous customer_subscriptions if not found in registry
+    if (!candidatePlanId) {
+      try {
+        const subRes = await dbPool.query(
+          `SELECT razorpay_plan_id FROM customer_subscriptions
+           WHERE product_id = $1 AND quantity = $2 AND razorpay_plan_id IS NOT NULL
+             AND (notes->>'amountPerMonthPaise')::bigint = $3
+           ORDER BY id DESC LIMIT 1`,
+          [product.id, normalizedSize, amountPerMonthPaise]
+        );
+        if (subRes.rows[0]?.razorpay_plan_id) {
+          candidatePlanId = subRes.rows[0].razorpay_plan_id;
+        }
+      } catch {}
+    }
+  }
+
+  // 3. If candidate plan found, verify its attributes with gateway
+  if (candidatePlanId && razorpayClient?.plans?.fetch) {
+    try {
+      const existing = await razorpayClient.plans.fetch(candidatePlanId);
+      const isMatch = existing?.id === candidatePlanId &&
+        existing?.period === 'monthly' &&
+        Number(existing?.interval) === 1 &&
+        existing?.item?.currency === 'INR' &&
+        Number(existing?.item?.amount) === Number(amountPerMonthPaise);
+
+      if (isMatch) {
+        if (dbPool) {
+          try {
+            await dbPool.query(
+              `INSERT INTO subscription_plan_registry (
+                product_id, product_name, size, amount_per_month_paise, daily_rate_paise,
+                currency, period, interval, razorpay_plan_id, key_mode
+              ) VALUES ($1, $2, $3, $4, $5, 'INR', 'monthly', 1, $6, $7)
+              ON CONFLICT (razorpay_plan_id) DO UPDATE SET is_active = TRUE, updated_at = NOW()`,
+              [product.id, product.name, normalizedSize, amountPerMonthPaise, dailyRatePaise, candidatePlanId, keyMode]
+            );
+          } catch {}
+        }
+        return { plan: existing, reused: true };
+      }
+    } catch {
+      if (dbPool) {
+        try {
+          await dbPool.query(
+            `UPDATE subscription_plan_registry SET is_active = FALSE, updated_at = NOW() WHERE razorpay_plan_id = $1`,
+            [candidatePlanId]
+          );
+        } catch {}
+      }
+    }
+  }
+
+  // 4. Create new plan in Razorpay
+  const createdPlan = await razorpayClient.plans.create({
+    period: 'monthly',
+    interval: 1,
+    item: {
+      name: planName,
+      amount: amountPerMonthPaise,
+      currency: 'INR',
+      description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
+    }
+  });
+
+  if (dbPool && createdPlan?.id) {
+    try {
+      await dbPool.query(
+        `INSERT INTO subscription_plan_registry (
+          product_id, product_name, size, amount_per_month_paise, daily_rate_paise,
+          currency, period, interval, razorpay_plan_id, key_mode
+        ) VALUES ($1, $2, $3, $4, $5, 'INR', 'monthly', 1, $6, $7)
+        ON CONFLICT (razorpay_plan_id) DO NOTHING`,
+        [product.id, product.name, normalizedSize, amountPerMonthPaise, dailyRatePaise, createdPlan.id, keyMode]
+      );
+    } catch {}
+  }
+
+  return { plan: createdPlan, reused: false };
+}
+
 app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authenticate }, async (request, reply) => {
   if (!razorpay || !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
     return reply.code(503).send({ error: 'razorpay_not_configured' });
@@ -1447,42 +1560,50 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   let subscriptionCreationStage = 'plan_create';
   let razorpayPlanCreated = false;
   try {
-    // 5. Create plan in Razorpay with server-calculated monthly amount
-    const planName = `Milvanta ${product.name} (${normalizedSize})`;
-    const plan = await razorpay.plans.create({
-      period: 'monthly',
-      interval: 1,
-      item: {
-        name: planName,
-        amount: amountPerMonthPaise,
-        currency: 'INR',
-        description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
-      }
-    });
+    const keyMode = process.env.RAZORPAY_KEY_ID?.startsWith('rzp_live_')
+      ? 'live' : (process.env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') ? 'test' : 'unrecognized');
 
+    // 5. Inspect and reuse existing verified Razorpay plan or create new one
+    const planResult = await getOrCreateRazorpayPlan({
+      razorpayClient: razorpay,
+      dbPool: pool,
+      product,
+      normalizedSize,
+      amountPerMonthPaise,
+      dailyRatePaise,
+      keyMode
+    });
+    const plan = planResult.plan;
     razorpayPlanCreated = true;
 
     // 6. Create subscription in Razorpay linked to customer with start_at configured
+    // Clean and validate notes: omit empty string values to prevent gateway rejection
+    const safeNotes = {
+      customerId: String(request.customer.id),
+      productId: String(product.id),
+      productName: String(product.name),
+      size: normalizedSize,
+      months: String(months),
+      days: String(totalDays),
+      startOffset: String(offset),
+      dailyRate: String(dailyRatePaise / 100),
+      totalAmountPaise: String(calculatedTotalAmountPaise)
+    };
+    if (request.customer.phone && String(request.customer.phone).trim()) {
+      safeNotes.customerPhone = String(request.customer.phone).trim();
+    }
+    if (offset > 0 && futureStartDateYMD) {
+      safeNotes.startDate = futureStartDateYMD;
+    }
+
     const subParams = {
       plan_id: plan.id,
       total_count: months,
       quantity: 1,
-      customer_notify: 1,
-      notes: {
-        customerId: String(request.customer.id),
-        customerPhone: String(request.customer.phone || ''),
-        productId: String(product.id),
-        productName: String(product.name),
-        size: normalizedSize,
-        months: String(months),
-        days: String(totalDays),
-        startOffset: String(offset),
-        startDate: offset > 0 ? futureStartDateYMD : '',
-        dailyRate: String(dailyRatePaise / 100),
-        totalAmountPaise: String(calculatedTotalAmountPaise)
-      }
+      customer_notify: true,
+      notes: safeNotes
     };
-    if (startAtTimestamp) {
+    if (startAtTimestamp && Number.isSafeInteger(startAtTimestamp) && startAtTimestamp > Math.floor(Date.now() / 1000)) {
       subParams.start_at = startAtTimestamp;
     }
 
