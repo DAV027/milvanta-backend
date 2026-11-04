@@ -10,6 +10,7 @@ import nodemailer from 'nodemailer';
 import pg from 'pg';
 import Razorpay from 'razorpay';
 import { verifyRazorpayOrderAmount } from './paymentAmount.js';
+import { classifySubscriptionGatewayError } from './razorpaySubscriptionErrors.js';
 import { runMigrations, assertStagingDatabaseIsolation } from './migrate.js';
 import { seedProducts } from './seed.js';
 import { getDeliveryInfo, isHyderabadPincode } from './delivery.js';
@@ -1444,6 +1445,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   }
 
   let subscriptionCreationStage = 'plan_create';
+  let razorpayPlanCreated = false;
   try {
     // 5. Create plan in Razorpay with server-calculated monthly amount
     const planName = `Milvanta ${product.name} (${normalizedSize})`;
@@ -1457,6 +1459,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
       }
     });
+
+    razorpayPlanCreated = true;
 
     // 6. Create subscription in Razorpay linked to customer with start_at configured
     const subParams = {
@@ -1539,6 +1543,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   } catch (err) {
     const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);
     const gatewayErrorCode = String(err?.error?.code || err?.code || 'unknown').slice(0, 80);
+    const gatewayReason = classifySubscriptionGatewayError(err);
     // Record only the public key *mode*, never the key itself or the secret.
     // An HTTP 401 can mean invalid or mismatched credentials; it does not
     // prove that subscriptions are disabled on the merchant account.
@@ -1548,6 +1553,8 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       stage: subscriptionCreationStage,
       gatewayStatus: Number.isSafeInteger(gatewayStatus) ? gatewayStatus : null,
       gatewayErrorCode,
+      gatewayReason,
+      planCreated: razorpayPlanCreated,
       keyMode
     }, 'Razorpay subscription setup failed');
 
@@ -1558,6 +1565,14 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       return reply.code(503).send({
         error: 'razorpay_subscription_access_denied',
         message: 'Razorpay could not authorize subscription setup. Please contact Milvanta support to check gateway credentials and account access.'
+      });
+    }
+    if (subscriptionCreationStage === 'subscription_create' && gatewayStatus === 400) {
+      // Creating the plan succeeded. Repeating this checkout may create another
+      // unused Razorpay plan, so prevent an automatic retry loop.
+      return reply.code(503).send({
+        error: 'razorpay_subscription_setup_rejected',
+        message: 'Razorpay rejected subscription setup. Please contact Milvanta support rather than retrying repeatedly.'
       });
     }
     if (subscriptionCreationStage === 'database_persistence') {
