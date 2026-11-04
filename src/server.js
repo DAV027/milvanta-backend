@@ -1347,6 +1347,152 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
   return reply.code(201).send({ subscription: createdSub });
 });
 
+/**
+ * Serialize Razorpay plan resolution by product / pack / price / account mode.
+ *
+ * A transaction-scoped PostgreSQL advisory lock is shared across all Render
+ * instances. We hold it through gateway create and registry persistence so
+ * concurrent requests cannot create duplicate plans for the same tuple.
+ *
+ * Never continue to create another gateway plan if database verification or
+ * registry persistence fails. A gateway plan can still be orphaned if the
+ * process crashes between external creation and DB commit; reconciliation
+ * remains necessary because Razorpay/PG are not one atomic transaction.
+ */
+export async function getOrCreateRazorpayPlan({
+  razorpayClient,
+  dbPool,
+  product,
+  normalizedSize,
+  amountPerMonthPaise,
+  dailyRatePaise,
+  keyMode = 'test'
+}) {
+  if (!dbPool?.connect) {
+    throw new Error('subscription_plan_registry_unavailable');
+  }
+  if (!['test', 'live'].includes(keyMode)) {
+    throw new Error('unrecognized_razorpay_key_mode');
+  }
+  if (!Number.isSafeInteger(Number(amountPerMonthPaise)) || Number(amountPerMonthPaise) <= 0) {
+    throw new Error('invalid_subscription_plan_amount');
+  }
+
+  const client = await dbPool.connect();
+  let transactionOpen = false;
+  try {
+    await client.query('BEGIN');
+    transactionOpen = true;
+    await client.query("SET LOCAL lock_timeout = '20s'");
+    // The lock key is deterministic and includes the payment environment.
+    // hashtextextended returns a bigint for pg_advisory_xact_lock.
+    const lockKey = JSON.stringify([
+      'milvanta-razorpay-plan-v1', keyMode, product.id, normalizedSize,
+      Number(amountPerMonthPaise), Number(dailyRatePaise)
+    ]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))', [lockKey]);
+
+    const regRes = await client.query(
+      `SELECT razorpay_plan_id FROM subscription_plan_registry
+       WHERE product_id = $1 AND size = $2 AND amount_per_month_paise = $3
+         AND daily_rate_paise = $4 AND key_mode = $5 AND is_active = TRUE
+       ORDER BY id DESC LIMIT 1`,
+      [product.id, normalizedSize, amountPerMonthPaise, dailyRatePaise, keyMode]
+    );
+    let candidatePlanId = regRes.rows[0]?.razorpay_plan_id ?? null;
+
+    if (!candidatePlanId) {
+      // Historical subscriptions have no stored account mode. We only reuse
+      // after a successful gateway fetch using the current key's environment.
+      const subRes = await client.query(
+        `SELECT razorpay_plan_id FROM customer_subscriptions
+         WHERE product_id = $1 AND quantity = $2 AND razorpay_plan_id IS NOT NULL
+           AND (notes->>'amountPerMonthPaise') ~ '^[0-9]+$'
+           AND (notes->>'amountPerMonthPaise')::bigint = $3
+         ORDER BY id DESC LIMIT 1`,
+        [product.id, normalizedSize, amountPerMonthPaise]
+      );
+      candidatePlanId = subRes.rows[0]?.razorpay_plan_id ?? null;
+    }
+
+    if (candidatePlanId) {
+      let existing;
+      try {
+        existing = await razorpayClient.plans.fetch(candidatePlanId);
+      } catch (err) {
+        const status = Number(err?.statusCode || err?.status || err?.response?.status || 0);
+        if (![400, 404].includes(status)) {
+          // Network failure / timeout / 401 / 5xx: do NOT create a replacement.
+          throw err;
+        }
+        // Only a definitive missing-plan response permits replacement.
+        // Generic HTTP 400 is not proof of a missing plan; fail closed.
+        if (status !== 404) throw err;
+      }
+      const isMatch = existing?.id === candidatePlanId &&
+        existing?.period === 'monthly' &&
+        Number(existing?.interval) === 1 &&
+        existing?.item?.currency === 'INR' &&
+        Number(existing?.item?.amount) === Number(amountPerMonthPaise);
+
+      if (isMatch) {
+        await client.query(
+          `INSERT INTO subscription_plan_registry (
+            product_id, product_name, size, amount_per_month_paise, daily_rate_paise,
+            currency, period, interval, razorpay_plan_id, key_mode
+          ) VALUES ($1, $2, $3, $4, $5, 'INR', 'monthly', 1, $6, $7)
+          ON CONFLICT (razorpay_plan_id) DO UPDATE SET
+            is_active = TRUE, updated_at = NOW()`,
+          [product.id, product.name, normalizedSize, amountPerMonthPaise, dailyRatePaise, candidatePlanId, keyMode]
+        );
+        await client.query('COMMIT');
+        transactionOpen = false;
+        return { plan: existing, reused: true };
+      }
+      // A missing or mismatched plan must not remain eligible for reuse.
+      await client.query(
+        `UPDATE subscription_plan_registry SET is_active = FALSE, updated_at = NOW()
+         WHERE razorpay_plan_id = $1 AND key_mode = $2`,
+        [candidatePlanId, keyMode]
+      );
+    }
+
+    const createdPlan = await razorpayClient.plans.create({
+      period: 'monthly',
+      interval: 1,
+      item: {
+        name: `Milvanta ${product.name} (${normalizedSize})`,
+        amount: amountPerMonthPaise,
+        currency: 'INR',
+        description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
+      }
+    });
+    if (!createdPlan?.id || typeof createdPlan.id !== 'string') {
+      throw new Error('razorpay_plan_missing_id');
+    }
+    // Registry write is mandatory. If it fails, the checkout must fail closed,
+    // rather than giving the customer a plan that we cannot reconcile.
+    await client.query(
+      `INSERT INTO subscription_plan_registry (
+        product_id, product_name, size, amount_per_month_paise, daily_rate_paise,
+        currency, period, interval, razorpay_plan_id, key_mode
+      ) VALUES ($1, $2, $3, $4, $5, 'INR', 'monthly', 1, $6, $7)`,
+      [product.id, product.name, normalizedSize, amountPerMonthPaise, dailyRatePaise, createdPlan.id, keyMode]
+    );
+
+    await client.query('COMMIT');
+    transactionOpen = false;
+    return { plan: createdPlan, reused: false };
+  } catch (err) {
+    if (transactionOpen) {
+      try { await client.query('ROLLBACK'); } catch { /* preserve original error */ }
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authenticate }, async (request, reply) => {
   if (!razorpay || !process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
     return reply.code(503).send({ error: 'razorpay_not_configured' });
@@ -1447,42 +1593,50 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   let subscriptionCreationStage = 'plan_create';
   let razorpayPlanCreated = false;
   try {
-    // 5. Create plan in Razorpay with server-calculated monthly amount
-    const planName = `Milvanta ${product.name} (${normalizedSize})`;
-    const plan = await razorpay.plans.create({
-      period: 'monthly',
-      interval: 1,
-      item: {
-        name: planName,
-        amount: amountPerMonthPaise,
-        currency: 'INR',
-        description: `${normalizedSize} fresh milk delivered daily (₹${dailyRatePaise / 100}/day)`
-      }
-    });
+    const keyMode = process.env.RAZORPAY_KEY_ID?.startsWith('rzp_live_')
+      ? 'live' : (process.env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') ? 'test' : 'unrecognized');
 
+    // 5. Inspect and reuse existing verified Razorpay plan or create new one
+    const planResult = await getOrCreateRazorpayPlan({
+      razorpayClient: razorpay,
+      dbPool: pool,
+      product,
+      normalizedSize,
+      amountPerMonthPaise,
+      dailyRatePaise,
+      keyMode
+    });
+    const plan = planResult.plan;
     razorpayPlanCreated = true;
 
     // 6. Create subscription in Razorpay linked to customer with start_at configured
+    // Clean and validate notes: omit empty string values to prevent gateway rejection
+    const safeNotes = {
+      customerId: String(request.customer.id),
+      productId: String(product.id),
+      productName: String(product.name),
+      size: normalizedSize,
+      months: String(months),
+      days: String(totalDays),
+      startOffset: String(offset),
+      dailyRate: String(dailyRatePaise / 100),
+      totalAmountPaise: String(calculatedTotalAmountPaise)
+    };
+    if (request.customer.phone && String(request.customer.phone).trim()) {
+      safeNotes.customerPhone = String(request.customer.phone).trim();
+    }
+    if (offset > 0 && futureStartDateYMD) {
+      safeNotes.startDate = futureStartDateYMD;
+    }
+
     const subParams = {
       plan_id: plan.id,
       total_count: months,
       quantity: 1,
-      customer_notify: 1,
-      notes: {
-        customerId: String(request.customer.id),
-        customerPhone: String(request.customer.phone || ''),
-        productId: String(product.id),
-        productName: String(product.name),
-        size: normalizedSize,
-        months: String(months),
-        days: String(totalDays),
-        startOffset: String(offset),
-        startDate: offset > 0 ? futureStartDateYMD : '',
-        dailyRate: String(dailyRatePaise / 100),
-        totalAmountPaise: String(calculatedTotalAmountPaise)
-      }
+      customer_notify: true,
+      notes: safeNotes
     };
-    if (startAtTimestamp) {
+    if (startAtTimestamp && Number.isSafeInteger(startAtTimestamp) && startAtTimestamp > Math.floor(Date.now() / 1000)) {
       subParams.start_at = startAtTimestamp;
     }
 

@@ -10,6 +10,8 @@ on:
       - 'tests/order-email-subscription-gateway-regression.test.js'
       - 'tests/razorpay-readonly-diagnostic.test.js'
       - 'scripts/razorpay-readonly-diagnostic.mjs'
+      - 'scripts/razorpay-existing-test-plan-diagnostic.mjs'
+      - 'tests/razorpay-existing-test-plan-diagnostic.test.js'
       - 'tests/checkout-auth-payment-comprehensive.test.js'
       - 'tests/helpers/testDbGuard.js'
       - 'migrations/**'
@@ -39,8 +41,10 @@ jobs:
           node --check tests/razorpay-readonly-diagnostic.test.js
           node --check src/razorpaySubscriptionErrors.js
           node --check tests/razorpay-subscription-400-diagnostics.test.js
+          node --check scripts/razorpay-existing-test-plan-diagnostic.mjs
+          node --check tests/razorpay-existing-test-plan-diagnostic.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js
+        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest
