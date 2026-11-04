@@ -4,7 +4,11 @@
 **Target Repository:** `DAV027/milvanta-backend`  
 **Branch:** `fix/razorpay-subscription-create-root-cause-400`  
 **Author:** QA Automation Engineer & Security Auditor  
-**Outcome:** ALL 661 TESTS PASS (0 FAILURES, 0 FLAKES, 0 SKIPPED)  
+**Outcome:** GitHub CI full suite **665/665 PASS**, 0 failed, 0 skipped (run #41802760583)  
+
+---
+
+**Independent CI:** [Payment and receipt regression checks #41802760583](https://github.com/DAV027/milvanta-backend/actions/runs/41802760583) — all three jobs successful using GitHub-hosted Node.js 22 and disposable PostgreSQL 16. The Windows 11/PostgreSQL 18 details below describe Antigravity's earlier local run; the summary below is the newer CI result.
 
 ---
 
@@ -15,7 +19,7 @@
 - **Database Engine:** PostgreSQL 18 on port 5433 (`127.0.0.1:5433/milvanta_test_db`)
 - **Isolation Enforcement:** `setupDisposableTestSchema` running unique isolated schemas per suite (`disposable_test_*`) with automatic post-run drop and cleanup.
 - **Production Guard:** Strict assertion in `tests/helpers/testDbGuard.js` blocking connections to `oregon-postgres.render.com` or database name `milvanta`.
-- **Payment Mocking:** All external Razorpay writes strictly mocked in memory; zero live network charges or unauthorized state modifications occurred.
+- **Payment Mocking:** All external Razorpay writes strictly mocked in memory; no actual gateway subscriptions/payments were created.
 
 ---
 
@@ -28,14 +32,14 @@ npx cross-env TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/mi
 
 ### Overall Suite Metrics
 ```text
-ℹ tests 661
-ℹ suites 132
-ℹ pass 661
+ℹ tests 665
+ℹ suites 133
+ℹ pass 665
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 34743.4274
+ℹ duration_ms 50668.24528
 ```
 
 ---
@@ -43,7 +47,7 @@ npx cross-env TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/mi
 ## 3. Targeted Suite Breakdown
 
 ### 3.1 New Subscription Creation & Plan Reuse Suite (`tests/razorpay-subscription-plan-reuse-and-payload.test.js`)
-*14 tests / 14 passed (100%)*
+*18 tests / 18 passed (100%)*
 
 | Test Case | Description | Result |
 | :--- | :--- | :--- |
@@ -61,6 +65,10 @@ npx cross-env TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/mi
 | **5.5 Sanitized 401/403** | Unauthorized gateway error returns safe 503 `razorpay_subscription_access_denied` | **PASS** |
 | **5.6 Sanitized 502 response** | Upstream timeout/500 returns safe 502 `subscription_creation_failed` | **PASS** |
 | **6.1 15-minute idempotency** | Repeated checkout within 15 minutes returns existing pending subscription | **PASS** |
+| **4B.1 Concurrent requests** | Two overlapping plan lookups use a database transaction advisory lock; one external plan create | **PASS** |
+| **4B.2 Registry unavailable** | Unavailable database rejects lookup before gateway plan creation | **PASS** |
+| **4B.3 Ambiguous fetch failure** | Gateway timeout/503 does not deactivate candidate or create another plan | **PASS** |
+| **4B.4 Registry write failure** | Failed persistence aborts checkout after external create; no false registry entry | **PASS** |
 
 ### 3.2 Gateway Diagnostics Suites
 - `tests/razorpay-subscription-400-diagnostics.test.js`: **7/7 PASS**
@@ -88,4 +96,9 @@ npx cross-env TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5433/mi
 2. **Backward Compatibility:**
    - Regular one-time product checkouts (`/api/v1/orders/create`) were verified and remain completely untouched.
 3. **Database Migration Safety:**
-   - Migration `020_subscription_plan_registry.sql` runs with `IF NOT EXISTS` and creates indexes concurrently/safely without table locks on existing subscription tables.
+   - Migration `020_subscription_plan_registry.sql` is additive, includes an active-plan partial unique index, and has been exercised on disposable PostgreSQL. It is not yet deployed.
+
+
+## 5. Release gate
+
+Automated tests cover local/mocked behavior and do **not** prove an actual Razorpay subscription create POST is accepted. The original `BAD_REQUEST_ERROR` field and description were not captured. **Do not merge or deploy as a proven gateway fix without explicit review and a controlled Test Mode verification plan.** Plan-level locking does not eliminate the existing race between simultaneous customer-level subscription create attempts.
