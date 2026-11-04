@@ -22,6 +22,15 @@
 3. Render's latest read-only checked live deploy was `a2a993537a35c1679077f060ea78b4aca6695e2e` (merge of PR #30), **not** the purported audit commit. Do not confuse a local test run with production deployment.
 4. The report labels the platform 'fully functional, verified, and secure'; that is **not justified** until a genuine controlled Test Mode payment authorization, actual webhook delivery, subscription reconciliation and paid delivery-entitlement transition have been observed.
 
+## Independently verified isolated GitHub Actions test result
+
+Draft audit PR #32 ([workflow #41853880727](https://github.com/DAV027/milvanta-backend/actions/runs/41853880727)) completed **all three jobs successfully**:
+- Full disposable-PostgreSQL suite: **685 tests, 685 passed, 0 failed, 0 skipped, 134 suites**.
+- Read-only unit tests: success, including the **5 new** webhook/route/claims guard tests.
+- Isolated PostgreSQL payment-flow job: success.
+
+This independently verifies the current remote branch. The original local report's **680** total is consistent with adding 5 new tests, but the original report's **766 summed per-file counts** remains unreconciled; the precise original local test breakdown must be regenerated from its original TAP output. No real Razorpay payment/mandate/webhook test was run by CI.
+
 ## Manual Razorpay dashboard review — do not modify without merchant approval
 
 Open **Razorpay Dashboard → Test Mode → Account & Settings → Webhooks** (exact navigation can change).
