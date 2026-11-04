@@ -93,6 +93,7 @@ describe('Razorpay Subscription Creation & Plan Reuse Suite', () => {
 
     // Clear subscriptions between tests to prevent idempotency cache interference
     await pool.query('DELETE FROM customer_subscriptions');
+    await pool.query('DELETE FROM subscription_plan_registry');
 
     // Default mock implementations
     razorpay.plans.create = async (params) => {
@@ -399,6 +400,117 @@ describe('Razorpay Subscription Creation & Plan Reuse Suite', () => {
 
       assert.strictEqual(result.reused, false, 'Should not reuse plan when amount does not match');
       assert.strictEqual(capturedPlanParams.length, 1, 'Must call plans.create for mismatched plan');
+    });
+  });
+
+  // =========================================================================
+  // 4B. Cross-request concurrency and fail-closed registry protection
+  // =========================================================================
+  describe('4B. Concurrent plan requests and database failures', () => {
+    it('serializes concurrent plan creation across two PostgreSQL clients', async () => {
+      const amountPerMonthPaise = 424200;
+      const dailyRatePaise = 13700;
+      let creations = 0;
+      const planId = `plan_concurrency_${Date.now()}`;
+      razorpay.plans.create = async (params) => {
+        creations++;
+        await new Promise(resolve => setTimeout(resolve, 90));
+        return { id: planId, ...params };
+      };
+      razorpay.plans.fetch = async (id) => {
+        fetchedPlanIds.push(id);
+        return { id, period: 'monthly', interval: 1, item: { amount: amountPerMonthPaise, currency: 'INR' } };
+      };
+      const options = {
+        razorpayClient: razorpay, dbPool: pool,
+        product: { id: productId, name: 'Pure Fresh Cow Milk' },
+        normalizedSize: '1 Litre', amountPerMonthPaise, dailyRatePaise,
+        keyMode: 'test'
+      };
+      const [first, second] = await Promise.all([
+        getOrCreateRazorpayPlan(options), getOrCreateRazorpayPlan(options)
+      ]);
+      assert.strictEqual(creations, 1, 'Only one external plan can be created');
+      assert.strictEqual(first.plan.id, planId);
+      assert.strictEqual(second.plan.id, planId);
+      assert.deepEqual([first.reused, second.reused], [false, true]);
+      const records = await pool.query(
+        'SELECT razorpay_plan_id FROM subscription_plan_registry WHERE product_id=$1 AND amount_per_month_paise=$2 AND is_active=TRUE',
+        [productId, amountPerMonthPaise]
+      );
+      assert.strictEqual(records.rows.length, 1);
+      assert.strictEqual(records.rows[0].razorpay_plan_id, planId);
+    });
+
+    it('rejects an unavailable registry without making an external gateway plan', async () => {
+      const options = {
+        razorpayClient: razorpay,
+        dbPool: { connect: async () => { throw new Error('database unavailable'); } },
+        product: { id: productId, name: 'Pure Fresh Cow Milk' },
+        normalizedSize: '1 Litre', amountPerMonthPaise: 451200,
+        dailyRatePaise: 15000, keyMode: 'test'
+      };
+      await assert.rejects(() => getOrCreateRazorpayPlan(options), /database unavailable/);
+      assert.strictEqual(capturedPlanParams.length, 0);
+    });
+
+    it('does not replace a verified registry candidate when gateway fetch times out', async () => {
+      const candidate = `plan_timeout_${Date.now()}`;
+      const amountPerMonthPaise = 455500;
+      await pool.query(
+        `INSERT INTO subscription_plan_registry (product_id, product_name, size,
+          amount_per_month_paise, daily_rate_paise, razorpay_plan_id, key_mode)
+         VALUES ($1, 'Pure Fresh Cow Milk', '1 Litre', $2, 15000, $3, 'test')`,
+        [productId, amountPerMonthPaise, candidate]
+      );
+      razorpay.plans.fetch = async () => {
+        const err = new Error('gateway is not responding');
+        err.statusCode = 503;
+        throw err;
+      };
+      await assert.rejects(() => getOrCreateRazorpayPlan({
+        razorpayClient: razorpay, dbPool: pool,
+        product: { id: productId, name: 'Pure Fresh Cow Milk' },
+        normalizedSize: '1 Litre', amountPerMonthPaise,
+        dailyRatePaise: 15000, keyMode: 'test'
+      }), /gateway is not responding/);
+      assert.strictEqual(capturedPlanParams.length, 0);
+      const check = await pool.query(
+        'SELECT is_active FROM subscription_plan_registry WHERE razorpay_plan_id=$1', [candidate]
+      );
+      assert.strictEqual(check.rows[0].is_active, true, 'Ambiguous gateway failure must not deactivate candidate');
+    });
+
+    it('fails closed if plan registry persistence fails after external creation', async () => {
+      const amountPerMonthPaise = 466600;
+      const dbPool = {
+        connect: async () => {
+          const client = await pool.connect();
+          return {
+            query: async (sql, args) => {
+              if (String(sql).includes('INSERT INTO subscription_plan_registry')) {
+                throw new Error('registry storage unavailable');
+              }
+              return client.query(sql, args);
+            },
+            release: () => client.release()
+          };
+        }
+      };
+      await assert.rejects(() => getOrCreateRazorpayPlan({
+        razorpayClient: razorpay, dbPool,
+        product: { id: productId, name: 'Pure Fresh Cow Milk' },
+        normalizedSize: '1 Litre', amountPerMonthPaise,
+        dailyRatePaise: 15500, keyMode: 'test'
+      }), /registry storage unavailable/);
+      assert.strictEqual(capturedPlanParams.length, 1,
+        'Gateway can create a plan before an unexpected local persistence failure');
+      const check = await pool.query(
+        'SELECT COUNT(*)::int AS n FROM subscription_plan_registry WHERE amount_per_month_paise=$1',
+        [amountPerMonthPaise]
+      );
+      assert.strictEqual(check.rows[0].n, 0,
+        'Must not claim an unpersisted plan is registered');
     });
   });
 
