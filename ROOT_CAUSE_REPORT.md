@@ -1,145 +1,55 @@
-# MILVANTA — ROOT CAUSE REPORT: RAZORPAY SUBSCRIPTION CREATION HTTP 400
+# MILVANTA — Razorpay Subscription HTTP 400: Evidence and Mitigations
 
-**Date:** November 4, 2026  
-**Target Repository:** `DAV027/milvanta-backend`  
-**Branch:** `fix/razorpay-subscription-create-root-cause-400`  
-**Author:** Senior Backend & Payment Security Architecture  
-**Status:** Root Cause Identified & Independently Verified  
+**Date:** November 4, 2026
+**Branch:** `fix/razorpay-subscription-create-root-cause-400`
+**Status:** **Exact gateway root cause NOT YET CONFIRMED.** Code defects and resilience risks identified; no approved actual gateway POST has validated the patch.
 
----
+## Verified production evidence
 
-## 1. Executive Summary
-
-During milk subscription checkouts on Milvanta, recurring subscription creation failed at the payment gateway stage while one-time product checkouts succeeded. The production backend logged:
+On November 4 at **05:46:38 UTC**, after PR #26 deployed, Render recorded a failed `POST /api/v1/subscriptions/razorpay-checkout` with:
 
 ```text
-stage: subscription_create
-gatewayStatus: 400
-gatewayErrorCode: BAD_REQUEST_ERROR
-gatewayReason: unclassified
-planCreated: true
-keyMode: test
+stage=subscription_create
+gatewayStatus=400
+gatewayErrorCode=BAD_REQUEST_ERROR
+gatewayReason=unclassified
+planCreated=true
+keyMode=test
 ```
 
-An exhaustive investigation of the Razorpay Subscriptions API contract, server payload construction, error classification routines, and gateway diagnostic responses identified three distinct issues contributing to this failure:
+The account's Razorpay **Test Mode** dashboard displayed newly created monthly cow-milk plans for ₹3,150 (1 L) and ₹1,677.50 (500 ml), each with **zero linked subscriptions**. This supports the conclusion that plan creation succeeded but subscription creation was rejected. It does **not** reveal the rejected field or the provider's actual error description. Local read-only GET probes using a separately supplied key pair passed with HTTP 200; GET access does not guarantee POST access.
 
-1. **Invalid Data Type for `customer_notify`**: The backend passed `customer_notify: 1` (integer) instead of `customer_notify: true` (boolean), which Razorpay strictly rejects with HTTP 400.
-2. **Blank/Empty String Attributes in `notes`**: For immediate-start subscriptions (`offset = 0`), `notes.startDate` was passed as `""` (empty string). Similarly, missing customer phone numbers were passed as `""`. Razorpay's Subscriptions API rejects any blank string within `notes`.
-3. **Flawed Diagnostic Normalization**: `classifySubscriptionGatewayError()` only searched for space-delimited text (`"customer notify"`) and ignored error field metadata (`err.error.field = 'customer_notify'`), failing closed to `"unclassified"`.
-4. **Orphan Plan Accumulation**: Every checkout attempt generated a new Razorpay Plan via `razorpay.plans.create()` without checking for existing verified plans, leaving orphan plans on the gateway account.
+## Candidate contributing issues (unproven gateway causes)
 
----
+1. **`customer_notify` representation:** Existing backend code used the integer `1`. The proposed patch changes it to the explicitly typed boolean `true`. This improves compatibility with the Razorpay create-subscription API contract, but **no production error field/description confirms this was rejected**. Do not state that the gateway explicitly returned “The customer_notify field must be true or false.”
+2. **Empty `notes` attributes:** Immediate-start requests contained `notes.startDate: ""`, and missing customer phones could result in `notes.customerPhone: ""`. The patch omits empty fields. **No actual gateway response proves blank notes caused the observed HTTP 400**.
+3. **Diagnostic coverage:** The classifier originally yielded `unclassified` for the production error. The patch recognizes more error field/description shapes, but the original provider response was never captured. Recognized reason codes from mocked tests are not evidence that Razorpay emitted them.
+4. **Orphan plan creation:** This is a **confirmed architectural flaw**, distinct from the unknown reason for HTTP 400. Before this branch, repeated checkout attempts created a new Razorpay plan even when the later subscription create operation failed. The dashboard showed unlinked plans created on the failure date.
 
-## 2. Technical Root Cause Breakdown
+## Changes in this branch
 
-### 2.1 Problem 1: `customer_notify` Integer Type Violation
+- `src/server.js`: omit empty optional notes, use `customer_notify: true`, validate optional future `start_at` when provided.
+- `src/razorpaySubscriptionErrors.js`: normalize underscore-based field descriptions and classify known error fields into safe reason codes; do not expose arbitrary provider error bodies.
+- `migrations/020_subscription_plan_registry.sql`: persist validated plans by configuration and payment environment. Enforce a partial unique index for one active registry record per tuple.
+- `getOrCreateRazorpayPlan`: serialize matching plan lookups, remote fetch/creation, and registry persistence with a **transaction-scoped PostgreSQL advisory lock** (held across instances). Database/registry failures abort checkout rather than silently issuing new gateway plans.
+- `tests/razorpay-subscription-plan-reuse-and-payload.test.js`: mocked payload and database checks, including simultaneous creation calls, gateway fetch failures, and registry storage errors.
 
-In `src/server.js` (lines 1470–1477 prior to fix), the payload passed to `razorpay.subscriptions.create()` was constructed as:
+### Limitations and remaining risks
 
-```javascript
-// BROKEN IMPLEMENTATION
-const subParams = {
-  plan_id: plan.id,
-  total_count: months,
-  quantity: 1,
-  customer_notify: 1, // <--- REJECTED BY RAZORPAY
-  notes: { ... }
-};
-```
+- Gateway plan creation and PostgreSQL commit are **not an atomic distributed transaction**. Process crashes, network ambiguity or failed persistence after plan creation can still orphan plans. Reconcile gateway resources before retrying ambiguous attempts.
+- Plan locking prevents duplicate *plan* creations for cooperating callers. It does **not** make the full subscription creation endpoint idempotent across concurrent requests to the same customer: the existing 15-minute pending-authorization check is performed before the external subscription POST without a per-customer transaction lock. This warrants separate hardening before broad public rollout.
+- Historical subscription fallback has no stored gateway mode; candidate plans must be successfully fetched in the current test/live account before reuse.
+- The previous successful October 21 Test Mode subscription proves earlier success, not that a newly proposed payload will be accepted now.
+- **Never treat `rzp_test_` payments as real funds or permit Test Mode status alone to authorize real delivery.**
 
-#### Razorpay API Specification
-Unlike Razorpay Orders or Invoices (which historically accepted integer flags `0` or `1`), the Razorpay Subscriptions API schema explicitly defines `customer_notify` as a strict **boolean**:
+## Validation criteria
 
-```json
-{
-  "customer_notify": {
-    "type": "boolean",
-    "description": "If true, Razorpay handles customer communication. If false, merchant communicates."
-  }
-}
-```
+1. Run GitHub CI with isolated disposable PostgreSQL; report the exact passing count and failures.
+2. Independently review the release diff, transaction lock, unique partial index, and candidate-mode verification.
+3. With separate approval, perform **one** minimal Test Mode `POST /v1/subscriptions` using a verified existing plan; do not authorize payment or mandate. Inspect sanitized response and reconcile created resources.
+4. Only if the real gateway request succeeds may the HTTP 400 be regarded as mitigated. A successful mock run alone does not establish gateway readiness.
+5. Do not merge into `main` or deploy to Render until approved; `main` is auto-deployed.
 
-When an integer `1` is provided, the Razorpay validation engine returns:
-- **HTTP Status:** `400 Bad Request`
-- **Error Code:** `BAD_REQUEST_ERROR`
-- **Field:** `customer_notify`
-- **Description:** `"The customer_notify field must be true or false."`
+## Outcome
 
-### 2.2 Problem 2: Empty String Values in `notes` Object
-
-In `src/server.js`, `notes` were assembled with conditional ternary expressions yielding empty strings:
-
-```javascript
-// BROKEN IMPLEMENTATION
-notes: {
-  customerId: String(request.customer.id),
-  customerPhone: String(request.customer.phone || ''), // Yields "" if missing
-  productId: String(product.id),
-  productName: String(product.name),
-  size: normalizedSize,
-  months: String(months),
-  days: String(totalDays),
-  startOffset: String(offset),
-  startDate: offset > 0 ? futureStartDateYMD : '', // Yields "" for immediate start
-  dailyRate: String(dailyRatePaise / 100),
-  totalAmountPaise: String(calculatedTotalAmountPaise)
-}
-```
-
-#### Razorpay API Behavior
-Razorpay's payload validator iterates over keys in the `notes` object. If any value is an empty string (`""`), the API throws:
-- **HTTP Status:** `400 Bad Request`
-- **Error Code:** `BAD_REQUEST_ERROR`
-- **Description:** `"The notes.<key> field cannot be blank or empty"`
-
-For immediate-start subscriptions (`offset = 0`), passing `startDate: ""` causes an immediate validation failure.
-
-### 2.3 Problem 3: Error Classification Failure (`gatewayReason: unclassified`)
-
-The production log recorded `gatewayReason: unclassified` despite a standard `BAD_REQUEST_ERROR`. Inspecting `src/razorpaySubscriptionErrors.js`:
-
-```javascript
-// BROKEN MATCH LOGIC
-if (value.includes('customer notify field must be true or false')) {
-  return 'invalid_customer_notify';
-}
-```
-
-The gateway returned `"The customer_notify field must be true or false."` (with an underscore) and `err.error.field = 'customer_notify'`. Because:
-1. `err.error.field` was not inspected directly.
-2. Underscores in `err.error.description` were not normalized to spaces.
-The string match `"customer notify field must be true or false"` evaluated to `false`, causing the diagnostic system to return `"unclassified"`.
-
-### 2.4 Problem 4: Orphan Plan Creation Mechanism
-
-In the checkout flow:
-1. Stage 5 invoked `razorpay.plans.create()` unconditionally.
-2. The plan was successfully created in Razorpay (e.g. `plan_TvzJ4KxG8YLmEJ` for ₹3,150, and a second plan for ₹1,677.50).
-3. Stage 6 (`razorpay.subscriptions.create()`) immediately threw HTTP 400.
-4. Because the checkout transaction failed, no local subscription was saved, and the freshly created Razorpay plan remained on the gateway with `subscriptions_count: 0`.
-5. Subsequent checkout attempts created *additional* identical plans rather than reusing existing verified plans.
-
----
-
-## 3. Reproduction & Proof of Root Cause
-
-The root cause was reproduced and verified in isolated test suites without modifying production data:
-
-1. **Payload Schema Reproduction** (`tests/razorpay-subscription-400-diagnostics.test.js`):
-   - Confirmed that passing `{ customer_notify: 1 }` fails gateway contract checks.
-   - Confirmed that `classifySubscriptionGatewayError()` now catches `{ field: 'customer_notify' }` and underscore-formatted descriptions.
-2. **Integration Reproduction** (`tests/razorpay-subscription-plan-reuse-and-payload.test.js`):
-   - Confirmed that payloads with `customer_notify: true` and sanitized `notes` (omitting empty strings) pass validation cleanly.
-   - Verified that `start_at` is omitted for immediate-start subscriptions and included as a valid future unix timestamp for future-dated subscriptions.
-
----
-
-## 4. Summary Matrix of Findings
-
-| Finding | Pre-Fix Behavior | Gateway Reaction | Corrected Behavior |
-| :--- | :--- | :--- | :--- |
-| **`customer_notify`** | `customer_notify: 1` | HTTP 400 `The customer_notify field must be true or false.` | `customer_notify: true` (Strict boolean) |
-| **`notes.startDate`** | `startDate: ""` (when offset = 0) | HTTP 400 `The notes.startDate field cannot be blank or empty` | Key omitted when offset = 0 |
-| **`notes.customerPhone`** | `customerPhone: ""` (when phone absent) | HTTP 400 `The notes.customerPhone field cannot be blank or empty` | Key omitted when phone absent |
-| **Error Classifier** | Ignored `field` & underscores | Logged `gatewayReason: unclassified` | Inspects `field`, normalizes `_`, returns `invalid_customer_notify` |
-| **Plan Management** | Created orphan plan on every call | Multiple identical 0-subscription plans | Reuses verified active plan from `subscription_plan_registry` |
+**Engineering improvements implemented; exact provider rejection reason remains unknown.** The first verified actual Test Mode subscription POST after the patch will determine whether these changes resolve the observed failure.
