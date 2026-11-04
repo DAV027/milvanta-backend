@@ -153,7 +153,7 @@ test('actual outbox function enqueues correct customer and admin amounts; missin
 
 test('gateway error handler classifies auth, persistence and upstream failures without leaking secrets', () => {
   const start = server.indexOf('    const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);');
-  const end = server.indexOf('\n  }\n});\n\n// Derive authoritative subscription start date', start);
+  const end = server.indexOf('\n  } finally {\n    if (checkoutClient) checkoutClient.release();\n  }\n});\n\n// Derive authoritative subscription start date', start);
   assert.ok(start >= 0 && end > start, 'Subscription catch handler must exist');
   const cases = [
     {stage:'plan_create', err:{statusCode:401,error:'Unauthorized',message:'a secret to hide'}, status:503, code:'razorpay_subscription_access_denied'},

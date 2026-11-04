@@ -1563,39 +1563,81 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
   const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
 
-  // 4. Idempotency check: Reuse existing pending subscription if one was already created recently
-  const existingPending = await pool.query(
-    `SELECT id, razorpay_subscription_id, razorpay_plan_id, total_amount_paise 
-     FROM customer_subscriptions 
-     WHERE customer_id = $1 AND product_id = $2 AND quantity = $3 
-       AND status = 'pending_authorization' 
-       AND created_at > (NOW() - INTERVAL '15 minutes')
-     ORDER BY created_at DESC LIMIT 1`,
-    [request.customer.id, product.id, normalizedSize]
-  );
-
-  if (existingPending.rows[0]?.razorpay_subscription_id) {
-    const oldSub = existingPending.rows[0];
-    return {
-      success: true,
-      subscriptionId: oldSub.razorpay_subscription_id,
-      keyId: process.env.RAZORPAY_KEY_ID,
-      amount: amountPerMonthPaise,
-      totalAmount: Number(oldSub.total_amount_paise || calculatedTotalAmountPaise),
-      dailyRate: dailyRatePaise / 100,
-      totalDays,
-      startDate: offset > 0 ? futureStartDateYMD : null,
-      startOffset: offset,
-      planId: oldSub.razorpay_plan_id
-    };
-  }
-
-  let subscriptionCreationStage = 'plan_create';
+  // Cross-instance lock: a repeated click must not issue a second subscription
+  // POST while the first one is still creating its gateway subscription.
+  // Hold this transaction lock until the local pending_authorization row commits.
+  // Lock uses customer + product + size, even if duration/startOffset changes.
+  let checkoutClient;
+  let checkoutTransactionOpen = false;
+  let subscriptionCreationStage = 'checkout_lock';
   let razorpayPlanCreated = false;
   try {
     const keyMode = process.env.RAZORPAY_KEY_ID?.startsWith('rzp_live_')
       ? 'live' : (process.env.RAZORPAY_KEY_ID?.startsWith('rzp_test_') ? 'test' : 'unrecognized');
+    if (keyMode === 'unrecognized') {
+      return reply.code(503).send({ error: 'razorpay_not_configured' });
+    }
+    checkoutClient = await pool.connect();
+    await checkoutClient.query('BEGIN');
+    checkoutTransactionOpen = true;
+    await checkoutClient.query("SET LOCAL lock_timeout = '20s'");
+    const checkoutLockKey = JSON.stringify([
+      'milvanta-subscription-checkout-v1',
+      request.customer.id, product.id, normalizedSize
+    ]);
+    await checkoutClient.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+      [checkoutLockKey]
+    );
 
+    // Check only AFTER acquiring the lock. Otherwise two parallel requests can
+    // both see no pending subscription, both call Razorpay, then both insert.
+    const existingPending = await checkoutClient.query(
+      `SELECT id, razorpay_subscription_id, razorpay_plan_id,
+              total_amount_paise, notes,
+              created_at > (NOW() - INTERVAL '15 minutes') AS is_recent
+       FROM customer_subscriptions
+       WHERE customer_id = $1 AND product_id = $2 AND quantity = $3
+         AND status = 'pending_authorization'
+       ORDER BY created_at DESC LIMIT 1`,
+      [request.customer.id, product.id, normalizedSize]
+    );
+
+    if (existingPending.rows[0]?.razorpay_subscription_id) {
+      const oldSub = existingPending.rows[0];
+      const oldNotes = typeof oldSub.notes === 'string'
+        ? JSON.parse(oldSub.notes || '{}') : (oldSub.notes || {});
+      const sameTerms = oldNotes.keyMode === keyMode &&
+        String(oldNotes.months) === String(months) &&
+        String(oldNotes.startOffset) === String(offset) &&
+        String(oldNotes.amountPerMonthPaise) === String(amountPerMonthPaise) &&
+        Number(oldSub.total_amount_paise) === calculatedTotalAmountPaise;
+
+      await checkoutClient.query('COMMIT');
+      checkoutTransactionOpen = false;
+      if (sameTerms && oldSub.is_recent === true) {
+        return {
+          success: true,
+          subscriptionId: oldSub.razorpay_subscription_id,
+          keyId: process.env.RAZORPAY_KEY_ID,
+          amount: amountPerMonthPaise,
+          totalAmount: calculatedTotalAmountPaise,
+          dailyRate: dailyRatePaise / 100,
+          totalDays,
+          startDate: offset > 0 ? futureStartDateYMD : null,
+          startOffset: offset,
+          planId: oldSub.razorpay_plan_id
+        };
+      }
+      // A different/past/legacy pending mandate must be reconciled before
+      // a new subscription can be created for the same customer and pack.
+      return reply.code(409).send({
+        error: 'existing_subscription_pending_reconciliation',
+        message: 'A previous subscription authorization is still pending. Please complete or resolve it with Milvanta support before starting another.'
+      });
+    }
+
+    subscriptionCreationStage = 'plan_create';
     // 5. Inspect and reuse existing verified Razorpay plan or create new one
     const planResult = await getOrCreateRazorpayPlan({
       razorpayClient: razorpay,
@@ -1645,7 +1687,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
 
     // 7. Store local subscription in pending_authorization state
     subscriptionCreationStage = 'database_persistence';
-    await pool.query(
+    await checkoutClient.query(
       `INSERT INTO customer_subscriptions (
         customer_id, product_id, product_name, image_url, frequency, time_slot,
         quantity, quantity_num, cost_per_day_paise, status, next_delivery,
@@ -1676,11 +1718,16 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           startDate: offset > 0 ? futureStartDateYMD : null,
           start_at: startAtTimestamp,
           dailyRatePaise,
-          amountPerMonthPaise
+          amountPerMonthPaise,
+          keyMode
         })
       ]
     );
 
+    // Complete the local record commit while still holding the customer lock.
+    // The next concurrent checkout will see the committed pending subscription.
+    await checkoutClient.query('COMMIT');
+    checkoutTransactionOpen = false;
     return {
       success: true,
       subscriptionId: rzpSub.id,
@@ -1695,6 +1742,10 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       planId: plan.id
     };
   } catch (err) {
+    if (checkoutTransactionOpen && checkoutClient) {
+      try { await checkoutClient.query('ROLLBACK'); } catch { /* original error is primary */ }
+      checkoutTransactionOpen = false;
+    }
     const gatewayStatus = Number(err?.statusCode || err?.status || err?.response?.status || 0);
     const gatewayErrorCode = String(err?.error?.code || err?.code || 'unknown').slice(0, 80);
     const gatewayReason = classifySubscriptionGatewayError(err);
@@ -1735,10 +1786,20 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         message: 'The payment gateway created a subscription but we could not save it. Do not attempt another payment; contact Milvanta support.'
       });
     }
+    if (subscriptionCreationStage === 'subscription_create') {
+      // A timeout or 5xx can be ambiguous: Razorpay may have created a
+      // subscription despite an unusable response. Never encourage retries.
+      return reply.code(503).send({
+        error: 'subscription_requires_reconciliation',
+        message: 'We could not confirm whether Razorpay created your subscription. Please contact Milvanta support and do not attempt another payment.'
+      });
+    }
     return reply.code(502).send({
       error: 'subscription_creation_failed',
-      message: 'The subscription payment gateway is temporarily unavailable. Please try later or contact support.'
+      message: 'Subscription setup is temporarily unavailable. Please contact Milvanta support.'
     });
+  } finally {
+    if (checkoutClient) checkoutClient.release();
   }
 });
 

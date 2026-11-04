@@ -657,9 +657,89 @@ describe('Razorpay Subscription Creation & Plan Reuse Suite', () => {
         }
       });
 
-      assert.strictEqual(res.statusCode, 502);
+      assert.strictEqual(res.statusCode, 503);
       const data = JSON.parse(res.payload);
-      assert.strictEqual(data.error, 'subscription_creation_failed');
+      assert.strictEqual(data.error, 'subscription_requires_reconciliation');
+      assert.ok(data.message.includes('do not attempt another payment'));
+    });
+  });
+
+  // =========================================================================
+  // 5B. Customer-specific cross-instance checkout serialization
+  // =========================================================================
+  describe('5B. Concurrent subscription checkout requests', () => {
+    const oneMonth = () => ({
+      productId,
+      productName: 'Pure Fresh Cow Milk',
+      size: '1 Litre',
+      monthsCount: 1,
+      startOffset: 0
+    });
+    const callCheckout = async (payload=oneMonth()) => app.inject({
+      method: 'POST',
+      url: '/api/v1/subscriptions/razorpay-checkout',
+      headers: { Authorization: `Bearer ${customerToken}` },
+      payload
+    });
+
+    it('two simultaneous checkout requests create only one gateway subscription', async () => {
+      let creates = 0;
+      const firstSubId = `sub_parallel_${Date.now()}`;
+      razorpay.subscriptions.create = async params => {
+        creates++;
+        capturedSubParams.push(params);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return { id: firstSubId, status: 'created', short_url: 'https://rzp.io/i/example' };
+      };
+
+      const [one, two] = await Promise.all([callCheckout(), callCheckout()]);
+      assert.equal(one.statusCode, 200, one.payload);
+      assert.equal(two.statusCode, 200, two.payload);
+      assert.equal(creates, 1, 'Only one Razorpay subscription POST must occur');
+      assert.equal(JSON.parse(one.payload).subscriptionId, firstSubId);
+      assert.equal(JSON.parse(two.payload).subscriptionId, firstSubId);
+      const result = await pool.query(
+        'SELECT razorpay_subscription_id, notes FROM customer_subscriptions WHERE razorpay_subscription_id = $1',
+        [firstSubId]
+      );
+      assert.equal(result.rows.length, 1);
+      assert.equal(result.rows[0].notes.keyMode, 'test');
+    });
+
+    it('does not reuse a pending subscription when duration or terms change', async () => {
+      const first = await callCheckout();
+      assert.equal(first.statusCode, 200);
+      assert.equal(capturedSubParams.length, 1);
+      const differentTerm = await callCheckout({ ...oneMonth(), monthsCount: 2 });
+      assert.equal(differentTerm.statusCode, 409, differentTerm.payload);
+      assert.equal(JSON.parse(differentTerm.payload).error, 'existing_subscription_pending_reconciliation');
+      assert.equal(capturedSubParams.length, 1, 'Must not generate another subscription');
+    });
+
+    it('fails closed on pending legacy subscription lacking an environment marker', async () => {
+      const first = await callCheckout();
+      assert.equal(first.statusCode, 200);
+      await pool.query(
+        "UPDATE customer_subscriptions SET notes = notes - 'keyMode' WHERE razorpay_subscription_id = $1",
+        [JSON.parse(first.payload).subscriptionId]
+      );
+      const repeat = await callCheckout();
+      assert.equal(repeat.statusCode, 409);
+      assert.equal(JSON.parse(repeat.payload).error, 'existing_subscription_pending_reconciliation');
+      assert.equal(capturedSubParams.length, 1);
+    });
+
+    it('blocks stale pending mandates instead of creating another checkout after 15 minutes', async () => {
+      const first = await callCheckout();
+      assert.equal(first.statusCode, 200);
+      await pool.query(
+        "UPDATE customer_subscriptions SET created_at = NOW() - INTERVAL '20 minutes' WHERE razorpay_subscription_id = $1",
+        [JSON.parse(first.payload).subscriptionId]
+      );
+      const retry = await callCheckout();
+      assert.equal(retry.statusCode, 409);
+      assert.equal(JSON.parse(retry.payload).error, 'existing_subscription_pending_reconciliation');
+      assert.equal(capturedSubParams.length, 1);
     });
   });
 
