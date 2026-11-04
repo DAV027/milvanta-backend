@@ -19,3 +19,9 @@ CREATE TABLE IF NOT EXISTS subscription_plan_registry (
 CREATE INDEX IF NOT EXISTS idx_sub_plan_registry_lookup 
 ON subscription_plan_registry(product_id, size, amount_per_month_paise, key_mode) 
 WHERE is_active = TRUE;
+
+-- A second line of defense if a caller bypasses the advisory lock.
+-- Only one active registry record per canonical plan configuration and mode.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sub_plan_registry_unique_active
+ON subscription_plan_registry(product_id, size, amount_per_month_paise, daily_rate_paise, key_mode)
+WHERE is_active = TRUE;
