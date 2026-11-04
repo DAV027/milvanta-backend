@@ -13,6 +13,8 @@ on:
       - 'scripts/razorpay-existing-test-plan-diagnostic.mjs'
       - 'scripts/razorpay-subscription-test-probe.mjs'
       - 'tests/razorpay-subscription-test-probe.test.js'
+      - 'tests/razorpay-webhook-contract-audit.test.js'
+      - 'docs/SUBSCRIPTION_E2E_AUDIT_CORRECTIONS_2026-11-04.md'
       - 'tests/razorpay-existing-test-plan-diagnostic.test.js'
       - 'tests/checkout-auth-payment-comprehensive.test.js'
       - 'tests/helpers/testDbGuard.js'
@@ -47,8 +49,9 @@ jobs:
           node --check tests/razorpay-existing-test-plan-diagnostic.test.js
           node --check scripts/razorpay-subscription-test-probe.mjs
           node --check tests/razorpay-subscription-test-probe.test.js
+          node --check tests/razorpay-webhook-contract-audit.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js
+        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest
