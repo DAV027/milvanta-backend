@@ -9,6 +9,7 @@ import {
 test('classifies documented Razorpay subscription creation 400 errors into safe identifiers', () => {
   const cases = [
     ['The requested URL was not found on the server.', 'subscription_endpoint_unavailable'],
+    ['Invoices disabled because fee bearer is customer', 'invoices_disabled_customer_fee_bearer'],
     ['The id provided does not exist', 'plan_reference_rejected'],
     ['The plan id field is required.', 'plan_reference_rejected'],
     ['The plan id must be 19 characters.', 'plan_reference_rejected'],
@@ -72,7 +73,24 @@ test('standardizeSubscriptionGatewayError maps to canonical non-sensitive identi
   assert.equal(standardizeSubscriptionGatewayError('invalid_subscription_start'), 'invalid_start_timestamp');
   assert.equal(standardizeSubscriptionGatewayError('invalid_subscription_payload'), 'unsupported_payload_field');
   assert.equal(standardizeSubscriptionGatewayError('subscription_endpoint_unavailable'), 'subscription_feature_unavailable');
+  assert.equal(standardizeSubscriptionGatewayError('invoices_disabled_customer_fee_bearer'), 'invoices_disabled_customer_fee_bearer');
   assert.equal(standardizeSubscriptionGatewayError('unclassified'), 'unclassified_gateway_rejection');
+});
+
+test('classifies customer-fee-bearer rejection from direct and SDK response forms without returning the description', () => {
+  const description = 'Invoices disabled because fee bearer is customer';
+  const errors = [
+    { statusCode: 400, error: { code: 'BAD_REQUEST_ERROR', description } },
+    { response: { status: 400, data: { error: { code: 'BAD_REQUEST_ERROR', description } } } },
+    { message: description }
+  ];
+  for (const err of errors) {
+    const actual = classifySubscriptionGatewayError(err);
+    assert.equal(actual, 'invoices_disabled_customer_fee_bearer');
+    assert.ok(!actual.includes('Invoices disabled'));
+  }
+  // Generic failures must still be unclassified, never echo arbitrary details.
+  assert.equal(classifySubscriptionGatewayError({ error: { description: 'Customer help@example.com 9876543210 failed' } }), 'unclassified');
 });
 
 test('accepts SDK error shape in Razorpay response.data', () => {
