@@ -57,6 +57,7 @@ export function buildFixed30DeliveryCoverage({
 }) {
   if (!notes || typeof notes !== 'object' || Array.isArray(notes)) return null;
   if (notes.deliveryCoveragePolicy !== undefined) return null;
+  if (notes.deliveryCoverageOptIn !== FIXED_30_DELIVERIES_POLICY) return null;
   if (Number(notes.months) !== 1 || Number(notes.days) !== DAY_COUNT) return null;
   if (Number(paidCount) !== 1) return null;
   if (!Number.isSafeInteger(Number(dailyRatePaise)) || Number(dailyRatePaise) <= 0 ||
