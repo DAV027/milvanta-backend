@@ -8,6 +8,8 @@ on:
       - 'src/services/deliveryEngine.js'
       - 'src/services/deliveryCronPolicy.js'
       - 'src/services/deliveryCoveragePolicy.js'
+      - 'frontend/js/checkout.js'
+      - 'frontend/js/profile.js'
       - 'src/services/subscriptionService.js'
       - 'tests/delivery-coverage-policy.test.js'
       - 'docs/PAID_DELIVERY_COVERAGE_RUNBOOK.md'
@@ -54,6 +56,8 @@ jobs:
           node --check src/services/deliveryCronPolicy.js
           node --check src/services/deliveryCoveragePolicy.js
           node --check tests/delivery-coverage-policy.test.js
+          node --check frontend/js/checkout.js
+          node --check frontend/js/profile.js
           node --check tests/delivery-cron-policy.test.js
           node --check tests/order-email-subscription-gateway-regression.test.js
           node --check scripts/razorpay-readonly-diagnostic.mjs
