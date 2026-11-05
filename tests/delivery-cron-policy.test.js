@@ -7,6 +7,7 @@ import {
   isValidDeliveryWorkerSecret,
   verifyDeliveryWorkerSecret
 } from '../src/services/deliveryCronPolicy.js';
+import { generateDailyDeliveries, getTomorrowDeliveryDateYMD } from '../src/services/deliveryEngine.js';
 
 const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 const engine = fs.readFileSync(new URL('../src/services/deliveryEngine.js', import.meta.url), 'utf8');
@@ -98,4 +99,32 @@ test('cron does not create its own in-process timer and requires independent sch
   const part=server.slice(server.indexOf(route),server.indexOf('// ---------- Internal Operations & Dispatch APIs'));
   assert.doesNotMatch(part,/setInterval|setTimeout|cron\.schedule|app\.listen/);
   assert.match(part,/daily_delivery_generation_failed/);
+});
+
+
+test('real delivery generator skips Test Mode and unknown-mode rows without attempting any inserts', async () => {
+  const queries=[];
+  const subs=[
+    {id:4,customer_id:1,notes:{keyMode:'test',fulfillmentEntitled:true,lastPaymentId:'pay_synthetic'}},
+    {id:5,customer_id:1,notes:{fulfillmentEntitled:true,lastPaymentId:'pay_unknown'}}
+  ];
+  const client={
+    async query(statement) {
+      const sql=String(statement);
+      queries.push(sql);
+      if(sql.includes("FROM customer_subscriptions cs")) return {rows:subs,rowCount:subs.length};
+      if(['BEGIN','COMMIT','ROLLBACK'].includes(sql)) return {rows:[],rowCount:0};
+      throw new Error('Unexpected database query during Test Mode dispatch exclusion');
+    },
+    release() {}
+  };
+  const pool={connect:async()=>client};
+  const result=await generateDailyDeliveries(pool,getTomorrowDeliveryDateYMD(),{
+    rejectPastDates:true,
+    liveGatewayOnly:true
+  });
+  assert.equal(result.generatedCount,0);
+  assert.equal(result.skippedCount,2);
+  assert.equal(result.totalActiveSubscriptions,2);
+  assert.deepEqual(queries.map(q=>q.trim().slice(0,6)),['BEGIN','SELECT','COMMIT']);
 });
