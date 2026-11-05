@@ -20,6 +20,7 @@ Razorpay billing period and invoice end are **not extended**. The independent de
 ## Conservative scope, activation controls
 
 - Feature gate: `MILVANTA_30_DELIVERY_DAYS_V1=true` (UNSET/off in Render until owner reviews and approves).
+- The gate only controls **new checkout opt-ins**. Once a customer has an opted-in pending subscription, subsequent verified paid confirmation must still honor the recorded terms even if the operator turns off new checkout opt-ins; disabling the flag must not erase a promise.
 - Only new checkout rows record `deliveryCoverageOptIn=fixed_30_deliveries_v1`.
 - Only `months=1`, `days=30`, `paidCount=1` and exact `total_amount_paise = 30 * cost_per_day_paise` qualify.
 - Existing subscriptions **#4 and #5** are not retroactively converted; no update to Neon and no change to their previous paid-through dates.
