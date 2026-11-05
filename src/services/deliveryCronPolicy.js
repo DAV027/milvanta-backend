@@ -48,6 +48,31 @@ export function getDeliveryCronTarget(now = new Date()) {
   return {allowed:true,targetDate};
 }
 
+/**
+ * Earliest permitted morning delivery date under the 20:00 IST cutoff.
+ * This is a scheduling boundary, NOT evidence of a captured payment,
+ * active entitlement, address validation, or an actual generated delivery.
+ * An explicit future plan start must not be moved earlier.
+ */
+export function getEarliestPermittedDeliveryDateYMD(now = new Date(), plannedStartYMD = null) {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
+    throw new Error('invalid_delivery_schedule_clock');
+  }
+  const { year, month, day, hour } = istComponents(now);
+  const offsetDays = hour >= CUTOFF_HOUR_IST ? 2 : 1;
+  const earliest = new Date(Date.UTC(year, month - 1, day + offsetDays)).toISOString().slice(0, 10);
+  if (plannedStartYMD === null || plannedStartYMD === undefined) return earliest;
+  if (typeof plannedStartYMD !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(plannedStartYMD)) {
+    throw new Error('invalid_planned_delivery_start_date');
+  }
+  const [y, m, d] = plannedStartYMD.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) {
+    throw new Error('invalid_planned_delivery_start_date');
+  }
+  return plannedStartYMD > earliest ? plannedStartYMD : earliest;
+}
+
 export function isValidDeliveryWorkerSecret(secret) {
   return typeof secret === 'string' && secret.length >= 32 &&
     secret.length <= 512 && secret.trim() === secret;
