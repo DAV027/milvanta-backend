@@ -400,7 +400,7 @@ async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
           'Daily (Every Morning)', '6:00 AM – 7:00 AM',
           itemSize, 1, dailyRate, 'custom',
           String(days) + ' Days Custom Plan', days * dailyRate,
-          JSON.stringify(address), JSON.stringify(notes), 'active', 'Tomorrow, 6:00 AM'
+          JSON.stringify(address), JSON.stringify(notes), 'active', 'Pending delivery scheduling'
         ]
       );
     }
@@ -1315,7 +1315,7 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
        customer_id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
        cost_per_day_paise, plan_type, duration_label, total_amount_paise, notes, status, next_delivery
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', 'Tomorrow, 6:00 AM'
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', 'Pending delivery scheduling'
      ) RETURNING *`,
     [
       request.customer.id,
@@ -1562,7 +1562,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
   const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
   const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
-  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
+  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Pending delivery scheduling';
 
   // Cross-instance lock: a repeated click must not issue a second subscription
   // POST while the first one is still creating its gateway subscription.
@@ -2259,7 +2259,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
           : null;
         const initialNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-          : 'Tomorrow, 6:00 AM';
+          : 'Pending delivery scheduling';
 
         if (recheck.rows.length > 0) {
           subRow = recheck.rows[0];
@@ -2437,7 +2437,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     // Verified captured billing-cycle payment: activate fulfillment!
     const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
       ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-      : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+      : (subRow.next_delivery || 'Pending delivery scheduling');
 
     const updatedNotes = {
       ...existingNotes,
@@ -2836,7 +2836,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
       if (subRow.status === 'pending_authorization' || isPrematureCompletedExpiry) {
         const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-          : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+          : (subRow.next_delivery || 'Pending delivery scheduling');
 
         const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
