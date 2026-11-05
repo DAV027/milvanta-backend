@@ -309,7 +309,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     // Fetch all currently active subscriptions
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
-              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.plan_type, cs.razorpay_subscription_id, cs.notes, cs.next_delivery, cs.created_at,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -416,7 +416,7 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
   try {
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
-              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.plan_type, cs.razorpay_subscription_id, cs.notes, cs.next_delivery, cs.created_at,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
