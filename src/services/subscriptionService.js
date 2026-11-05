@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
  */
 
 import { queueNotification } from './notificationService.js';
+import { validatedFixedDeliveryCoverage } from './deliveryCoveragePolicy.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -133,6 +134,10 @@ export async function getSubscriptionNetExtensionDays(clientOrPool, subscription
  */
 export async function getEffectivePaidThroughDate(clientOrPool, sub) {
   if (!sub) return null;
+  // Verified fixed-delivery coverage is independent of the payment provider's
+  // billing-cycle end. The policy is gated when written and validated here.
+  const fixedWindow = validatedFixedDeliveryCoverage(sub);
+  if (fixedWindow) return fixedWindow.lastDate;
   const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
   const subStartDate = subNotes.startDate || subNotes.start_date ||
     (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
@@ -456,6 +461,10 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
         ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
         : null);
+    const deliveryWindow = validatedFixedDeliveryCoverage(subRecord);
+    if (deliveryWindow && (!subStartDate || deliveryWindow.firstDate > subStartDate)) {
+      subStartDate = deliveryWindow.firstDate;
+    }
 
     if (subRecord?.status === 'pending_authorization' || subNotes.fulfillmentEntitled === false) {
       return subNotes.mandateAuthorized
