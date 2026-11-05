@@ -635,35 +635,16 @@ function getContinuousMonthsDetails(startOffset = 0, count = 1) {
   };
 }
 
-function formatSubscriptionDates(startOffset = 0, days = 30) {
-  const now = new Date();
-  let startDate;
-
-  if (startOffset === 0) {
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  } else {
-    startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
-  }
-
-  const endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + (days - 1));
-
-  const startFormatted = startDate.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
-
-  const endFormatted = endDate.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
-
+function formatSubscriptionDates(startOffset = 0) {
+  // Informational estimate only. The backend confirms the actual paid-through
+  // period after a captured payment and entitlement reconciliation.
+  const schedule = window.MilvantaSubscriptionSchedule;
+  const firstYMD = schedule?.earliestFirstDeliveryYMD({ startOffset });
   return {
-    startDate,
-    endDate,
-    startLabel: startOffset === 0 ? `Tomorrow, ${startFormatted}` : startFormatted,
-    endLabel: endFormatted
+    startLabel: firstYMD
+      ? `From ${schedule.formatYMD(firstYMD)} (estimate)`
+      : 'Pending delivery scheduling',
+    endLabel: 'Confirmed after payment'
   };
 }
 
@@ -740,7 +721,7 @@ function updateSubscriptionSummary() {
   const periodStartDate = $('#subPeriodStartDate');
   const periodEndDate = $('#subPeriodEndDate');
 
-  if (periodDaysBadge) periodDaysBadge.textContent = `${days} Mornings`;
+  if (periodDaysBadge) periodDaysBadge.textContent = `${days} days priced`;
   if (periodStartDate) periodStartDate.textContent = dateInfo.startLabel;
   if (periodEndDate) periodEndDate.textContent = dateInfo.endLabel;
 
