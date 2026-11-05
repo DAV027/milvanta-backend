@@ -238,9 +238,12 @@ export async function calculateSubscriptionEntitlement(poolOrClient, { subscript
     });
 
     const netExtensionDays = isAutopay ? 0 : await getSubscriptionNetExtensionDays(client, sub.id);
-    const effectivePaidThroughDate = basePaidThroughDate
-      ? (netExtensionDays > 0 ? addDaysToYMD(basePaidThroughDate, netExtensionDays) : basePaidThroughDate)
-      : null;
+    const fixedWindow = validatedFixedDeliveryCoverage(sub);
+    const effectivePaidThroughDate = fixedWindow?.lastDate || (
+      basePaidThroughDate
+        ? (netExtensionDays > 0 ? addDaysToYMD(basePaidThroughDate, netExtensionDays) : basePaidThroughDate)
+        : null
+    );
 
     // Delivery stats
     const { rows: deliveryStats } = await client.query(
@@ -753,7 +756,8 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
     }
 
     const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-    const subStartDate = subNotes.startDate || subNotes.start_date ||
+    const fixedWindow = validatedFixedDeliveryCoverage(sub);
+    const subStartDate = fixedWindow?.firstDate || subNotes.startDate || subNotes.start_date ||
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
         ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
         : null);
@@ -763,15 +767,7 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
       return { success: false, error: 'before_start_date', message: `Cannot skip date before subscription start date (${subStartDate}).`, statusCode: 400 };
     }
 
-    const subPaidThroughEndDate = derivePaidThroughDate({
-      startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
-      paidThroughDate: subNotes.paidThroughDate,
-      current_end: subNotes.current_end,
-      cost_per_day_paise: sub.cost_per_day_paise,
-      total_amount_paise: sub.total_amount_paise,
-      paidCount: subNotes.paidCount,
-      months: subNotes.months
-    });
+    const subPaidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
 
     if (subPaidThroughEndDate && cleanSkipDate > subPaidThroughEndDate) {
       await client.query('ROLLBACK');
@@ -892,7 +888,8 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
     }
 
     const subNotes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
-    const subStartDate = subNotes.startDate || subNotes.start_date ||
+    const fixedWindow = validatedFixedDeliveryCoverage(sub);
+    const subStartDate = fixedWindow?.firstDate || subNotes.startDate || subNotes.start_date ||
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
         ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
         : null);
@@ -902,15 +899,7 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       return { success: false, error: 'before_start_date', message: `Cannot unskip date before subscription start date (${subStartDate}).`, statusCode: 400 };
     }
 
-    const subPaidThroughEndDate = derivePaidThroughDate({
-      startDate: subStartDate || (sub.created_at ? formatDateYMD(new Date(sub.created_at)) : null),
-      paidThroughDate: subNotes.paidThroughDate,
-      current_end: subNotes.current_end,
-      cost_per_day_paise: sub.cost_per_day_paise,
-      total_amount_paise: sub.total_amount_paise,
-      paidCount: subNotes.paidCount,
-      months: subNotes.months
-    });
+    const subPaidThroughEndDate = await getEffectivePaidThroughDate(client, sub);
 
     if (subPaidThroughEndDate && cleanSkipDate > subPaidThroughEndDate) {
       await client.query('ROLLBACK');
