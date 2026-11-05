@@ -704,7 +704,7 @@ export async function enqueueSubscriptionOutbox(client, { subscription, customer
       totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -790,7 +790,7 @@ export async function enqueueRecurringSubscriptionOutbox(client, {
       totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -1400,7 +1400,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
   const subtotalPlanStr = formatInr(subtotalPlan);
   const deliveryFeeStr = formatInr(deliveryFee);
   const totalPaidStr = formatInr(totalPaid);
-  const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM');
+  const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Pending delivery scheduling');
   const imgUrl = subscription?.image || subscription?.image_url || (productName.toLowerCase().includes('buffalo') ? 'https://milvanta.in/assets/milvanta-buffalo-milk.jpg' : 'https://milvanta.in/assets/milvanta-cow-milk.jpg');
   const paymentMethod = isRefundableAuth
     ? 'UPI Autopay / Card E-Mandate (Refundable Authorization)'
@@ -1444,7 +1444,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
               <h2 style="color: #0f172a; margin: 0 0 10px; font-size: 20px; font-weight: 700;">${isRefundableAuth ? `Mandate Activated, ${customerName}!` : `Welcome to Morning Fresh Milk, ${customerName}!`}</h2>
               <p style="color: #475569; margin: 0 0 20px; font-size: 14px; line-height: 1.6;">
                 ${isRefundableAuth 
-                  ? `Your subscription autopay mandate has been registered successfully! Regular morning deliveries are scheduled to begin on <strong>${nextDelivery}</strong>. Monthly plan charges will be debited automatically at each recurring billing cycle.`
+                  ? `Your subscription autopay mandate has been registered successfully! Delivery scheduling status: <strong>${nextDelivery}</strong>. Monthly plan charges will be debited automatically at each recurring billing cycle.`
                   : `Your daily milk subscription has been activated successfully! Fresh, chilled, unadulterated milk will be placed right at your doorstep every morning.`
                 }
               </p>
@@ -1501,7 +1501,7 @@ export function buildCustomerSubscriptionEmail({ subscription, customer, address
                   <td style="text-align: right; font-weight: 600; color: #0f172a;">${paymentMethod}</td>
                 </tr>
                 <tr>
-                  <td style="color: #64748b;">First Delivery Scheduled</td>
+                  <td style="color: #64748b;">First Delivery Status</td>
                   <td style="text-align: right; font-weight: 700; color: #0284c7;">${nextDelivery}</td>
                 </tr>
               </table>
