@@ -318,6 +318,17 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     );
 
     for (const sub of activeSubs) {
+      // Unattended production dispatch must never include Razorpay Test Mode
+      // subscriptions that share the Neon database with live customers.
+      // Unknown/legacy mode is excluded unless an authorized manual operator
+      // explicitly chooses the existing admin generator instead.
+      if (options.liveGatewayOnly === true) {
+        const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+        if (notes.keyMode !== 'live') {
+          skippedCount++;
+          continue;
+        }
+      }
       const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
       if (!evalRes.eligible) {
         skippedCount++;
