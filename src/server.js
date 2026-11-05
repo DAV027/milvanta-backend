@@ -5746,7 +5746,10 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                      ),
                      '{lastPaymentId}',
                      COALESCE(to_jsonb($5::text), notes->'lastPaymentId', 'null'::jsonb)
-                   ) || $6::jsonb,
+                   ) || CASE
+                     WHEN COALESCE(notes, '{}'::jsonb) ? 'deliveryCoveragePolicy' THEN '{}'::jsonb
+                     ELSE $6::jsonb
+                   END,
                    updated_at = NOW() 
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
                  AND status NOT IN ('cancelled', 'paused')`,
