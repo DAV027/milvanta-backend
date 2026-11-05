@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
  */
 
 import { queueNotification } from './notificationService.js';
+import { getEarliestPermittedDeliveryDateYMD } from './deliveryCronPolicy.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -389,37 +390,16 @@ export function derivePaidThroughDate({
 }
 
 export function isDeliveryCutoffPassed(targetDateStr) {
-  const istNow = getNowInIST();
-  const todayYMD = formatDateYMD(istNow);
-
-  // If target date is today or in the past, cutoff has definitely passed
-  if (targetDateStr <= todayYMD) return true;
-
-  // Compute tomorrow in IST
-  const tomorrow = new Date(istNow);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowYMD = formatDateYMD(tomorrow);
-
-  // If target date is tomorrow and current IST hour >= 20 (8 PM), cutoff has passed
-  if (targetDateStr === tomorrowYMD && istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-    return true;
-  }
-
-  return false;
+  // Keep customer edits and server scheduling under the same IST cutoff rule.
+  return typeof targetDateStr === 'string' &&
+    targetDateStr < getEarliestPermittedDeliveryDateYMD();
 }
 
 /**
  * Calculate the earliest editable delivery date based on 8:00 PM cutoff
  */
 export function getEarliestEditableDeliveryDate() {
-  const istNow = getNowInIST();
-  const d = new Date(istNow);
-  if (istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-    d.setDate(d.getDate() + 2); // Day after tomorrow
-  } else {
-    d.setDate(d.getDate() + 1); // Tomorrow morning
-  }
-  return formatDateYMD(d);
+  return getEarliestPermittedDeliveryDateYMD();
 }
 
 /**
@@ -440,17 +420,20 @@ export async function getVerifiedSubscription(pool, subscriptionId, customerId) 
  * Calculate the next scheduled delivery date for a subscription
  */
 export async function calculateNextDeliveryDate(pool, subscriptionId) {
-  const istNow = getNowInIST();
   const earliest = getEarliestEditableDeliveryDate();
 
   let subStartDate = null;
   let subPaidThroughEndDate = null;
   try {
     const { rows: subRows } = await pool.query(
-      'SELECT id, customer_id, notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at, plan_type, razorpay_subscription_id FROM customer_subscriptions WHERE id = $1',
+      'SELECT id, customer_id, status, notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at, plan_type, razorpay_subscription_id FROM customer_subscriptions WHERE id = $1',
       [subscriptionId]
     );
     const subRecord = subRows[0];
+    if (!subRecord) return 'Pending delivery scheduling';
+    if (subRecord.status === 'paused') return 'On Hold (Paused)';
+    if (subRecord.status === 'cancelled') return 'Cancelled';
+    if (subRecord.status === 'expired') return 'Subscription Period Ended';
     const subNotes = typeof subRecord?.notes === 'object' && subRecord?.notes !== null ? subRecord.notes : {};
     subStartDate = subNotes.startDate || subNotes.start_date ||
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
@@ -464,26 +447,22 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
     }
 
     const hasPayment = Boolean(
-      subNotes.fulfillmentEntitled === true && (
-        subNotes.lastPaymentId ||
-        subNotes.paymentId ||
-        (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
-      )
+      subNotes.fulfillmentEntitled === true &&
+      (subNotes.lastPaymentId || subNotes.paymentId) &&
+      subNotes.authType !== 'mandate_only'
     );
-    if (hasPayment) {
-      subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
-    }
-  } catch {}
+    if (!hasPayment) return 'Pending Billing Cycle Payment';
+    subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
+    if (!subPaidThroughEndDate) return 'Pending delivery scheduling';
+    if (subPaidThroughEndDate < earliest) return 'Subscription Period Ended';
+  } catch {
+    // Never produce an apparently scheduled date when DB/entitlement checks fail.
+    return 'Pending delivery scheduling';
+  }
 
   // Look ahead up to 90 days to find the next active date
   for (let i = 0; i < 90; i++) {
-    const candidate = new Date(istNow);
-    if (istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-      candidate.setDate(candidate.getDate() + 2 + i);
-    } else {
-      candidate.setDate(candidate.getDate() + 1 + i);
-    }
-    const candidateYMD = formatDateYMD(candidate);
+    const candidateYMD = addDaysToYMD(earliest, i);
 
     // If subscription has a future start date, do not schedule delivery before start date
     if (subStartDate && candidateYMD < subStartDate) {
