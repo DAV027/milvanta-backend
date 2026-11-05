@@ -79,6 +79,7 @@ import {
   updateDeliveryStatus,
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
+import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -6643,6 +6644,42 @@ app.get('/api/v1/admin/inventory/:productId/history', { preHandler: app.requireA
     product: prodRows[0],
     history
   });
+});
+
+// Secure external scheduler trigger. This endpoint is not a payment or customer
+// API. It accepts NO user-selected date and works only after 20:00 IST to
+// generate delivery orders for the following morning. No on-server interval:
+// the Render instance may sleep; invoke via independently scheduled Cron.
+// generateDailyDeliveries() enforces captured payment, paid-through date,
+// valid address, pause/skip rules and UNIQUE(subscription_id, delivery_date).
+// Unattended cron additionally excludes Test Mode and unknown gateway keyMode
+// subscriptions so synthetic gateway payments cannot create real dispatches.
+app.post('/api/v1/internal/deliveries/generate', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const configured = process.env.DELIVERY_CRON_SECRET;
+  if (!isValidDeliveryWorkerSecret(configured)) {
+    return reply.code(503).send({ error: 'delivery_cron_not_configured' });
+  }
+  if (!verifyDeliveryWorkerSecret(request.headers['x-delivery-worker-secret'], configured)) {
+    return reply.code(401).send({ error: 'unauthorized' });
+  }
+  const plan = getDeliveryCronTarget();
+  if (!plan.allowed) {
+    return reply.code(409).send({ error: plan.reason });
+  }
+  try {
+    const result = await generateDailyDeliveries(pool, plan.targetDate, { rejectPastDates: true, liveGatewayOnly: true });
+    request.log.info({
+      targetDate: plan.targetDate,
+      generatedCount: result.generatedCount,
+      skippedCount: result.skippedCount,
+      totalActiveSubscriptions: result.totalActiveSubscriptions
+    }, 'Scheduled daily delivery generation completed');
+    return reply.send(result);
+  } catch (error) {
+    request.log.error({ errorType: error?.name || 'Error' }, 'Scheduled daily delivery generation failed');
+    return reply.code(503).send({ error: 'daily_delivery_generation_failed' });
+  }
 });
 
 // ---------- Internal Operations & Dispatch APIs (Admin Protected) ----------

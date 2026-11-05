@@ -5,6 +5,12 @@ on:
     paths:
       - 'src/email.js'
       - 'src/server.js'
+      - 'src/services/deliveryEngine.js'
+      - 'src/services/deliveryCronPolicy.js'
+      - 'tests/delivery-cron-policy.test.js'
+      - 'docs/DAILY_DELIVERY_CRON_RUNBOOK.md'
+      - 'workers/milvanta-delivery-cron/**'
+      - 'tests/delivery-cron-cloudflare-worker.test.js'
       - 'src/razorpaySubscriptionErrors.js'
       - 'tests/razorpay-subscription-400-diagnostics.test.js'
       - 'tests/order-email-subscription-gateway-regression.test.js'
@@ -40,6 +46,9 @@ jobs:
         run: |
           node --check src/email.js
           node --check src/server.js
+          node --check src/services/deliveryEngine.js
+          node --check src/services/deliveryCronPolicy.js
+          node --check tests/delivery-cron-policy.test.js
           node --check tests/order-email-subscription-gateway-regression.test.js
           node --check scripts/razorpay-readonly-diagnostic.mjs
           node --check tests/razorpay-readonly-diagnostic.test.js
@@ -49,9 +58,12 @@ jobs:
           node --check tests/razorpay-existing-test-plan-diagnostic.test.js
           node --check scripts/razorpay-subscription-test-probe.mjs
           node --check tests/razorpay-subscription-test-probe.test.js
+          node --check tests/delivery-cron-policy.test.js
+          node --check workers/milvanta-delivery-cron/index.mjs
+          node --check tests/delivery-cron-cloudflare-worker.test.js
           node --check tests/razorpay-webhook-contract-audit.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js
+        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest

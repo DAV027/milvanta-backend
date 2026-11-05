@@ -309,7 +309,7 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     // Fetch all currently active subscriptions
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
-              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.plan_type, cs.razorpay_subscription_id, cs.notes, cs.next_delivery, cs.created_at,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
@@ -318,6 +318,17 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     );
 
     for (const sub of activeSubs) {
+      // Unattended production dispatch must never include Razorpay Test Mode
+      // subscriptions that share the Neon database with live customers.
+      // Unknown/legacy mode is excluded unless an authorized manual operator
+      // explicitly chooses the existing admin generator instead.
+      if (options.liveGatewayOnly === true) {
+        const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+        if (notes.keyMode !== 'live') {
+          skippedCount++;
+          continue;
+        }
+      }
       const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
       if (!evalRes.eligible) {
         skippedCount++;
@@ -405,7 +416,7 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
   try {
     const { rows: activeSubs } = await client.query(
       `SELECT cs.id, cs.customer_id, cs.product_id, cs.product_name, cs.quantity, cs.quantity_num,
-              cs.cost_per_day_paise, cs.total_amount_paise, cs.notes, cs.next_delivery, cs.created_at,
+              cs.cost_per_day_paise, cs.total_amount_paise, cs.plan_type, cs.razorpay_subscription_id, cs.notes, cs.next_delivery, cs.created_at,
               c.full_name, c.phone, c.email
        FROM customer_subscriptions cs
        JOIN customers c ON c.id = cs.customer_id
