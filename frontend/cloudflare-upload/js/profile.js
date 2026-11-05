@@ -1148,7 +1148,16 @@ function formatIstDateTime(isoStr) {
       totalAmount: row.totalAmount || row.total_amount || 0,
       days: row.days || (row.customDays || 30),
       status: row.status || 'active',
-      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
+      // Prefer recalculated backend eligibility over legacy stored free-text.
+      // Never re-display the old literal "Tomorrow" without a confirmed date.
+      nextDelivery: (() => {
+        const raw = Object.prototype.hasOwnProperty.call(row, 'next_eligible_delivery')
+          ? row.next_eligible_delivery
+          : (row.next_delivery || row.nextDelivery);
+        return typeof raw === 'string' && raw.trim() && !/^tomorrow\b/i.test(raw.trim())
+          ? raw.trim()
+          : 'Pending delivery scheduling';
+      })()
     };
   }
 
@@ -1242,7 +1251,7 @@ function formatIstDateTime(isoStr) {
               <span class="sub-metric-label">NEXT MORNING DROP</span>
             </div>
             <div class="sub-metric-val ${isPaused ? 'text-paused' : 'text-active'}">
-              ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Tomorrow, 19 Oct')}
+              ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Pending delivery scheduling')}
             </div>
             <div class="sub-metric-sub">
               ${isPaused ? 'Tap resume above to restart daily drops' : 'Cold-chain dispatch by 6:00 AM'}
@@ -1292,7 +1301,7 @@ function formatIstDateTime(isoStr) {
             <div class="sub-delivery-stat-box">
               <span class="sub-delivery-stat-label">Last Fulfilled Date</span>
               <span class="sub-delivery-stat-val" style="font-size: 0.85rem; color: #475569;">
-                ${sub.last_delivered_at ? formatIstDateTime(sub.last_delivered_at) : 'Scheduled for first drop'}
+                ${sub.last_delivered_at ? formatIstDateTime(sub.last_delivered_at) : 'Not delivered yet'}
               </span>
             </div>
             <div class="sub-delivery-stat-box">
@@ -2905,12 +2914,10 @@ function formatIstDateTime(isoStr) {
     let totalDays = 0;
     const mList = [];
 
-    let startDate;
-    if (startOffset === 0) {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    } else {
-      startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
-    }
+    // The browser estimates the first eligible morning using the same IST cutoff
+    // as the backend, but never derives a paid-through entitlement on its own.
+    const schedule = window.MilvantaSubscriptionSchedule;
+    const firstYMD = schedule?.earliestFirstDeliveryYMD({ startOffset });
 
     for (let i = 0; i < count; i++) {
       const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
@@ -2924,12 +2931,10 @@ function formatIstDateTime(isoStr) {
       totalDays += daysInMonth;
     }
 
-    const endDate = new Date(startDate.getTime() + (totalDays - 1) * 24 * 60 * 60 * 1000);
-
-    const startFormatted = startOffset === 0
-      ? `Tomorrow, ${startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
-      : startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    const endFormatted = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const startFormatted = firstYMD
+      ? `From ${schedule.formatYMD(firstYMD)} (estimate)`
+      : 'Pending delivery scheduling';
+    const endFormatted = 'Confirmed after payment';
 
     let rangeLabel = '';
     if (count === 1) {
@@ -2938,7 +2943,7 @@ function formatIstDateTime(isoStr) {
       rangeLabel = `${mList[0].sName} ${mList[0].year} – ${mList[mList.length - 1].sName} ${mList[mList.length - 1].year} (${count} Months · ${totalDays} Days)`;
     }
 
-    return { totalDays, startDate, endDate, startFormatted, endFormatted, rangeLabel, mList };
+    return { totalDays, startFormatted, endFormatted, rangeLabel, mList };
   }
 
   // Create Subscription Modal Logic & Dynamic Pricing
@@ -3077,7 +3082,7 @@ function formatIstDateTime(isoStr) {
       const savings = days * (oneTimeRate - dailyRate);
 
       // Update Delivery Period Card
-      if ($('#profileSubPeriodDaysBadge')) $('#profileSubPeriodDaysBadge').textContent = `${days} Mornings`;
+      if ($('#profileSubPeriodDaysBadge')) $('#profileSubPeriodDaysBadge').textContent = `${days} days priced`;
       if ($('#profileSubPeriodStartDate')) $('#profileSubPeriodStartDate').textContent = startFormatted;
       if ($('#profileSubPeriodEndDate')) $('#profileSubPeriodEndDate').textContent = endFormatted;
 
