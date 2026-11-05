@@ -94,6 +94,11 @@ test('unattended cron excludes Test Mode and unknown-mode subscriptions', () => 
   assert.ok(part.includes('liveGatewayOnly: true'));
 });
 
+test('generator and preview retain Razorpay subscription identity for recurring paid-through rules', () => {
+  const selects=engine.match(/cs\\.plan_type, cs\\.razorpay_subscription_id, cs\\.notes/g)||[];
+  assert.equal(selects.length,2,'generation and preview must both retain gateway subscription ID');
+});
+
 test('cron does not create its own in-process timer and requires independent scheduling',()=>{
   const route="app.post('/api/v1/internal/deliveries/generate'";
   const part=server.slice(server.indexOf(route),server.indexOf('// ---------- Internal Operations & Dispatch APIs'));
