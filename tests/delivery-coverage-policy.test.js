@@ -13,6 +13,8 @@ import { getEffectivePaidThroughDate } from '../src/services/subscriptionService
 import { evaluateSubscriptionDeliveryEligibility } from '../src/services/deliveryEngine.js';
 
 const serverCode = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+const checkoutCode = fs.readFileSync(new URL('../frontend/js/checkout.js', import.meta.url), 'utf8');
+const profileCode = fs.readFileSync(new URL('../frontend/js/profile.js', import.meta.url), 'utf8');
 const validNotes = {
   deliveryCoverageOptIn: FIXED_30_DELIVERIES_POLICY,
   months: 1, days: 30,
@@ -138,4 +140,17 @@ test('server writes window only after captured cycle verification and on payment
   assert.ok(serverCode.includes('buildFixed30DeliveryCoverage({'));
   assert.ok(serverCode.includes('JSON.stringify(deliveryCoverage || {})'));
   assert.ok(serverCode.includes('validatedFixedDeliveryCoverage(sub)'));
+});
+
+
+test('customer checkout explains IST cutoff and profile prioritizes server schedule', () => {
+  assert.ok(checkoutCode.includes('checkoutDeliveryCutoffNotice'));
+  assert.ok(checkoutCode.includes('at or after 8:00 PM'));
+  assert.ok(checkoutCode.includes('This estimate is not a payment or delivery guarantee'));
+  assert.ok(profileCode.includes('row.next_eligible_delivery || row.next_delivery'));
+});
+
+test('captured subscription webhook preserves previously established delivery window atomically', () => {
+  assert.ok(serverCode.includes("WHEN COALESCE(notes, '{}'::jsonb) ? 'deliveryCoveragePolicy' THEN '{}'::jsonb"));
+  assert.ok(serverCode.includes('JSON.stringify(deliveryCoverage || {})'));
 });
