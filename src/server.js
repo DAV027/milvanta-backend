@@ -80,7 +80,7 @@ import {
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
-import { firstEligibleDeliveryDate, buildFixed30DeliveryCoverage } from './services/deliveryCoveragePolicy.js';
+import { FIXED_30_DELIVERIES_POLICY, firstEligibleDeliveryDate, buildFixed30DeliveryCoverage } from './services/deliveryCoveragePolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1729,7 +1729,9 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
-          keyMode
+          keyMode,
+          ...(fixedDeliveryCoverageEnabled && months === 1 && totalDays === 30
+            ? { deliveryCoverageOptIn: FIXED_30_DELIVERIES_POLICY } : {})
         })
       ]
     );
