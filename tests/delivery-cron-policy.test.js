@@ -72,7 +72,7 @@ test('production server defines exactly one guarded internal generation endpoint
   assert.match(body,/reply\.code\(401\)\.send\(\{ error: 'unauthorized' \}\)/);
   assert.match(body,/getDeliveryCronTarget\(\)/);
   assert.match(body,/if \(!plan\.allowed\)/);
-  assert.match(body,/generateDailyDeliveries\(pool, plan\.targetDate, \{ rejectPastDates: true \}\)/);
+  assert.ok(body.includes('generateDailyDeliveries(pool, plan.targetDate, { rejectPastDates: true, liveGatewayOnly: true })'));
   assert.doesNotMatch(body,/request\.body\??\.targetDate|request\.query\??\.targetDate/);
   assert.doesNotMatch(body,/reply\.send\(\{.*secret/);
 });
@@ -83,6 +83,14 @@ test('engine enforces paid entitlement, payment proof, valid address, and duplic
   assert.match(engine,/reason: 'missingOrInvalidAddress'/);
   assert.match(engine,/ON CONFLICT \(subscription_id, delivery_date\) DO NOTHING/);
   assert.match(engine,/WHERE cs\.status = 'active'/);
+});
+
+test('unattended cron excludes Test Mode and unknown-mode subscriptions', () => {
+  assert.ok(engine.includes('if (options.liveGatewayOnly === true)'));
+  assert.ok(engine.includes("if (notes.keyMode !== 'live')"));
+  const route="app.post('/api/v1/internal/deliveries/generate'";
+  const part=server.slice(server.indexOf(route),server.indexOf('// ---------- Internal Operations & Dispatch APIs'));
+  assert.ok(part.includes('liveGatewayOnly: true'));
 });
 
 test('cron does not create its own in-process timer and requires independent scheduling',()=>{
