@@ -80,6 +80,7 @@ import {
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { FIXED_30_DELIVERIES_POLICY, firstEligibleDeliveryDate, buildFixed30DeliveryCoverage, validatedFixedDeliveryCoverage } from './services/deliveryCoveragePolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1562,7 +1563,15 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
   const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
   const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
-  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
+  const fixedDeliveryCoverageEnabled = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true';
+  // Provisional date only; the paid coverage date is fixed when a captured
+  // billing-cycle payment is verified, not when checkout is opened.
+  const estimatedFirstDeliveryDate = fixedDeliveryCoverageEnabled
+    ? firstEligibleDeliveryDate(now, offset > 0 ? futureStartDateYMD : null)
+    : null;
+  const initialNextDelivery = estimatedFirstDeliveryDate
+    ? `${estimatedFirstDeliveryDate}, 6:00 AM – 7:00 AM`
+    : (offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM');
 
   // Cross-instance lock: a repeated click must not issue a second subscription
   // POST while the first one is still creating its gateway subscription.
@@ -1720,7 +1729,9 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
-          keyMode
+          keyMode,
+          ...(fixedDeliveryCoverageEnabled && months === 1 && totalDays === 30
+            ? { deliveryCoverageOptIn: FIXED_30_DELIVERIES_POLICY } : {})
         })
       ]
     );
@@ -2435,12 +2446,26 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
 
     // Verified captured billing-cycle payment: activate fulfillment!
-    const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
-      ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-      : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+    // Only a single captured cycle worth 30 daily milk deliveries qualifies.
+    // The flag is OFF by default, preserving existing billing semantics.
+    const deliveryCoverage = existingNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY
+      ? buildFixed30DeliveryCoverage({
+          notes: existingNotes,
+          paymentConfirmedAt: new Date(),
+          totalAmountPaise: subRow.total_amount_paise,
+          dailyRatePaise: subRow.cost_per_day_paise,
+          paidCount: Number(gatewaySub?.paid_count) || 1
+        })
+      : null;
+    const futureNextDelivery = deliveryCoverage?.deliveryFirstDate
+      ? `${deliveryCoverage.deliveryFirstDate}, 6:00 AM – 7:00 AM`
+      : (gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
+        ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
+        : (subRow.next_delivery || 'Tomorrow, 6:00 AM'));
 
     const updatedNotes = {
       ...existingNotes,
+      ...(deliveryCoverage || {}),
       subscriptionId: subId,
       razorpay_subscription_id: subId,
       lastPaymentId: paymentId,
@@ -5687,6 +5712,15 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               paidCount: actualPaidCount,
               months: currNotes.months || 1
             });
+            const deliveryCoverage = currNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY
+              ? buildFixed30DeliveryCoverage({
+                  notes: currNotes,
+                  paymentConfirmedAt: new Date(),
+                  totalAmountPaise: currentSub?.total_amount_paise,
+                  dailyRatePaise: currentSub?.cost_per_day_paise,
+                  paidCount: actualPaidCount
+                })
+              : null;
 
             await client.query(
               `UPDATE customer_subscriptions 
@@ -5712,7 +5746,10 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                      ),
                      '{lastPaymentId}',
                      COALESCE(to_jsonb($5::text), notes->'lastPaymentId', 'null'::jsonb)
-                   ),
+                   ) || CASE
+                     WHEN COALESCE(notes, '{}'::jsonb) ? 'deliveryCoveragePolicy' THEN '{}'::jsonb
+                     ELSE $6::jsonb
+                   END,
                    updated_at = NOW() 
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
                  AND status NOT IN ('cancelled', 'paused')`,
@@ -5721,7 +5758,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 subEntity.status || 'active',
                 actualPaidCount,
                 paidThroughYMD,
-                confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null)
+                confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null),
+                JSON.stringify(deliveryCoverage || {})
               ]
             );
           }
@@ -5774,7 +5812,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           // after charging the first (and only) month.
           // The month is FULLY PAID through its paid-through date; deliveries MUST remain ACTIVE!
           const { rows: subRows } = await client.query(
-            `SELECT id, status, notes, cost_per_day_paise, total_amount_paise, created_at, next_delivery
+            `SELECT id, status, notes, cost_per_day_paise, total_amount_paise, created_at, next_delivery, razorpay_subscription_id
              FROM customer_subscriptions
              WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
             [subEntity.id]
@@ -5803,8 +5841,10 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 })
               : null;
 
+            const fixedWindow = validatedFixedDeliveryCoverage(sub);
+            const deliveryCoverageEnd = fixedWindow?.lastDate || paidThroughDate;
             const nowYMD = new Date().toISOString().slice(0, 10);
-            const isStillWithinPaidPeriod = Boolean(paidThroughDate && paidThroughDate >= nowYMD);
+            const isStillWithinPaidPeriod = Boolean(deliveryCoverageEnd && deliveryCoverageEnd >= nowYMD);
 
             if (isPaid && isStillWithinPaidPeriod && sub.status !== 'cancelled' && sub.status !== 'paused') {
               // Fulfillment entitlement remains ACTIVE through paid-through period, while billingStatus is marked completed

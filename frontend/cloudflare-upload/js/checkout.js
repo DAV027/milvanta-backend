@@ -1207,6 +1207,10 @@
 
       ${paymentMethodHtml}
 
+      ${hasContinuous ? `<p id="checkoutDeliveryCutoffNotice" role="note" style="margin:12px 0;padding:10px 14px;border:1px solid #bae6fd;border-radius:8px;background:#f0f9ff;color:#0c4a6e;font-size:0.83rem;line-height:1.55;">
+        <strong>Delivery start:</strong> After your subscription payment is confirmed, orders confirmed before 8:00 PM IST can start the next morning; confirmations at or after 8:00 PM can start the morning after next. Your subscription profile shows the final eligible delivery date. This estimate is not a payment or delivery guarantee.
+      </p>` : ''}
+
       <p id="checkoutRazorpayFeeNotice" role="note" style="margin:12px 0; color:#475569; font-size:0.82rem; line-height:1.55;">
         <strong>Payment charges:</strong> The amount below is the Milvanta order total. Razorpay may add a convenience fee and applicable GST depending on the method selected. Razorpay will display its exact final payable amount before you authorize payment.
       </p>

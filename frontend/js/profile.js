@@ -1148,7 +1148,7 @@ function formatIstDateTime(isoStr) {
       totalAmount: row.totalAmount || row.total_amount || 0,
       days: row.days || (row.customDays || 30),
       status: row.status || 'active',
-      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
+      nextDelivery: row.next_eligible_delivery || row.next_delivery || row.nextDelivery || 'Pending Schedule'
     };
   }
 
