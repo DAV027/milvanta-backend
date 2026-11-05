@@ -14,6 +14,7 @@ import {
   getEffectivePaidThroughDate
 } from './subscriptionService.js';
 import { queueNotification } from './notificationService.js';
+import { validatedFixedDeliveryCoverage } from './deliveryCoveragePolicy.js';
 
 // Valid delivery lifecycle status transitions
 export const VALID_STATUS_TRANSITIONS = {
@@ -181,7 +182,8 @@ export async function evaluateSubscriptionDeliveryEligibility(client, sub, targe
   }
 
   // 3. Enforce valid subscription start date
-  const subStartDate = subNotes.startDate || subNotes.start_date ||
+  const fixedWindow = validatedFixedDeliveryCoverage(sub);
+  const subStartDate = fixedWindow?.firstDate || subNotes.startDate || subNotes.start_date ||
     (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
       ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
       : null) ||
