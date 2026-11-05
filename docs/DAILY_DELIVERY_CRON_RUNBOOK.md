@@ -14,6 +14,7 @@ The two Test Mode subscriptions were created on Nov 4 at **22:59 and 23:01 IST**
 - Sends only counts and target date in logs/response; never outputs customer data, secrets, account credentials or webhook values.
 - No Render in-process timer; on a sleeping/free Render instance, in-process cron would be unreliable. Use an **independent** scheduled trigger.
 - Existing admin preview and admin manual generation stay unchanged.
+- Delivery engine generation and preview now both select `plan_type` and `razorpay_subscription_id`, so recurring mandates cannot accidentally be treated as prepaid subscriptions for extension-day calculations.
 
 **No production migration, account configuration change, payment API call or production delivery order generation is performed by this PR.** Deployment and cron creation require owner approval.
 
