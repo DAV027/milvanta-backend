@@ -80,6 +80,7 @@ import {
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { firstEligibleDeliveryDate, buildFixed30DeliveryCoverage } from './services/deliveryCoveragePolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1562,7 +1563,15 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
   const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
   const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
-  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
+  const fixedDeliveryCoverageEnabled = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true';
+  // Provisional date only; the paid coverage date is fixed when a captured
+  // billing-cycle payment is verified, not when checkout is opened.
+  const estimatedFirstDeliveryDate = fixedDeliveryCoverageEnabled
+    ? firstEligibleDeliveryDate(now, offset > 0 ? futureStartDateYMD : null)
+    : null;
+  const initialNextDelivery = estimatedFirstDeliveryDate
+    ? `${estimatedFirstDeliveryDate}, 6:00 AM – 7:00 AM`
+    : (offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM');
 
   // Cross-instance lock: a repeated click must not issue a second subscription
   // POST while the first one is still creating its gateway subscription.
@@ -2435,12 +2444,26 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     }
 
     // Verified captured billing-cycle payment: activate fulfillment!
-    const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
-      ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-      : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+    // Only a single captured cycle worth 30 daily milk deliveries qualifies.
+    // The flag is OFF by default, preserving existing billing semantics.
+    const deliveryCoverage = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'
+      ? buildFixed30DeliveryCoverage({
+          notes: existingNotes,
+          paymentConfirmedAt: new Date(),
+          totalAmountPaise: subRow.total_amount_paise,
+          dailyRatePaise: subRow.cost_per_day_paise,
+          paidCount: Number(gatewaySub?.paid_count) || 1
+        })
+      : null;
+    const futureNextDelivery = deliveryCoverage?.deliveryFirstDate
+      ? `${deliveryCoverage.deliveryFirstDate}, 6:00 AM – 7:00 AM`
+      : (gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
+        ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
+        : (subRow.next_delivery || 'Tomorrow, 6:00 AM'));
 
     const updatedNotes = {
       ...existingNotes,
+      ...(deliveryCoverage || {}),
       subscriptionId: subId,
       razorpay_subscription_id: subId,
       lastPaymentId: paymentId,
