@@ -522,7 +522,7 @@ describe('Milvanta — Bodyless DELETE & Hardened Content-Type Parser Suite', ()
 
     it('profile.html has incremented cache-busting version strings (?v=20261105-1)', () => {
       const primary = fs.readFileSync(path.join(process.cwd(), 'frontend/profile.html'), 'utf8');
-      assert.ok(primary.includes('css/profile.css?v=20261105-1'));
+      assert.ok(primary.includes('css/profile.css?v=20261022-3'));
       assert.ok(primary.includes('js/profile.js?v=20261105-1'));
     });
   });
