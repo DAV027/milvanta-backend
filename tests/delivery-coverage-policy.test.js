@@ -135,7 +135,7 @@ test('server writes window only after captured cycle verification and on payment
   assert.match(serverCode, /MILVANTA_30_DELIVERY_DAYS_V1 === 'true'/);
   assert.match(serverCode, /deliveryCoverageOptIn: FIXED_30_DELIVERIES_POLICY/);
   assert.match(serverCode, /const deliveryCoverage = process\.env\.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'/);
-  assert.match(serverCode, /buildFixed30DeliveryCoverage\\(\\{/);
-  assert.match(serverCode, /JSON\\.stringify\\(deliveryCoverage \\|\\| \\{\\}\\)/);
-  assert.match(serverCode, /validatedFixedDeliveryCoverage\\(sub\\)/);
+  assert.ok(serverCode.includes('buildFixed30DeliveryCoverage({'));
+  assert.ok(serverCode.includes('JSON.stringify(deliveryCoverage || {})'));
+  assert.ok(serverCode.includes('validatedFixedDeliveryCoverage(sub)'));
 });
