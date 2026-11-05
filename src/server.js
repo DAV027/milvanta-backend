@@ -80,7 +80,7 @@ import {
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
-import { FIXED_30_DELIVERIES_POLICY, firstEligibleDeliveryDate, buildFixed30DeliveryCoverage } from './services/deliveryCoveragePolicy.js';
+import { FIXED_30_DELIVERIES_POLICY, firstEligibleDeliveryDate, buildFixed30DeliveryCoverage, validatedFixedDeliveryCoverage } from './services/deliveryCoveragePolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -5809,7 +5809,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
           // after charging the first (and only) month.
           // The month is FULLY PAID through its paid-through date; deliveries MUST remain ACTIVE!
           const { rows: subRows } = await client.query(
-            `SELECT id, status, notes, cost_per_day_paise, total_amount_paise, created_at, next_delivery
+            `SELECT id, status, notes, cost_per_day_paise, total_amount_paise, created_at, next_delivery, razorpay_subscription_id
              FROM customer_subscriptions
              WHERE razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1`,
             [subEntity.id]
@@ -5838,8 +5838,10 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 })
               : null;
 
+            const fixedWindow = validatedFixedDeliveryCoverage(sub);
+            const deliveryCoverageEnd = fixedWindow?.lastDate || paidThroughDate;
             const nowYMD = new Date().toISOString().slice(0, 10);
-            const isStillWithinPaidPeriod = Boolean(paidThroughDate && paidThroughDate >= nowYMD);
+            const isStillWithinPaidPeriod = Boolean(deliveryCoverageEnd && deliveryCoverageEnd >= nowYMD);
 
             if (isPaid && isStillWithinPaidPeriod && sub.status !== 'cancelled' && sub.status !== 'paused') {
               // Fulfillment entitlement remains ACTIVE through paid-through period, while billingStatus is marked completed
