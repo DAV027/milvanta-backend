@@ -1561,10 +1561,13 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       assert.ok(adminMatch, 'Admin subscriptions must display custom-days plan');
       assert.equal(adminMatch.notes.fulfillmentEntitled, true);
 
-      // 4. Delivery Preview includes custom days plan for tomorrow
+      // 4. Preview the subscription's actual first eligible morning, not blindly
+      // tomorrow: after the 20:00 IST cutoff, new prepaid plans start later.
+      const firstEligibleYMD = customSub.notes?.startDate;
+      assert.match(firstEligibleYMD, /^\d{4}-\d{2}-\d{2}$/);
       const previewRes = await app.inject({
         method: 'GET',
-        url: '/api/v1/operations/deliveries/generate-preview',
+        url: '/api/v1/operations/deliveries/generate-preview?targetDate=' + encodeURIComponent(firstEligibleYMD),
         headers: { Authorization: `Bearer ${tokenAdmin}` }
       });
       assert.equal(previewRes.statusCode, 200);
