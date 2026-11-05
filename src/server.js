@@ -5712,6 +5712,15 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               paidCount: actualPaidCount,
               months: currNotes.months || 1
             });
+            const deliveryCoverage = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'
+              ? buildFixed30DeliveryCoverage({
+                  notes: currNotes,
+                  paymentConfirmedAt: new Date(),
+                  totalAmountPaise: currentSub?.total_amount_paise,
+                  dailyRatePaise: currentSub?.cost_per_day_paise,
+                  paidCount: actualPaidCount
+                })
+              : null;
 
             await client.query(
               `UPDATE customer_subscriptions 
@@ -5737,7 +5746,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                      ),
                      '{lastPaymentId}',
                      COALESCE(to_jsonb($5::text), notes->'lastPaymentId', 'null'::jsonb)
-                   ),
+                   ) || $6::jsonb,
                    updated_at = NOW() 
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)
                  AND status NOT IN ('cancelled', 'paused')`,
@@ -5746,7 +5755,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 subEntity.status || 'active',
                 actualPaidCount,
                 paidThroughYMD,
-                confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null)
+                confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null),
+                JSON.stringify(deliveryCoverage || {})
               ]
             );
           }
