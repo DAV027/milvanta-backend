@@ -136,7 +136,8 @@ test('without verified coverage, paid-through date stays on the old billing path
 test('server writes window only after captured cycle verification and on payment-evidenced webhook',()=>{
   assert.match(serverCode, /MILVANTA_30_DELIVERY_DAYS_V1 === 'true'/);
   assert.match(serverCode, /deliveryCoverageOptIn: FIXED_30_DELIVERIES_POLICY/);
-  assert.match(serverCode, /const deliveryCoverage = process\.env\.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'/);
+  assert.ok(serverCode.includes('const deliveryCoverage = existingNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY'));
+  assert.ok(serverCode.includes('const deliveryCoverage = currNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY'));
   assert.ok(serverCode.includes('buildFixed30DeliveryCoverage({'));
   assert.ok(serverCode.includes('JSON.stringify(deliveryCoverage || {})'));
   assert.ok(serverCode.includes('validatedFixedDeliveryCoverage(sub)'));
