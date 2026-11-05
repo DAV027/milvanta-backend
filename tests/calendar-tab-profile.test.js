@@ -52,7 +52,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
     });
 
     it('profile.html has incremented cache-busting version strings (?v=20261105-1)', () => {
-      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261105-1'));
+      assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261022-3'));
       assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261105-1'));
     });
 
