@@ -87,9 +87,10 @@ export function validatedFixedDeliveryCoverage(sub) {
   const notes = sub?.notes;
   if (!notes || typeof notes !== 'object' || Array.isArray(notes) ||
       notes.deliveryCoveragePolicy !== FIXED_30_DELIVERIES_POLICY ||
+      notes.deliveryCoverageOptIn !== FIXED_30_DELIVERIES_POLICY ||
       notes.deliveryCoverageDays !== DAY_COUNT ||
       Number(notes.months) !== 1 || Number(notes.days) !== DAY_COUNT ||
-      notes.fulfillmentEntitled !== true || Number(notes.paidCount) < 1 ||
+      notes.fulfillmentEntitled !== true || Number(notes.paidCount) !== 1 ||
       !String(notes.lastPaymentId || '').trim() ||
       notes.authType === 'mandate_only' ||
       !(typeof sub.razorpay_subscription_id === 'string' &&
