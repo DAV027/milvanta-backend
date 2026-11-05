@@ -79,7 +79,7 @@ import {
   updateDeliveryStatus,
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
-import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -349,7 +349,9 @@ function safeAddress(input) {
 // atomically, with one server-authoritative source order line per delivery plan.
 async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
   const lines = Array.isArray(order?.items) ? order.items : [];
-  const startDate = getTomorrowDeliveryDateYMD();
+  // Paid prepaid deliveries start on the earliest morning allowed by IST cutoff.
+  // The paid-through date is derived from that start, preserving all purchased days.
+  const startDate = getEarliestPermittedDeliveryDateYMD();
   const address = order.address && typeof order.address === 'object' ? order.address : null;
   if (!startDate || !address) throw new Error('paid_subscription_address_or_start_missing');
 
