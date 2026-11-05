@@ -10,7 +10,7 @@ The two Test Mode subscriptions were created on Nov 4 at **22:59 and 23:01 IST**
 
 - New internal-only `POST /api/v1/internal/deliveries/generate` endpoint requires dedicated `DELIVERY_CRON_SECRET` (32–512 chars), matched using constant-time SHA-256.
 - Rejects all requests before **20:00 IST**; accepts only a server-computed **tomorrow in IST**, never a user-supplied date.
-- Calls existing `generateDailyDeliveries()` with `rejectPastDates: true`. The engine already requires confirmed paid entitlement, payment reference, address, non-paused/non-skipped date and guards duplicates using `UNIQUE(subscription_id, delivery_date)` / `ON CONFLICT DO NOTHING`.
+- Calls existing `generateDailyDeliveries()` with `rejectPastDates: true` and **`liveGatewayOnly: true`**. The cron specifically **excludes all Razorpay `keyMode: test` and unknown-mode subscriptions** from unattended fulfillment; only explicitly `keyMode: live` rows can be dispatched automatically. The engine also requires confirmed paid entitlement, payment reference, address, non-paused/non-skipped date and guards duplicates using `UNIQUE(subscription_id, delivery_date)` / `ON CONFLICT DO NOTHING`.
 - Sends only counts and target date in logs/response; never outputs customer data, secrets, account credentials or webhook values.
 - No Render in-process timer; on a sleeping/free Render instance, in-process cron would be unreliable. Use an **independent** scheduled trigger.
 - Existing admin preview and admin manual generation stay unchanged.
@@ -59,7 +59,7 @@ The Worker must have the secret present as an **encrypted binding** and not use 
 GET /api/v1/operations/deliveries/generate-preview?targetDate=2026-11-06
 ```
 
-This requires the existing **admin-authenticated session** and returns eligible/excluded counts; do not send its full customer list outside secure admin channels. For Nov 6, source-based read-only eligibility checks of subscriptions #4 and #5 indicate both have paid proof, valid saved default address and no skip/pause.
+This requires the existing **admin-authenticated session** and returns eligible/excluded counts; do not send its full customer list outside secure admin channels. For Nov 6, source-based read-only eligibility checks of subscriptions #4 and #5 indicate paid proof, valid saved default address and no skip/pause. **Both have `keyMode: test`, so the proposed unattended cron deliberately excludes them**. Use a disposable test DB to test fulfillment generation; do not auto-dispatch synthetic Test Mode customer records.
 
 7. Check next-day orders exist **once each** after cron runs. The existing admin reports route is `GET /api/v1/operations/deliveries?date=YYYY-MM-DD`. Operator may use protected manual `POST /api/v1/operations/deliveries/generate` if cron missed and before the morning dispatch, only under existing administrator authorization. The DB unique constraint makes repeated generation idempotent, but manual intervention should still be reconciled.
 8. Alert if active eligible subscriptions exist but `subscription_delivery_orders` has zero records for tomorrow. For critical fulfillment, set up external health/error monitoring—do not treat a successful checkout as proof of dispatch.
@@ -71,4 +71,4 @@ This requires the existing **admin-authenticated session** and returns eligible/
 - **No delivery guarantee from tests:** tests verify policy and existing engine contracts; genuine cron invocation and persisted delivery orders still need separately authorized end-to-end verification.
 - **Notification behavior:** reminder notifications are only queued by the engine for generated orders if `WHATSAPP_ENABLED === 'true'`. Existing Meta WhatsApp template and delivery status need separate check. Do not reintroduce Twilio.
 - **Email status:** four subscription email outbox rows for #4/#5 show `sent` and provider `accepted` on Nov 4, not independently verified inbox arrival.
-- **Never place Test Mode customers into actual driver fulfillment unintentionally.** Prior to enabling automated generation, confirm whether test subscriptions on production Neon should be excluded or safely flagged for non-dispatch. This needs an operational decision: the existing engine does not inherently know that `keyMode=test` means "nonphysical" fulfillment.
+- **Test Mode delivery safety:** unattended cron enforces `liveGatewayOnly:true`, skipping Test Mode and unknown-mode records in shared Neon. The existing administrator-controlled manual generator remains usable for authorized operational testing and does **not** impose that filter, so never manually generate/dispatch actual orders for synthetic Test Mode customers without an explicit nonphysical fulfillment procedure.
