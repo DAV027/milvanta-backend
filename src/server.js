@@ -2448,7 +2448,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     // Verified captured billing-cycle payment: activate fulfillment!
     // Only a single captured cycle worth 30 daily milk deliveries qualifies.
     // The flag is OFF by default, preserving existing billing semantics.
-    const deliveryCoverage = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'
+    const deliveryCoverage = existingNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY
       ? buildFixed30DeliveryCoverage({
           notes: existingNotes,
           paymentConfirmedAt: new Date(),
@@ -5712,7 +5712,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               paidCount: actualPaidCount,
               months: currNotes.months || 1
             });
-            const deliveryCoverage = process.env.MILVANTA_30_DELIVERY_DAYS_V1 === 'true'
+            const deliveryCoverage = currNotes.deliveryCoverageOptIn === FIXED_30_DELIVERIES_POLICY
               ? buildFixed30DeliveryCoverage({
                   notes: currNotes,
                   paymentConfirmedAt: new Date(),
