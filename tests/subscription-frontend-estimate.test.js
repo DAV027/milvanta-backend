@@ -20,7 +20,7 @@ test('client date estimate handles month/year rollovers and future start months'
   assert.equal(estimate({ now: new Date('2026-11-30T14:30:00Z') }), '2026-12-02');
   assert.equal(estimate({ now: new Date('2026-12-31T14:30:00Z') }), '2027-01-02');
   assert.equal(estimate({ now: new Date('2026-11-05T14:45:00Z'), startOffset: 1 }), '2026-12-01');
-  assert.equal(estimate({ now: new Date('2026-11-30T14:45:00Z'), startOffset: 1 }), '2026-12-01');
+  assert.equal(estimate({ now: new Date('2026-11-30T14:45:00Z'), startOffset: 1 }), '2026-12-02'); // cutoff wins over Dec 1
   assert.equal(formatYMD('2026-11-07').includes('Nov'), true);
 });
 
