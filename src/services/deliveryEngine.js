@@ -675,7 +675,7 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     // failure reporting remain available for an operator to correct bad rows.
     if (enforceLiveGateway && ['scheduled', 'packed', 'out_for_delivery', 'delivered'].includes(status)) {
       const { rows: subscriptionRows } = await client.query(
-        'SELECT notes FROM customer_subscriptions WHERE id = $1 FOR SHARE',
+        'SELECT notes FROM customer_subscriptions WHERE id = $1',
         [order.subscription_id]
       );
       const gatewayNotes = subscriptionRows[0]?.notes;
