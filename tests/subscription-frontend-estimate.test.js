@@ -24,6 +24,20 @@ test('client date estimate handles month/year rollovers and future start months'
   assert.equal(formatYMD('2026-11-07').includes('Nov'), true);
 });
 
+test('customer pricing month comes from IST, not device timezone', () => {
+  const before = context.MilvantaSubscriptionSchedule.currentIstYearMonth(new Date('2026-11-30T18:29:59Z'));
+  const after = context.MilvantaSubscriptionSchedule.currentIstYearMonth(new Date('2026-11-30T18:30:00Z'));
+  assert.equal(before.year, 2026);
+  assert.equal(before.monthIndex, 10);
+  assert.equal(after.year, 2026);
+  assert.equal(after.monthIndex, 11);
+
+  const storefront = read('../frontend/js/script.js');
+  const profile = read('../frontend/js/profile.js');
+  assert.match(storefront, /const \{ year, monthIndex \} = window\.MilvantaSubscriptionSchedule\.currentIstYearMonth\(\)/);
+  assert.match(profile, /const \{ year, monthIndex \} = window\.MilvantaSubscriptionSchedule\.currentIstYearMonth\(\)/);
+});
+
 test('helper fails closed on bad dates and offsets', () => {
   assert.throws(() => estimate({ now: new Date(NaN) }), /invalid_delivery_estimate_clock/);
   assert.throws(() => estimate({ startOffset: -1 }), /invalid_delivery_start_month_offset/);
