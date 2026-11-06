@@ -87,7 +87,8 @@ test('engine enforces paid entitlement, payment proof, valid address, and duplic
 });
 
 test('unattended cron excludes Test Mode and unknown-mode subscriptions', () => {
-  assert.ok(engine.includes('if (options.liveGatewayOnly === true)'));
+  assert.ok(engine.includes("process.env.NODE_ENV !== 'test' || options.liveGatewayOnly === true"));
+  assert.ok(engine.includes('if (enforceLiveGatewayOnly)'));
   assert.ok(engine.includes("if (notes.keyMode !== 'live')"));
   const route="app.post('/api/v1/internal/deliveries/generate'";
   const part=server.slice(server.indexOf(route),server.indexOf('// ---------- Internal Operations & Dispatch APIs'));
