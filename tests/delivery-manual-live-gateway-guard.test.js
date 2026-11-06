@@ -70,7 +70,11 @@ test('manual admin route and all operational previews require live gateway evide
 
 test('standalone scheduler cannot bypass production live-mode gate', () => {
   const source = fs.readFileSync(new URL('../scripts/daily-delivery-scheduler.js', import.meta.url), 'utf8');
-  assert.match(source, /generateDailyDeliveries\(pool/);
+  assert.match(source, /generateDailyDeliveries\(pool, plan\.targetDate, \{/);
+  assert.match(source, /liveGatewayOnly: true/);
+  assert.match(source, /getDeliveryCronTarget\(\)/);
+  assert.match(source, /DELIVERY_SCHEDULER_ENABLED !== 'true'/);
+  assert.doesNotMatch(source, /DELIVERY_SCHEDULER_ENABLED === 'false'/);
   // In production the engine itself hard-requires live mode for ALL callers.
   const code = fs.readFileSync(new URL('../src/services/deliveryEngine.js', import.meta.url), 'utf8');
   assert.match(code, /const enforceLiveGatewayOnly\s*=\s*process\.env\.NODE_ENV !== 'test' \|\| options\.liveGatewayOnly === true/);
