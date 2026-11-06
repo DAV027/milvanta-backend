@@ -1227,7 +1227,7 @@ function formatIstDateTime(isoStr) {
           <div class="sub-hero-info">
             <div class="sub-hero-badges">
               <span class="sub-badge-status ${isPaused ? 'paused' : 'active'}">
-                ${isPaused ? '⏸ Paused' : '● Active Schedule'}
+                ${isPaused ? '⏸ Paused' : '● Active Plan'}
               </span>
               <span class="sub-badge-qty">${escapeHtml(sub.quantity || '1 Litre')} Daily</span>
               <span class="sub-badge-plan">🔄 Continuous Autopay</span>
@@ -1248,13 +1248,13 @@ function formatIstDateTime(isoStr) {
           <div class="sub-metric-tile">
             <div class="sub-metric-header">
               <span class="sub-metric-icon">⏰</span>
-              <span class="sub-metric-label">NEXT MORNING DROP</span>
+              <span class="sub-metric-label">NEXT DELIVERY STATUS</span>
             </div>
             <div class="sub-metric-val ${isPaused ? 'text-paused' : 'text-active'}">
               ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Pending delivery scheduling')}
             </div>
             <div class="sub-metric-sub">
-              ${isPaused ? 'Tap resume above to restart daily drops' : 'Cold-chain dispatch by 6:00 AM'}
+              ${isPaused ? 'Tap resume above to restart your plan' : '6:00–7:00 AM IST when a delivery order is generated'}
             </div>
           </div>
 
