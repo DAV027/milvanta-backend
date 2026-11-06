@@ -100,6 +100,38 @@ test('Test Mode is explicitly marked not dispatchable even if paid', async () =>
   assert.equal(day.hasGeneratedDeliveryOrder, false);
 });
 
+test('absent, invalid and legacy gateway modes never appear eligible even with payment evidence', async () => {
+  const invalidModes = [undefined, null, '', 'unknown', 'unrecognized', 'LIVE', 'legacy'];
+  for (const keyMode of invalidModes) {
+    const notes = { ...paymentNotes };
+    if (keyMode === undefined) delete notes.keyMode;
+    else notes.keyMode = keyMode;
+    const day = dayFor(await mockedCalendar({ notes }));
+    assert.equal(day.status, 'mode_unverified', 'mode ' + String(keyMode));
+    assert.match(day.detail, /requires verification/i);
+    assert.equal(day.isEditable, false);
+    assert.equal(day.hasGeneratedDeliveryOrder, false);
+  }
+});
+
+test('an accidentally generated order in test or unknown mode is visible but NOT dispatch-ready', async () => {
+  const order = {
+    delivery_date: target, status: 'scheduled',
+    delivery_order_number: 'MV-LEGACY-SYNTHETIC'
+  };
+  for (const [keyMode, expected] of [['test', 'test_mode'], ['unrecognized', 'mode_unverified']]) {
+    const day = dayFor(await mockedCalendar({
+      notes: { ...paymentNotes, keyMode },
+      orders: [order]
+    }));
+    assert.equal(day.status, expected);
+    assert.equal(day.hasGeneratedDeliveryOrder, true);
+    assert.equal(day.deliveryOrderNumber, 'MV-LEGACY-SYNTHETIC');
+    assert.equal(day.isEditable, false);
+    assert.match(day.detail, /dispatch|operator verification/i);
+  }
+});
+
 test('future dates in vacation and customer skips are not called eligible', async () => {
   const pause = { pause_start_date: target, pause_end_date: addDaysToYMD(target, 2), reason: 'Family trip' };
   const vac = dayFor(await mockedCalendar({ pauses: [pause] }));
@@ -125,5 +157,7 @@ test('profile UI preserves source/upload parity and distinct eligible/actual-ord
   assert.match(profile, /Paid Days — Not Yet Scheduled/);
   assert.match(profile, /Orders Scheduled/);
   assert.match(profile, /status === 'test_mode'/);
+  assert.match(profile, /status === 'mode_unverified'/);
+  assert.match(profile, /statusType === 'mode_unverified'/);
   assert.doesNotMatch(profile, /fresh delivery starts tomorrow at 6:00 AM/i);
 });
