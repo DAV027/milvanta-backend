@@ -1,0 +1,42 @@
+name: Local subscription browser acceptance (NO DEPLOY)
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'scripts/verify-subscription-browser.mjs'
+      - '.github/workflows/subscription-browser-acceptance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-browser-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      # Browser script uses local mocked HTTP API, not production or staging.
+      NODE_ENV: test
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Install Chromium for local browser validation
+        run: npx playwright install --with-deps chromium
+      - name: Exercise actual frontend pages against loopback mock API
+        run: node scripts/verify-subscription-browser.mjs
+      - name: Save screenshots for human visual review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: milvanta-subscription-browser-qa-${{ github.run_id }}
+          path: tests/browser-artifacts/subscription-qa/*.png
+          if-no-files-found: warn
+          retention-days: 14
