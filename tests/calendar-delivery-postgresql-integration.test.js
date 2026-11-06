@@ -81,6 +81,7 @@ describe('Milvanta Real PostgreSQL Delivery Calendar & Concurrency Integration S
         customerId,
         JSON.stringify({
           fulfillmentEntitled: true,
+          keyMode: 'live',
           lastPaymentId: 'pay_synthetic_integration_captured',
           paidThroughDate: '2026-12-31',
           startDate: '2026-10-01',
