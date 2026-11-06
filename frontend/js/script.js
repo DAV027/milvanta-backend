@@ -592,17 +592,17 @@ function populateMilkPackSizeDropdown(product, selectedSize = '1 Litre') {
 }
 
 function getContinuousMonthsDetails(startOffset = 0, count = 1) {
-  const now = new Date();
+  const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
   let totalDays = 0;
   const monthList = [];
 
   for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const daysInMonth = new Date(y, m + 1, 0).getDate();
-    const shortName = d.toLocaleString('en-IN', { month: 'short' });
-    const longName = d.toLocaleString('en-IN', { month: 'long' });
+    const d = new Date(Date.UTC(year, monthIndex + startOffset + i, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const shortName = d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+    const longName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
     monthList.push({
       year: y,
       month: m,
@@ -650,13 +650,13 @@ function formatSubscriptionDates(startOffset = 0) {
 
 function populateSubscriptionMonths(selectElem) {
   if (!selectElem) return;
-  const now = new Date();
+  const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
   selectElem.innerHTML = '';
   for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const monthName = d.toLocaleString('en-IN', { month: 'long' });
+    const d = new Date(Date.UTC(year, monthIndex + i, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const monthName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
     const opt = document.createElement('option');
     opt.value = String(i);
     opt.textContent = i === 0 ? `${monthName} ${y} (Current Month)` : `${monthName} ${y}`;
