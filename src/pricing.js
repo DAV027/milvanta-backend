@@ -209,14 +209,22 @@ export function getMilkOneTimeRatePaise(product, sizeStr) {
 export function calculateContinuousMonthsDays(startOffset = 0, count = 1, referenceDate = new Date()) {
   const safeOffset = Math.max(0, Math.min(12, Number(startOffset) || 0));
   const safeCount = Math.max(1, Math.min(12, Number(count) || 1));
+  if (!(referenceDate instanceof Date) || Number.isNaN(referenceDate.getTime())) {
+    throw new Error('invalid_subscription_pricing_reference_date');
+  }
+  // The server can run in UTC while customers and the delivery cutoff run in
+  // IST. Always charge for the same calendar months shown by the storefront.
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit'
+  }).formatToParts(referenceDate);
+  const year = Number(parts.find(part => part.type === 'year')?.value);
+  const monthIndex = Number(parts.find(part => part.type === 'month')?.value) - 1;
   let totalDays = 0;
 
   for (let i = 0; i < safeCount; i++) {
-    const d = new Date(referenceDate.getFullYear(), referenceDate.getMonth() + safeOffset + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const daysInMonth = new Date(y, m + 1, 0).getDate();
-    totalDays += daysInMonth;
+    const startUTC = new Date(Date.UTC(year, monthIndex + safeOffset + i, 1));
+    const monthEndUTC = new Date(Date.UTC(startUTC.getUTCFullYear(), startUTC.getUTCMonth() + 1, 0));
+    totalDays += monthEndUTC.getUTCDate();
   }
 
   return totalDays;
