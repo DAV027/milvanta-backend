@@ -5050,7 +5050,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
       });
     }
   } else {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     totalDeliveries = preview.eligibleCount;
     for (const sub of preview.eligibleSubscriptions) {
       const pName = (sub.productName || '').toLowerCase();
@@ -5138,7 +5138,7 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
       packBreakdown[packKey].totalLitres += totalVolume;
     }
   } else {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     for (const sub of preview.eligibleSubscriptions) {
       const qNum = sub.quantityNum || 1;
       const parsed = parseMilkVolumeInLitres(sub.quantity, qNum, { returnObject: true });
@@ -6708,7 +6708,7 @@ app.get('/api/v1/operations/deliveries/generate-preview', { preHandler: app.requ
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { targetDate } = request.query || {};
   try {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     return reply.send(preview);
   } catch (err) {
     const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
@@ -6788,7 +6788,7 @@ app.post('/api/v1/operations/deliveries/generate', { preHandler: app.requireAdmi
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { targetDate } = request.body || {};
   try {
-    const result = await generateDailyDeliveries(pool, targetDate, { rejectPastDates: true });
+    const result = await generateDailyDeliveries(pool, targetDate, { rejectPastDates: true, liveGatewayOnly: true });
     return reply.send(result);
   } catch (err) {
     const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
