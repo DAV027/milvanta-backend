@@ -13,6 +13,11 @@
     return { year: part('year'), month: part('month'), day: part('day'), hour: part('hour') };
   }
 
+  function currentIstYearMonth(now = new Date()) {
+    const { year, month } = istParts(now);
+    return { year, monthIndex: month - 1 };
+  }
+
   function earliestFirstDeliveryYMD({ now = new Date(), startOffset = 0 } = {}) {
     const { year, month, day, hour } = istParts(now);
     const offset = Number(startOffset);
@@ -42,6 +47,7 @@
 
   scope.MilvantaSubscriptionSchedule = Object.freeze({
     earliestFirstDeliveryYMD,
+    currentIstYearMonth,
     formatYMD
   });
 })(typeof window !== 'undefined' ? window : globalThis);
