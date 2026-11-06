@@ -579,6 +579,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
         created_at: new Date('2026-10-01'),
         notes: {
           fulfillmentEntitled: true,
+          keyMode: 'live',
           paidThroughDate: '2026-11-30',
           startDate: '2026-10-01'
         }
