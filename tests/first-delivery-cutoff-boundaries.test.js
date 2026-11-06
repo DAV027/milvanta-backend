@@ -4,7 +4,6 @@ import fs from 'node:fs';
 
 import { getEarliestPermittedDeliveryDateYMD } from '../src/services/deliveryCronPolicy.js';
 import { addDaysToYMD, calculateNextDeliveryDate } from '../src/services/subscriptionService.js';
-import fs from 'node:fs';
 
 const utc = timestamp => new Date(timestamp);
 
