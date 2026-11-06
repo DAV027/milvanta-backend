@@ -298,6 +298,12 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     allowPastDates: process.env.NODE_ENV === 'test' && !options.rejectPastDates,
     ...options
   });
+  // Production physical order generation MUST require explicit live gateway
+  // evidence. No caller (including manual admin and standalone scripts) may
+  // bypass this with liveGatewayOnly:false. Legacy test fixtures can opt into
+  // their isolated test-only behavior; actual admin/cron routes pass true.
+  const enforceLiveGatewayOnly =
+    process.env.NODE_ENV !== 'test' || options.liveGatewayOnly === true;
 
   const { client, release } = await acquireClient(pool);
   let generatedCount = 0;
@@ -318,11 +324,9 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     );
 
     for (const sub of activeSubs) {
-      // Unattended production dispatch must never include Razorpay Test Mode
-      // subscriptions that share the Neon database with live customers.
-      // Unknown/legacy mode is excluded unless an authorized manual operator
-      // explicitly chooses the existing admin generator instead.
-      if (options.liveGatewayOnly === true) {
+      // All production generation paths reject Test Mode and missing/legacy
+      // gateway modes, including manual admin and standalone scheduled scripts.
+      if (enforceLiveGatewayOnly) {
         const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
         if (notes.keyMode !== 'live') {
           skippedCount++;
@@ -408,9 +412,12 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
  * Strictly read-only: does not insert any records.
  * Uses shared evaluateSubscriptionDeliveryEligibility() for 100% parity with generation.
  */
-export async function previewDailyDeliveries(pool, targetDateYMD = null) {
+export async function previewDailyDeliveries(pool, targetDateYMD = null, options = {}) {
   if (!pool) throw new Error('Database pool required');
   const targetDate = validateDeliveryTargetDate(targetDateYMD);
+  // Keep operator preview consistent with the production generation filter.
+  const enforceLiveGatewayOnly =
+    process.env.NODE_ENV !== 'test' || options.liveGatewayOnly === true;
 
   const { client, release } = await acquireClient(pool);
   try {
@@ -435,12 +442,28 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
       beyondEntitlement: 0,
       skippedDate: 0,
       onVacationOrPause: 0,
-      missingOrInvalidAddress: 0
+      missingOrInvalidAddress: 0,
+      gatewayModeNotLive: 0
     };
     const eligibleList = [];
     const excludedList = [];
 
     for (const sub of activeSubs) {
+      if (enforceLiveGatewayOnly) {
+        const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+        if (notes.keyMode !== 'live') {
+          skippedBreakdown.gatewayModeNotLive++;
+          excludedList.push({
+            subscriptionId: sub.id,
+            customerId: sub.customer_id,
+            customerName: sub.full_name,
+            productName: sub.product_name,
+            reason: 'gatewayModeNotLive',
+            exclusionMessage: 'Explicit live Razorpay gateway evidence is required before delivery order generation'
+          });
+          continue;
+        }
+      }
       const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
       if (!evalRes.eligible) {
         if (skippedBreakdown[evalRes.reason] !== undefined) {
