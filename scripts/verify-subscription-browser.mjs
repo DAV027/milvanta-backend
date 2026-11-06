@@ -141,6 +141,11 @@ async function storefront({ viewport, time, expectedDay, name, timezone = 'Asia/
     check(start.includes(expectedDay) && start.includes('estimate'), name + ' first date was ' + start);
     equal(paidThrough, 'Confirmed after payment', name + ' premature entitlement');
     check(/days priced/i.test(badge), name + ' badge did not distinguish priced versus delivered days');
+    if (name === 'cross-timezone-month-boundary') {
+      check(badge.startsWith('31 '), 'December IST must price 31 days, not device-local November: ' + badge);
+      const selected = await page.locator('#subStartMonthSelect option').first().innerText();
+      check(selected.includes('December 2026'), 'starting-month chooser must use IST December: ' + selected);
+    }
     check(await page.locator('#subPeriodCard').isVisible(), name + ' card hidden');
     const rect = await page.locator('#subPeriodCard').boundingBox();
     check(rect && rect.width <= viewport[0] + 12, name + ' card wider than viewport');
@@ -201,6 +206,8 @@ try {
     time:'2026-11-05T14:30:00Z', expectedDay:'7 Nov 2026'});
   await storefront({name:'cross-timezone-midnight', viewport:[360,740],
     time:'2026-11-05T18:30:00Z', timezone:'America/Los_Angeles', expectedDay:'7 Nov 2026'});
+  await storefront({name:'cross-timezone-month-boundary', viewport:[390,844],
+    time:'2026-11-30T18:30:00Z', timezone:'America/Los_Angeles', expectedDay:'2 Dec 2026'});
   await profileCalendar(390, 844, 'mobile');
   await profileCalendar(1440, 900, 'desktop');
   equal(attemptedMutations, 0, 'mock browser attempted POST/PATCH/DELETE');
