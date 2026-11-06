@@ -96,6 +96,8 @@ describe('Milvanta — Bodyless DELETE & Hardened Content-Type Parser Suite', ()
         customerId,
         JSON.stringify({
           fulfillmentEntitled: true,
+          keyMode: 'live',
+          lastPaymentId: 'pay_synthetic_bodyless_captured',
           paidThroughDate: '2026-12-31',
           startDate: '2026-10-01',
           paidCount: 1,
