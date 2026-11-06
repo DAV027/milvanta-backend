@@ -631,6 +631,7 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
   let actor = 'driver';
   let notes = null;
   let reason = null;
+  let enforceLiveGateway = process.env.NODE_ENV !== 'test';
 
   if (orderIdOrParams && typeof orderIdOrParams === 'object') {
     deliveryOrderId = orderIdOrParams.deliveryOrderId;
@@ -638,12 +639,14 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     actor = orderIdOrParams.actor || 'driver';
     notes = orderIdOrParams.notes || orderIdOrParams.driverNotes || null;
     reason = orderIdOrParams.reason || orderIdOrParams.failureReason || orderIdOrParams.failedReason || null;
+    enforceLiveGateway = enforceLiveGateway || orderIdOrParams.enforceLiveGateway === true;
   } else {
     deliveryOrderId = orderIdOrParams;
     status = maybeStatus;
     actor = options.actor || 'driver';
     notes = options.notes || options.driverNotes || null;
     reason = options.reason || options.failedReason || null;
+    enforceLiveGateway = enforceLiveGateway || options.enforceLiveGateway === true;
   }
 
   const { client, release } = await acquireClient(pool);
@@ -666,6 +669,26 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
 
     const order = rows[0];
     const allowed = VALID_STATUS_TRANSITIONS[order.status] || [];
+
+    // Do not let manually created legacy or Test Mode rows progress into
+    // packing, physical dispatch or false delivered events. Cancellation and
+    // failure reporting remain available for an operator to correct bad rows.
+    if (enforceLiveGateway && ['scheduled', 'packed', 'out_for_delivery', 'delivered'].includes(status)) {
+      const { rows: subscriptionRows } = await client.query(
+        'SELECT notes FROM customer_subscriptions WHERE id = $1 FOR SHARE',
+        [order.subscription_id]
+      );
+      const gatewayNotes = subscriptionRows[0]?.notes;
+      if (!gatewayNotes || gatewayNotes.keyMode !== 'live') {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'delivery_gateway_mode_not_verified',
+          message: 'Live Razorpay payment mode must be verified before physical fulfillment can progress',
+          statusCode: 409
+        };
+      }
+    }
 
     if (!allowed.includes(status)) {
       await client.query('ROLLBACK');
