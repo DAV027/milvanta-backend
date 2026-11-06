@@ -134,7 +134,7 @@ function formatIstDateTime(isoStr) {
   }
 
   function renderSubDeliveryStatusBadge(status) {
-    const s = String(status || 'scheduled').toLowerCase();
+    const s = String(status || 'unknown').toLowerCase();
     if (s === 'delivered') {
       return '<span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">✔ Delivered</span>';
     } else if (s === 'out_for_delivery') {
@@ -144,7 +144,10 @@ function formatIstDateTime(isoStr) {
     } else if (s === 'failed') {
       return '<span style="background:#fee2e2; color:#b91c1c; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">⚠️ Delivery Failed</span>';
     }
-    return '<span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🥛 Scheduled</span>';
+    if (s === 'scheduled') {
+      return '<span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🥛 Scheduled</span>';
+    }
+    return '<span style="background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">Not delivered yet</span>';
   }
 
   function switchTab(tabId) {
