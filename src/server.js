@@ -6812,6 +6812,7 @@ app.post('/api/v1/operations/deliveries/:id/status', { preHandler: app.requireAd
   const result = await updateDeliveryStatus(pool, {
     deliveryOrderId,
     status,
+    enforceLiveGateway: true,
     actor: authoritativeActor,
     notes,
     reason: reason || failureReason,
