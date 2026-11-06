@@ -2948,7 +2948,7 @@ function formatIstDateTime(isoStr) {
 
   // Continuous Months calculation helper
   function getContinuousMonthsDetails(startOffset = 0, count = 1) {
-    const now = new Date();
+    const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
     let totalDays = 0;
     const mList = [];
 
@@ -2958,12 +2958,12 @@ function formatIstDateTime(isoStr) {
     const firstYMD = schedule?.earliestFirstDeliveryYMD({ startOffset });
 
     for (let i = 0; i < count; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
-      const y = d.getFullYear();
-      const m = d.getMonth();
-      const daysInMonth = new Date(y, m + 1, 0).getDate();
-      const sName = d.toLocaleString('en-IN', { month: 'short' });
-      const lName = d.toLocaleString('en-IN', { month: 'long' });
+      const d = new Date(Date.UTC(year, monthIndex + startOffset + i, 1));
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth();
+      const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      const sName = d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+      const lName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
 
       mList.push({ year: y, month: m, sName, lName, days: daysInMonth });
       totalDays += daysInMonth;
@@ -3050,14 +3050,14 @@ function formatIstDateTime(isoStr) {
 
     function populateProfileMonths() {
       if (!monthSelect) return;
-      const now = new Date();
+      const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
       monthSelect.innerHTML = '';
       for (let i = 0; i < 6; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-        const y = d.getFullYear();
-        const m = d.getMonth();
-        const monthName = d.toLocaleString('en-IN', { month: 'long' });
-        const days = new Date(y, m + 1, 0).getDate();
+        const d = new Date(Date.UTC(year, monthIndex + i, 1));
+        const y = d.getUTCFullYear();
+        const m = d.getUTCMonth();
+        const monthName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
+        const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
         const opt = document.createElement('option');
         opt.value = String(i);
         opt.textContent = i === 0 ? `${monthName} ${y} (Starts Now · ${days} Days)` : `${monthName} ${y} (${days} Days)`;
