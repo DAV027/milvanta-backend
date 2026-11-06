@@ -1627,6 +1627,11 @@ function formatIstDateTime(isoStr) {
         statusClass = 'pending';
         statusText = 'Test payment — no physical delivery';
         ctaHtml = '<span style="font-size:0.82rem; color:#64748b;">No dispatch</span>';
+      } else if (status === 'mode_unverified') {
+        stripClass = 'is-paused';
+        statusClass = 'pending';
+        statusText = 'Payment gateway verification required — no dispatch confirmed';
+        ctaHtml = '<span style="font-size:0.82rem; color:#92400e;">Awaiting operator verification</span>';
       } else if (status === 'skipped') {
         stripClass = 'is-paused';
         statusClass = 'paused';
@@ -1994,6 +1999,8 @@ function formatIstDateTime(isoStr) {
         badgeHtml = '<span class="cal-icon-badge badge-pending" title="Paid eligible date — delivery order not generated">○</span>';
       } else if (statusType === 'test_mode') {
         badgeHtml = '<span class="month-cal-day-badge badge-none" title="Test Mode — no physical delivery">T</span>';
+      } else if (statusType === 'mode_unverified') {
+        badgeHtml = '<span class="month-cal-day-badge badge-none" title="Unverified payment gateway mode — no dispatch">?</span>';
       } else if (statusType === 'scheduled') {
         scheduledCount++;
         if (isToday) {
@@ -2124,6 +2131,9 @@ function formatIstDateTime(isoStr) {
     } else if (status === 'test_mode') {
       statusBadge = '<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Test Mode — No Dispatch</span>';
       actionBtn = '<span style="font-size:0.82rem; color:#64748b;">No physical delivery is scheduled for test payments</span>';
+    } else if (status === 'mode_unverified') {
+      statusBadge = '<span style="background:#fef3c7; color:#92400e; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Gateway Verification Required</span>';
+      actionBtn = '<span style="font-size:0.82rem; color:#92400e;">Physical delivery cannot be confirmed until gateway mode is verified</span>';
     } else if (status === 'scheduled') {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       if (isEditable) {
