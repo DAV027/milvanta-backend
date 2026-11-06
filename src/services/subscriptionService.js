@@ -11,6 +11,17 @@ import { getEarliestPermittedDeliveryDateYMD } from './deliveryCronPolicy.js';
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
 
 /**
+ * Strictly interpret a recorded Razorpay key mode. An absent, legacy, or
+ * unrecognized mode must never be inferred as live from a paidThroughDate,
+ * payment ID, subscription status, or the current server configuration.
+ */
+export function getSubscriptionGatewayMode(notes) {
+  const mode = notes && typeof notes === 'object' ? notes.keyMode : null;
+  return mode === 'live' || mode === 'test' ? mode : 'unverified';
+}
+
+
+/**
  * Universal pool/client connector
  * Allows running with either a pg.Pool or a dedicated pg.Client
  */
@@ -452,6 +463,11 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
       subNotes.authType !== 'mandate_only'
     );
     if (!hasPayment) return 'Pending Billing Cycle Payment';
+    // This is only a potential next morning, NOT a promise of a generated order.
+    // Explicit live-mode evidence must precede any physical-delivery estimate.
+    const gatewayMode = getSubscriptionGatewayMode(subNotes);
+    if (gatewayMode === 'test') return 'Test Mode — No Physical Delivery';
+    if (gatewayMode !== 'live') return 'Payment Gateway Verification Required';
     subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
     if (!subPaidThroughEndDate) return 'Pending delivery scheduling';
     if (subPaidThroughEndDate < earliest) return 'Subscription Period Ended';
@@ -1314,6 +1330,7 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
   const subPaidThroughEndDate = hasPaidFulfillmentEvidence
     ? await getEffectivePaidThroughDate(pool, sub)
     : null;
+  const gatewayMode = getSubscriptionGatewayMode(subNotes);
 
   const days = [];
   for (let d = 1; d <= daysInMonth; d++) {
@@ -1340,6 +1357,14 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       (order?.status === 'cancelled' && order.failed_reason === 'Delivery date skipped by customer')) {
       status = 'skipped';
       detail = skipMap.get(dateStr) || 'Skipped by customer';
+    } else if (order && ['scheduled', 'packed', 'out_for_delivery'].includes(order.status) &&
+               gatewayMode !== 'live') {
+      // The persisted order remains visible as provenance; without explicit
+      // live-mode proof it is NOT customer-confirmed as dispatch-ready.
+      status = gatewayMode === 'test' ? 'test_mode' : 'mode_unverified';
+      detail = gatewayMode === 'test'
+        ? 'Test Mode: delivery order exists, but no physical dispatch is authorized'
+        : 'Delivery order exists, but gateway mode needs operator verification before dispatch';
     } else if (order) {
       // Respect an actual persisted operational order status, never synthesize one.
       status = order.status;
@@ -1380,10 +1405,13 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
     } else if (dateStr < todayYMD) {
       status = 'past';
       detail = 'No delivery order recorded';
-    } else if (subNotes.keyMode === 'test') {
+    } else if (gatewayMode === 'test') {
       // Razorpay Test Mode never represents a promised physical milk delivery.
       status = 'test_mode';
       detail = 'Test Mode payment; no physical delivery order generated';
+    } else if (gatewayMode !== 'live') {
+      status = 'mode_unverified';
+      detail = 'Payment gateway mode requires verification before physical delivery scheduling';
     } else if (sub.status === 'active') {
       status = 'eligible';
       detail = 'Paid delivery entitlement — order not generated yet';
@@ -1400,7 +1428,9 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       productName: sub.product_name,
       quantity: sub.quantity,
       isToday: dateStr === todayYMD,
-      isEditable: !isDeliveryCutoffPassed(dateStr)
+      isEditable: gatewayMode === 'live' &&
+        ['scheduled', 'eligible', 'skipped'].includes(status) &&
+        !isDeliveryCutoffPassed(dateStr)
     });
   }
 
