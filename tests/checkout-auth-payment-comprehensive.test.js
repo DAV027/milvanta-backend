@@ -1560,6 +1560,7 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       const adminMatch = adminData.subscriptions.find(s => s.id === customSub.id);
       assert.ok(adminMatch, 'Admin subscriptions must display custom-days plan');
       assert.equal(adminMatch.notes.fulfillmentEntitled, true);
+      assert.equal(adminMatch.notes.keyMode, 'test', 'Test Mode capture must not authorize a physical milk delivery');
 
       // 4. Preview the subscription's actual first eligible morning, not blindly
       // tomorrow: after the 20:00 IST cutoff, new prepaid plans start later.
@@ -1572,7 +1573,16 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       });
       assert.equal(previewRes.statusCode, 200);
       const previewData = previewRes.json();
-      assert.ok(previewData.eligibleSubscriptions.length >= 1, 'Delivery preview must include entitled subscriptions');
+      assert.ok(
+        previewData.excludedSubscriptions.some(row =>
+          Number(row.subscriptionId) === Number(customSub.id) &&
+          row.reason === 'gatewayModeNotLive'),
+        'Captured Razorpay Test Mode may be active financially but must be excluded from physical delivery preview'
+      );
+      assert.ok(
+        !previewData.eligibleSubscriptions.some(row => Number(row.subscriptionId) === Number(customSub.id)),
+        'Test Mode must never appear dispatch-eligible'
+      );
     });
 
     it('rejects verification callback with mismatched currency, mismatched amount, or mismatched order ID', async (t) => {
