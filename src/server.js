@@ -349,6 +349,11 @@ function safeAddress(input) {
 // atomically, with one server-authoritative source order line per delivery plan.
 async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
   const lines = Array.isArray(order?.items) ? order.items : [];
+  // A verified gateway capture may be Test Mode. Stamp the actual key MODE at
+  // materialization, not the public key or secret and never assume legacy=live.
+  const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || '');
+  const keyMode = razorpayKeyId.startsWith('rzp_live_')
+    ? 'live' : (razorpayKeyId.startsWith('rzp_test_') ? 'test' : 'unrecognized');
   // Paid prepaid deliveries start on the earliest morning allowed by IST cutoff.
   // The paid-through date is derived from that start, preserving all purchased days.
   const startDate = getEarliestPermittedDeliveryDateYMD();
@@ -381,6 +386,7 @@ async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
         lastPaymentId: capturedPaymentId,
         fulfillmentEntitled: true,
         authType: 'one_time',
+        keyMode,
         paidCount: 1,
         startDate,
         paidThroughDate,
