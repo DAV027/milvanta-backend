@@ -1,0 +1,63 @@
+name: Build and verify Cloudflare frontend archive (NO DEPLOY)
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'scripts/build-cloudflare-zip.py'
+      - 'scripts/verify-cloudflare-zip.py'
+      - 'tests/test_verify_cloudflare_zip.py'
+      - '.github/workflows/cloudflare-frontend-archive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-verified-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out pull request source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate ZIP freshness and secret-detection rules against fixtures
+        run: python -m unittest discover -s tests -p test_verify_cloudflare_zip.py -v
+
+      - name: Rebuild both Cloudflare ZIPs from THIS commit
+        run: python scripts/build-cloudflare-zip.py
+
+      - name: Verify every archived byte, critical source mirrors and release file list
+        run: python scripts/verify-cloudflare-zip.py
+
+      - name: Publish verified archive and manifest for manual download
+        uses: actions/upload-artifact@v4
+        with:
+          name: milvanta-cloudflare-verified-${{ github.run_id }}
+          path: |
+            milvanta-cloudflare-upload.zip
+            milvanta-cloudflare-upload-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Report verification in workflow summary
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          m = json.loads(Path('milvanta-cloudflare-upload-manifest.json').read_text())
+          summary = (
+              "### Verified Cloudflare frontend archive (not deployed)\n\n"
+              f"- Files in ZIP: **{m['file_count']}**\n"
+              f"- SHA256: {m['zip_sha256']}\n"
+              "- ZIP and full per-file SHA256 manifest are in this workflow run's Artifacts section.\n"
+              "- This workflow does not deploy to Cloudflare or touch production accounts.\n"
+          )
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as stream:
+              stream.write(summary)
+          PY
