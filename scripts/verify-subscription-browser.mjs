@@ -34,6 +34,7 @@ function calendarData(query) {
     ['2026-11-09', ['skipped', 'Customer skipped']],
     ['2026-11-10', ['delivered', 'Delivered at 6:30 AM']],
     ['2026-11-11', ['test_mode', 'Test Mode, no dispatch']],
+    ['2026-11-12', ['mode_unverified', 'Gateway mode requires operator verification']],
   ]);
   return {
     subscriptionId: 123, productName: 'Pure Cow Milk', quantity: '1 Litre', year, month,
@@ -175,6 +176,14 @@ async function profileCalendar(width, height, name) {
     await page.locator('#profileMonthlyCalendarGrid [data-date-key="2026-11-08"]').click();
     check((await page.locator('#calSelectedDayCard').innerText()).includes('Scheduled Morning Drop'),
       'actual delivery order inspector not scheduled');
+    equal(await page.locator('#profileMonthlyCalendarGrid [data-date-key="2026-11-12"]').getAttribute('data-status'),
+      'mode_unverified', 'unknown gateway mode must not appear eligible/scheduled');
+    await page.locator('#profileMonthlyCalendarGrid [data-date-key="2026-11-12"]').click();
+    const modeInspector = await page.locator('#calSelectedDayCard').innerText();
+    check(modeInspector.includes('Gateway Verification Required'),
+      'unverified gateway mode not disclosed in day inspector');
+    check(!(await page.locator('#calSelectedDayCard #btnToggleDayDelivery').count()),
+      'unverified gateway day offered a delivery mutation action');
 
     await page.locator('#profileMonthlyCalendarCard').screenshot({
       path: path.join(screenshots, name + '-calendar.png')
