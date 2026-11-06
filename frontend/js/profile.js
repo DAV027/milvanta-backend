@@ -1584,9 +1584,9 @@ function formatIstDateTime(isoStr) {
       const status = tomDayData.status;
       const isDayEditable = tomDayData.isEditable !== false && !isCutoffPassed;
 
-      let stripClass = 'is-scheduled';
-      let statusClass = 'scheduled';
-      let statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
+      let stripClass = 'is-unknown';
+      let statusClass = 'unknown';
+      let statusText = 'Delivery status unavailable';
       let ctaHtml = '';
 
       if (status === 'scheduled') {
@@ -1606,6 +1606,24 @@ function formatIstDateTime(isoStr) {
             </span>
           `;
         }
+      } else if (status === 'eligible') {
+        stripClass = 'is-checking';
+        statusClass = 'checking';
+        statusText = 'Paid day eligible — delivery order not generated';
+        if (isDayEditable) {
+          ctaHtml = `
+            <button type="button" class="btn-tomorrow-toggle-action skip" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="skip">
+              ⏸ Skip This Day
+            </button>
+          `;
+        } else {
+          ctaHtml = '<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Awaiting delivery-order scheduling</span>';
+        }
+      } else if (status === 'test_mode') {
+        stripClass = 'is-paused';
+        statusClass = 'pending';
+        statusText = 'Test payment — no physical delivery';
+        ctaHtml = '<span style="font-size:0.82rem; color:#64748b;">No dispatch</span>';
       } else if (status === 'skipped') {
         stripClass = 'is-paused';
         statusClass = 'paused';
@@ -1911,6 +1929,7 @@ function formatIstDateTime(isoStr) {
     const prevMonthDays = new Date(year, month, 0).getDate();
 
     let scheduledCount = 0;
+    let eligibleCount = 0;
     let deliveredCount = 0;
     let pausedCount = 0;
 
@@ -1967,6 +1986,11 @@ function formatIstDateTime(isoStr) {
         badgeHtml = `<span class="month-cal-day-badge badge-none">×</span>`;
       } else if (statusType === 'past') {
         badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
+      } else if (statusType === 'eligible') {
+        eligibleCount++;
+        badgeHtml = '<span class="cal-icon-badge badge-pending" title="Paid eligible date — delivery order not generated">○</span>';
+      } else if (statusType === 'test_mode') {
+        badgeHtml = '<span class="month-cal-day-badge badge-none" title="Test Mode — no physical delivery">T</span>';
       } else if (statusType === 'scheduled') {
         scheduledCount++;
         if (isToday) {
@@ -2014,7 +2038,8 @@ function formatIstDateTime(isoStr) {
         <div style="display:flex; align-items:center; gap:6px;">
           <strong style="color:#0f172a;">${monthNames[month]} Overview:</strong>
         </div>
-        <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
+        <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Orders Scheduled</span>
+        ${eligibleCount > 0 ? `<span style="background:#fff7ed; color:#9a3412; padding:3px 8px; border-radius:6px; font-weight:700;">◯ ${eligibleCount} Paid Days — Not Yet Scheduled</span>` : ''}
         <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
         ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused/Skipped</span>` : ''}
         <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM IST</strong></span>
@@ -2025,9 +2050,9 @@ function formatIstDateTime(isoStr) {
     const initialDayData = dayMap.get(selectedCalDate) || {
       date: selectedKey,
       day: selectedCalDate,
-      status: 'scheduled',
-      detail: '',
-      isEditable: true,
+      status: 'unknown',
+      detail: 'Delivery status unavailable',
+      isEditable: false,
       productName: calSubInfo?.productName || 'Milk Plan',
       quantity: calSubInfo?.quantity || '500 ml'
     };
@@ -2086,6 +2111,16 @@ function formatIstDateTime(isoStr) {
     } else if (status === 'past') {
       statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Past Date</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">No past delivery recorded</span>`;
+    } else if (status === 'eligible') {
+      statusBadge = '<span style="background:#fff7ed; color:#9a3412; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Paid Day Eligible — Order Pending</span>';
+      if (isEditable) {
+        actionBtn = '<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip This Day</button>';
+      } else {
+        actionBtn = '<span style="font-size:0.82rem; color:#64748b;">Delivery order not generated</span>';
+      }
+    } else if (status === 'test_mode') {
+      statusBadge = '<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Test Mode — No Dispatch</span>';
+      actionBtn = '<span style="font-size:0.82rem; color:#64748b;">No physical delivery is scheduled for test payments</span>';
     } else if (status === 'scheduled') {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       if (isEditable) {
@@ -2128,7 +2163,7 @@ function formatIstDateTime(isoStr) {
             method: 'DELETE'
           });
           showToast(`▶ Delivery resumed for ${formattedDate}!`);
-        } else if (status === 'scheduled') {
+        } else if (status === 'scheduled' || status === 'eligible') {
           await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/skip-date`, {
             method: 'POST',
             body: JSON.stringify({ skipDate: dateKey, reason: 'Customer single-day skip' })
@@ -2152,7 +2187,7 @@ function formatIstDateTime(isoStr) {
       const cleanUrl = `${window.location.pathname}?tab=subscription`;
       window.history.replaceState({}, document.title, cleanUrl);
       setTimeout(() => {
-        showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
+        showToast('Subscription return received. Check your profile for verified payment and delivery scheduling status.');
       }, 500);
     }
   }
