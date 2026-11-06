@@ -81,6 +81,7 @@ describe('Milvanta Real PostgreSQL Delivery Calendar & Concurrency Integration S
         customerId,
         JSON.stringify({
           fulfillmentEntitled: true,
+          lastPaymentId: 'pay_synthetic_integration_captured',
           paidThroughDate: '2026-12-31',
           startDate: '2026-10-01',
           paidCount: 3,
@@ -504,7 +505,7 @@ describe('Milvanta Real PostgreSQL Delivery Calendar & Concurrency Integration S
     });
     const resumedDay = calAfter.days.find(d => d.date === vacStart);
     assert.ok(resumedDay);
-    assert.strictEqual(resumedDay.status, 'scheduled', 'Resumed future date must show scheduled, not vacation');
+    assert.strictEqual(resumedDay.status, 'eligible', 'Resumed future date without an order must show eligible, not scheduled');
   });
 
   // -------------------------------------------------------------------------
