@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { generateDailyDeliveries, previewDailyDeliveries } from '../src/services/deliveryEngine.js';
+import { generateDailyDeliveries, previewDailyDeliveries, updateDeliveryStatus } from '../src/services/deliveryEngine.js';
 import { getEarliestPermittedDeliveryDateYMD } from '../src/services/deliveryCronPolicy.js';
 
 const deliveryDate = getEarliestPermittedDeliveryDateYMD();
@@ -65,7 +65,68 @@ test('manual admin route and all operational previews require live gateway evide
   assert.match(code.slice(routeStart, routeEnd),
     /generateDailyDeliveries\(pool, targetDate, \{ rejectPastDates: true, liveGatewayOnly: true \}\)/);
   assert.equal((code.match(/previewDailyDeliveries\(pool, targetDate, \{ liveGatewayOnly: true \}\)/g) || []).length, 3);
+  assert.match(code, /enforceLiveGateway: true,/);
   assert.match(code, /generateDailyDeliveries\(pool, plan\.targetDate, \{ rejectPastDates: true, liveGatewayOnly: true \}\)/);
+});
+
+function statusPool(mode) {
+  const calls = [];
+  const order = {
+    id: 12, status: 'scheduled', subscription_id: 51, customer_id: 1,
+    delivery_date: deliveryDate, phone: null, delivery_order_number: 'MV-SYNTHETIC-12'
+  };
+  const pool = { async connect() {
+    return {
+      release() {},
+      async query(sql) {
+        const query = String(sql);
+        calls.push(query);
+        if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(query)) return { rows: [], rowCount: 0 };
+        if (query.includes('FROM subscription_delivery_orders sdo')) return { rows: [order] };
+        if (query.includes('FROM customer_subscriptions WHERE id')) {
+          return { rows: mode === 'missing' ? [] : [{ notes: { keyMode: mode } }] };
+        }
+        if (query.startsWith('UPDATE subscription_delivery_orders')) return { rowCount: 1, rows: [] };
+        if (query.startsWith('INSERT INTO subscription_events')) return { rowCount: 1, rows: [] };
+        throw new Error('Unexpected query in delivery transition test: ' + query);
+      }
+    };
+  }};
+  return { pool, calls };
+}
+
+test('admin cannot progress Test Mode, unknown or missing subscription orders to packed', async () => {
+  for (const mode of ['test', 'missing', 'unrecognized']) {
+    const { pool, calls } = statusPool(mode);
+    const result = await updateDeliveryStatus(pool, {
+      deliveryOrderId: 12, status: 'packed', enforceLiveGateway: true, actor: 'test_operator'
+    });
+    assert.equal(result.success, false, 'mode=' + mode);
+    assert.equal(result.error, 'delivery_gateway_mode_not_verified');
+    assert.equal(result.statusCode, 409);
+    assert.ok(calls.includes('ROLLBACK'));
+    assert.ok(!calls.some(q => q.startsWith('UPDATE subscription_delivery_orders')));
+  }
+});
+
+test('verified live subscription may move a persisted scheduled row into packed', async () => {
+  const { pool, calls } = statusPool('live');
+  const result = await updateDeliveryStatus(pool, {
+    deliveryOrderId: 12, status: 'packed', enforceLiveGateway: true, actor: 'test_operator'
+  });
+  assert.equal(result.success, true);
+  assert.ok(calls.some(q => q.startsWith('UPDATE subscription_delivery_orders')));
+  assert.ok(calls.includes('COMMIT'));
+});
+
+test('admin can cancel incorrectly generated legacy orders without live-mode evidence', async () => {
+  const { pool, calls } = statusPool('test');
+  const result = await updateDeliveryStatus(pool, {
+    deliveryOrderId: 12, status: 'cancelled', enforceLiveGateway: true, actor: 'test_operator'
+  });
+  assert.equal(result.success, true);
+  assert.ok(calls.some(q => q.startsWith('UPDATE subscription_delivery_orders')));
+  assert.ok(calls.includes('COMMIT'));
 });
 
 test('standalone scheduler cannot bypass production live-mode gate', () => {
