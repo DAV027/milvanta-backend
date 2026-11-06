@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 import { getEarliestPermittedDeliveryDateYMD } from '../src/services/deliveryCronPolicy.js';
 import { addDaysToYMD, calculateNextDeliveryDate } from '../src/services/subscriptionService.js';
+import fs from 'node:fs';
 
 const utc = timestamp => new Date(timestamp);
 
@@ -56,6 +57,36 @@ test('next-delivery lookup never treats paidCount alone as payment evidence', as
   const sub = {id: 4, status: 'active', notes: { fulfillmentEntitled: true, paidCount: 1 }};
   const db = {async query() { return {rows: [sub]}; }};
   assert.equal(await calculateNextDeliveryDate(db, 4), 'Pending Billing Cycle Payment');
+});
+
+test('next-delivery lookup never promises a physical date for Test Mode or legacy gateway modes', async () => {
+  for (const [keyMode, expected] of [
+    ['test', 'Test Mode — No Physical Delivery'],
+    [null, 'Payment Gateway Verification Required'],
+    ['unrecognized', 'Payment Gateway Verification Required'],
+    ['LIVE', 'Payment Gateway Verification Required']
+  ]) {
+    const notes = {
+      fulfillmentEntitled: true, lastPaymentId: 'pay_synthetic',
+      paidThroughDate: '2026-12-31', paidCount: 1, startDate: '2026-11-01'
+    };
+    if (keyMode !== null) notes.keyMode = keyMode;
+    const db = {async query() { return {rows: [{
+      id: 123, status: 'active', notes, plan_type: 'custom'
+    }]}; }};
+    assert.equal(await calculateNextDeliveryDate(db, 123), expected);
+  }
+});
+
+test('newly captured custom-day subscriptions record the payment gateway mode', () => {
+  const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const start = server.indexOf('async function materializeCustomDaysPlans');
+  const end = server.indexOf('async function applyPaymentStatus', start);
+  assert.ok(start > 0 && end > start);
+  const text = server.slice(start, end);
+  assert.match(text, /const keyMode = razorpayKeyId\.startsWith\('rzp_live_'\)/);
+  assert.match(text, /keyMode,/);
+  assert.match(text, /lastPaymentId: capturedPaymentId/);
 });
 
 test('next-delivery lookup fails closed on missing records and database errors', async () => {
