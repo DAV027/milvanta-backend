@@ -201,6 +201,53 @@ test('renewal after reservation blocks future prototype dispatch but permits can
   assert.equal(outstanding.rows[0].n,0);
 });
 
+test('failed delivery releases a held morning without increasing fulfilled balance',async()=>{
+  // Reset synthetic renewal strictly within isolated schema.
+  await pool.query(
+    "UPDATE customer_subscriptions SET notes=jsonb_set(jsonb_set(notes,'{paidCount}','1'::jsonb),"+
+    "'{paidThroughDate}',to_jsonb($2::text)) WHERE id=$1",
+    [subId,today]
+  );
+  const date=addDaysToYMD(target,3);
+  const booked=await reservePrototypeOwedMorning(pool,{subscriptionId:subId,targetDate:date});
+  assert.equal(booked.success,true);
+  assert.equal((await getBalance()).fulfilled_mornings,1);
+  for(const status of ['packed','out_for_delivery','failed']){
+    const changed=await transitionPrototypeOwedMorning(pool,{
+      deliveryOrderId:booked.deliveryOrderId,status,actor:'test_operator'
+    });
+    assert.equal(changed.success,true,status);
+  }
+  const r=await pool.query(
+    'SELECT status,release_reason FROM subscription_recurring_morning_reservations WHERE delivery_order_id=$1',
+    [booked.deliveryOrderId]
+  );
+  assert.equal(r.rows[0].status,'released');
+  assert.equal(r.rows[0].release_reason,'prototype_failed');
+  assert.equal((await getBalance()).fulfilled_mornings,1);
+});
+
+test('newly paused delivery cannot be packed; cancellation still releases the hold',async()=>{
+  const date=addDaysToYMD(target,4);
+  const booked=await reservePrototypeOwedMorning(pool,{subscriptionId:subId,targetDate:date});
+  assert.equal(booked.success,true);
+  await pool.query(
+    'INSERT INTO subscription_delivery_pauses (subscription_id,customer_id,pause_start_date,pause_end_date,reason) VALUES($1,$2,$3,$3,$4)',
+    [subId,customerId,date,'Synthetic pause after prototype reservation']
+  );
+  const bad=await transitionPrototypeOwedMorning(pool,{
+    deliveryOrderId:booked.deliveryOrderId,status:'packed'
+  });
+  assert.equal(bad.success,false);
+  assert.equal(bad.reason,'subscription_paused_for_date');
+  const cancelled=await transitionPrototypeOwedMorning(pool,{
+    deliveryOrderId:booked.deliveryOrderId,status:'cancelled'
+  });
+  assert.equal(cancelled.success,true);
+  assert.equal(cancelled.reservationStatus,'released');
+  assert.equal((await getBalance()).fulfilled_mornings,1);
+});
+
 test('migration prevents additional reservation on reused subscription/date even after release',async()=>{
   const copy=await pool.query(
     "SELECT obligation_id,subscription_id,customer_id,delivery_order_id,delivery_date "+
