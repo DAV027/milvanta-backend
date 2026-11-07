@@ -147,8 +147,8 @@ export function assessRecurringFinanceReconciliation({
     else deliveries.otherStatuses+=n;
   }
   if (deliveries.prototypeDelivered>0) issues.push('test_only_delivery_present_not_physical_proof');
-  if (auditEntryCounts.delivery_fulfilled?.rows!==undefined &&
-      auditEntryCounts.delivery_fulfilled.rows<deliveries.paidDelivered) {
+  // Missing ledger rows (not just low nonzero counts) are evidence gaps.
+  if ((auditEntryCounts.delivery_fulfilled?.rows || 0)<deliveries.paidDelivered) {
     issues.push('delivery_vs_entitlement_ledger_count_mismatch');
   }
 
