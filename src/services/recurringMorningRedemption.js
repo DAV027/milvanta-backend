@@ -6,9 +6,9 @@
  * and currently NOT wired to any API or automatic scheduler.
  */
 import {
-  acquireClient, getEffectivePaidThroughDate, getSubscriptionGatewayMode,
-  extractValidDeliveryAddress
+  acquireClient, getEffectivePaidThroughDate, getSubscriptionGatewayMode
 } from './subscriptionService.js';
+import { extractValidDeliveryAddress } from './deliveryEngine.js';
 import { getEarliestPermittedDeliveryDateYMD } from './deliveryCronPolicy.js';
 
 function validYMD(value) {
