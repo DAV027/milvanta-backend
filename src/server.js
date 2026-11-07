@@ -5692,7 +5692,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const actualPaidCount = hasPositivePaidCount ? rawPaidCount : 1;
 
             const { rows: currentRows } = await client.query(
-              `SELECT id, customer_id, razorpay_subscription_id, plan_type, cost_per_day_paise, total_amount_paise, notes, created_at
+              `SELECT id, customer_id, razorpay_subscription_id, plan_type, status, cost_per_day_paise, total_amount_paise, notes, created_at
                FROM customer_subscriptions
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)`,
               [subEntity.id]
@@ -5712,7 +5712,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               months: currNotes.months || 1
             });
 
-            await client.query(
+            const activationUpdate = await client.query(
               `UPDATE customer_subscriptions 
                SET status = 'active', 
                    razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
@@ -5752,11 +5752,17 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             // Finance-review liability only. Defaults OFF, requires first
             // captured live-mode charge with exact subscription and amount.
             // Does not extend entitlement, charge/refund, or schedule deliveries.
-            if (currentSub && currentSub.razorpay_subscription_id === subEntity.id) {
+            if (activationUpdate.rowCount === 1 &&
+                currentSub?.razorpay_subscription_id === subEntity.id &&
+                !['cancelled', 'paused'].includes(currentSub.status)) {
               await recordVerifiedRecurringInitialGap(client, {
                 subscription: {
                   ...currentSub,
-                  notes: { ...currNotes, paidThroughDate: paidThroughYMD }
+                  notes: {
+                    ...currNotes,
+                    paidThroughDate: paidThroughYMD,
+                    fulfillmentEntitled: true
+                  }
                 },
                 paidCount: actualPaidCount,
                 capturedPayment: rawPaymentEntity,
