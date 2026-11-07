@@ -11,6 +11,9 @@ const bill = {
     keyMode: 'live', months: 1,
     planFirstCycleStartYMD: '2026-11-01',
     planFirstCycleEndYMD: '2026-11-30',
+    planEntitlementStartYMD: '2026-11-06',
+    paidThroughDate: '2026-12-05',
+    days: 30,
     amountPerMonthPaise: 315000
   }
 };
@@ -53,20 +56,24 @@ function fakeLedger() {
 test('accurate owed mornings at 19:59 vs 20:00 IST and past entire month',()=>{
   const before = previewRecurringMorningObligation({
     firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-30',
+    plannedEntitlementStart:'2026-11-06',plannedPaidThrough:'2026-12-05',purchasedMornings:30,
     verifiedAt:new Date('2026-11-06T14:29:59Z'),dailyRatePaise:10500
   });
-  assert.equal(before.owedMornings,6);
-  assert.equal(before.owedAmountPaise,63000);
+  assert.equal(before.owedMornings,1);
+  assert.equal(before.owedAmountPaise,10500);
   const after = previewRecurringMorningObligation({
     firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-30',
+    plannedEntitlementStart:'2026-11-06',plannedPaidThrough:'2026-12-05',purchasedMornings:30,
     verifiedAt:atCutoff,dailyRatePaise:10500
   });
-  assert.equal(after.owedMornings,7);
+  assert.equal(after.owedMornings,2);
+  assert.equal(after.deliverableWithinPaidThrough,28);
   assert.equal(after.firstEligibleDelivery,'2026-11-08');
-  assert.equal(after.owedAmountPaise,73500);
+  assert.equal(after.owedAmountPaise,21000);
   const expired=previewRecurringMorningObligation({
     firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-30',
-    verifiedAt:new Date('2026-12-03T14:30:00Z'),dailyRatePaise:10500
+    plannedEntitlementStart:'2026-11-06',plannedPaidThrough:'2026-12-05',purchasedMornings:30,
+    verifiedAt:new Date('2026-12-05T14:30:00Z'),dailyRatePaise:10500
   });
   assert.equal(expired.owedMornings,30);
 });
@@ -74,6 +81,7 @@ test('accurate owed mornings at 19:59 vs 20:00 IST and past entire month',()=>{
 test('future full-month purchase creates no shortfall until month actually starts',()=>{
   const x=previewRecurringMorningObligation({
     firstCycleStart:'2026-12-01',firstCycleEnd:'2026-12-31',
+    plannedEntitlementStart:'2026-12-01',plannedPaidThrough:'2026-12-31',purchasedMornings:31,
     verifiedAt:atCutoff,dailyRatePaise:10500
   });
   assert.equal(x.owedMornings,0);
@@ -87,10 +95,15 @@ test('invalid cycle, partial month and rate fail closed',()=>{
     {firstCycleStart:'2026-02-29',firstCycleEnd:'2026-02-28'},
     {firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-29'}
   ]) {
-    assert.throws(()=>previewRecurringMorningObligation({...x,dailyRatePaise:10500}));
+    assert.throws(()=>previewRecurringMorningObligation({
+      ...x,plannedEntitlementStart:'2026-11-06',plannedPaidThrough:'2026-12-05',
+      purchasedMornings:30,dailyRatePaise:10500
+    }));
   }
   assert.throws(()=>previewRecurringMorningObligation({
-    firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-30',dailyRatePaise:0
+    firstCycleStart:'2026-11-01',firstCycleEnd:'2026-11-30',
+    plannedEntitlementStart:'2026-11-06',plannedPaidThrough:'2026-12-05',
+    purchasedMornings:30,dailyRatePaise:0
   }),/invalid_recurring_daily_rate/);
 });
 
@@ -110,6 +123,7 @@ test('refuse Test Mode, legacy, mandate-only, missing evidence and later paid cy
     {subscription:{...bill,notes:{...bill.notes,authType:'mandate_only'}}},
     {paidCount:0},
     {paidCount:2},
+    {subscription:{...bill,notes:{...bill.notes,months:2}}},
     {capturedPayment:{...payment,status:'authorized'}},
     {capturedPayment:{...payment,currency:'USD'}},
     {capturedPayment:{...payment,amount:100}},
@@ -134,13 +148,13 @@ test('one captured first-cycle payment creates one pending obligation + event; r
   const first=await recordVerifiedRecurringInitialGap(db.client,args);
   assert.equal(first.recorded,true);
   assert.equal(first.status,'pending_reconciliation');
-  assert.equal(first.plan.owedMornings,7);
+  assert.equal(first.plan.owedMornings,2);
   const again=await recordVerifiedRecurringInitialGap(db.client,args);
   assert.equal(again.recorded,false);
   assert.equal(again.reason,'already_recorded');
   assert.equal(db.rows.size,1);
   assert.equal(db.events.size,1);
-  assert.deepEqual([...db.events.values()][0].slice(2,4),[7,'Verified live payment; initial gap pending finance review']);
+  assert.deepEqual([...db.events.values()][0].slice(2,4),[2,'Verified live payment; initial gap pending finance review']);
 });
 
 test('same cycle with a different captured payment is blocked for finance investigation',async()=>{
@@ -155,6 +169,7 @@ test('checkout keeps first-cycle snapshot and ledger capture is opt-in only',()=
   const source=fs.readFileSync(new URL('../src/server.js',import.meta.url),'utf8');
   assert.match(source,/planFirstCycleStartYMD: firstCycleCoverage\.firstCycleStart/);
   assert.match(source,/planFirstCycleEndYMD: firstCycleCoverage\.firstCycleEnd/);
+  assert.match(source,/planEntitlementStartYMD/);
   assert.match(source,/recordVerifiedRecurringInitialGap\(client/);
   assert.match(source,/capturedPayment: rawPaymentEntity/);
   assert.match(source,/T00:30:00Z/);
