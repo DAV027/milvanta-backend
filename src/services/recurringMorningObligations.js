@@ -13,21 +13,35 @@ function dateMs(str) {
   return ms;
 }
 
-export function previewRecurringMorningObligation({firstCycleStart, firstCycleEnd, verifiedAt=new Date(), dailyRatePaise}) {
+export function previewRecurringMorningObligation({
+  firstCycleStart, firstCycleEnd, plannedEntitlementStart,
+  plannedPaidThrough, purchasedMornings, verifiedAt=new Date(), dailyRatePaise
+}) {
   if (!(verifiedAt instanceof Date) || Number.isNaN(verifiedAt.getTime())) throw Error('invalid_recurring_verified_time');
-  const start=dateMs(firstCycleStart), end=dateMs(firstCycleEnd), a=new Date(start), b=new Date(end);
-  if (start>end || a.getUTCFullYear()!==b.getUTCFullYear() || a.getUTCMonth()!==b.getUTCMonth() ||
-      a.getUTCDate()!==1 || b.getUTCDate()!==new Date(Date.UTC(b.getUTCFullYear(),b.getUTCMonth()+1,0)).getUTCDate()) {
+  const monthStart=dateMs(firstCycleStart),monthEnd=dateMs(firstCycleEnd),
+        coverageStart=dateMs(plannedEntitlementStart),coverageEnd=dateMs(plannedPaidThrough);
+  const a=new Date(monthStart),b=new Date(monthEnd);
+  if (monthStart>monthEnd || a.getUTCFullYear()!==b.getUTCFullYear() || a.getUTCMonth()!==b.getUTCMonth() ||
+      a.getUTCDate()!==1 || b.getUTCDate()!==new Date(Date.UTC(b.getUTCFullYear(),b.getUTCMonth()+1,0)).getUTCDate() ||
+      coverageStart<monthStart || coverageStart>monthEnd || coverageEnd<coverageStart) {
     throw Error('invalid_recurring_first_cycle_bounds');
   }
+  if (!Number.isSafeInteger(purchasedMornings) || purchasedMornings<1 || purchasedMornings>31) {
+    throw Error('invalid_recurring_first_cycle_purchase_days');
+  }
   if (!Number.isSafeInteger(dailyRatePaise) || dailyRatePaise<=0) throw Error('invalid_recurring_daily_rate');
-  const firstEligibleDelivery=getEarliestPermittedDeliveryDateYMD(verifiedAt,firstCycleStart);
-  const owedMornings=Math.max(0,Math.floor((Math.min(end+86400000,dateMs(firstEligibleDelivery))-start)/86400000));
-  return {firstCycleStart,firstCycleEnd,firstEligibleDelivery,owedMornings,
+  const firstEligibleDelivery=getEarliestPermittedDeliveryDateYMD(verifiedAt,plannedEntitlementStart);
+  const firstEligibleMs=dateMs(firstEligibleDelivery);
+  const deliverableWithinPaidThrough=Math.max(0,Math.floor((coverageEnd-firstEligibleMs)/86400000)+1);
+  // Only the shortfall AFTER the already-paid entitlement period is owed.
+  // An in-progress November plan can already cover some December mornings;
+  // do not double-award those mornings as extra credit.
+  const owedMornings=Math.max(0,purchasedMornings-deliverableWithinPaidThrough);
+  return {firstCycleStart,firstCycleEnd,plannedEntitlementStart,plannedPaidThrough,
+    firstEligibleDelivery,purchasedMornings,deliverableWithinPaidThrough,owedMornings,
     owedAmountPaise:owedMornings*dailyRatePaise,requiresReconciliation:owedMornings>0,
     financialStatus:'pending_finance_reconciliation'};
 }
-
 /**
  * Call only inside an already authenticated, captured-payment transaction.
  * Revalidates LIVE mode, exact first-cycle amount, subscription ID and capture.
@@ -43,9 +57,16 @@ export async function recordVerifiedRecurringInitialGap(client,{
   if (!subscription.razorpay_subscription_id?.startsWith('sub_') ||
       !subscription.id || !subscription.customer_id) return {recorded:false,reason:'invalid_recurring_identity'};
   if (Number(paidCount)!==1) return {recorded:false,reason:'not_first_paid_cycle'};
+  // Averaged multi-month Razorpay charges are not whole delivered-day units.
+  // Defer their reconciliation until the full contract accounting is approved.
+  if (Number(notes.months)!==1) return {recorded:false,reason:'multi_cycle_requires_reconciliation'};
   if (notes.fulfillmentEntitled===false || notes.authType==='mandate_only') return {recorded:false,reason:'mandate_only'};
   const firstCycleStart=notes.planFirstCycleStartYMD,firstCycleEnd=notes.planFirstCycleEndYMD;
-  if (!firstCycleStart || !firstCycleEnd) return {recorded:false,reason:'missing_checkout_cycle_snapshot'};
+  const plannedEntitlementStart=notes.planEntitlementStartYMD,plannedPaidThrough=notes.paidThroughDate;
+  const purchasedMornings=Number(notes.days);
+  if (!firstCycleStart || !firstCycleEnd || !plannedEntitlementStart || !plannedPaidThrough) {
+    return {recorded:false,reason:'missing_checkout_or_paid_entitlement_snapshot'};
+  }
   const expectedAmount=Number(notes.amountPerMonthPaise),rate=Number(subscription.cost_per_day_paise);
   if (!Number.isSafeInteger(expectedAmount) || expectedAmount<=0 || !Number.isSafeInteger(rate) || rate<=0) {
     return {recorded:false,reason:'invalid_verified_price'};
@@ -56,7 +77,10 @@ export async function recordVerifiedRecurringInitialGap(client,{
       capturedPayment.currency!=='INR' || Number(capturedPayment.amount)!==expectedAmount) {
     return {recorded:false,reason:'captured_payment_not_independently_verified'};
   }
-  const plan=previewRecurringMorningObligation({firstCycleStart,firstCycleEnd,verifiedAt,dailyRatePaise:rate});
+  const plan=previewRecurringMorningObligation({
+    firstCycleStart,firstCycleEnd,plannedEntitlementStart,plannedPaidThrough,
+    purchasedMornings,verifiedAt,dailyRatePaise:rate
+  });
   if (!plan.requiresReconciliation) return {recorded:false,reason:'no_initial_shortfall',plan};
 
   const created=await client.query(`INSERT INTO subscription_recurring_morning_obligations
