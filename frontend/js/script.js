@@ -592,17 +592,17 @@ function populateMilkPackSizeDropdown(product, selectedSize = '1 Litre') {
 }
 
 function getContinuousMonthsDetails(startOffset = 0, count = 1) {
-  const now = new Date();
+  const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
   let totalDays = 0;
   const monthList = [];
 
   for (let i = 0; i < count; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const daysInMonth = new Date(y, m + 1, 0).getDate();
-    const shortName = d.toLocaleString('en-IN', { month: 'short' });
-    const longName = d.toLocaleString('en-IN', { month: 'long' });
+    const d = new Date(Date.UTC(year, monthIndex + startOffset + i, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    const shortName = d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+    const longName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
     monthList.push({
       year: y,
       month: m,
@@ -635,47 +635,28 @@ function getContinuousMonthsDetails(startOffset = 0, count = 1) {
   };
 }
 
-function formatSubscriptionDates(startOffset = 0, days = 30) {
-  const now = new Date();
-  let startDate;
-
-  if (startOffset === 0) {
-    startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  } else {
-    startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
-  }
-
-  const endDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + (days - 1));
-
-  const startFormatted = startDate.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
-
-  const endFormatted = endDate.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric'
-  });
-
+function formatSubscriptionDates(startOffset = 0) {
+  // Informational estimate only. The backend confirms the actual paid-through
+  // period after a captured payment and entitlement reconciliation.
+  const schedule = window.MilvantaSubscriptionSchedule;
+  const firstYMD = schedule?.earliestFirstDeliveryYMD({ startOffset });
   return {
-    startDate,
-    endDate,
-    startLabel: startOffset === 0 ? `Tomorrow, ${startFormatted}` : startFormatted,
-    endLabel: endFormatted
+    startLabel: firstYMD
+      ? `From ${schedule.formatYMD(firstYMD)} (estimate)`
+      : 'Pending delivery scheduling',
+    endLabel: 'Confirmed after payment'
   };
 }
 
 function populateSubscriptionMonths(selectElem) {
   if (!selectElem) return;
-  const now = new Date();
+  const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
   selectElem.innerHTML = '';
   for (let i = 0; i < 6; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    const y = d.getFullYear();
-    const m = d.getMonth();
-    const monthName = d.toLocaleString('en-IN', { month: 'long' });
+    const d = new Date(Date.UTC(year, monthIndex + i, 1));
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth();
+    const monthName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
     const opt = document.createElement('option');
     opt.value = String(i);
     opt.textContent = i === 0 ? `${monthName} ${y} (Current Month)` : `${monthName} ${y}`;
@@ -740,7 +721,7 @@ function updateSubscriptionSummary() {
   const periodStartDate = $('#subPeriodStartDate');
   const periodEndDate = $('#subPeriodEndDate');
 
-  if (periodDaysBadge) periodDaysBadge.textContent = `${days} Mornings`;
+  if (periodDaysBadge) periodDaysBadge.textContent = `${days} days priced`;
   if (periodStartDate) periodStartDate.textContent = dateInfo.startLabel;
   if (periodEndDate) periodEndDate.textContent = dateInfo.endLabel;
 

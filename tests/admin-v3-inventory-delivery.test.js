@@ -370,7 +370,10 @@ describe('Milvanta Admin V3 — Inventory, Delivery & Customer Management Suite'
       `, [
         regularCustomerId,
         JSON.stringify({
+          // Synthetic LIVE-mode fixture is isolated to disposable Postgres only.
+          // Real captured Test Mode subscriptions must never be reclassified.
           fulfillmentEntitled: true,
+          keyMode: 'live',
           paymentId: 'pay_test_v3_confirm_1',
           lastPaymentId: 'pay_test_v3_confirm_1',
           startDate: tomorrowStr,

@@ -79,7 +79,9 @@ import {
   updateDeliveryStatus,
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
-import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, getISTCalendarYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { previewRecurringFirstCycleCoverage } from './services/recurringCoverageAudit.js';
+import { recordVerifiedRecurringInitialGap } from './services/recurringMorningObligations.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -349,7 +351,14 @@ function safeAddress(input) {
 // atomically, with one server-authoritative source order line per delivery plan.
 async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
   const lines = Array.isArray(order?.items) ? order.items : [];
-  const startDate = getTomorrowDeliveryDateYMD();
+  // A verified gateway capture may be Test Mode. Stamp the actual key MODE at
+  // materialization, not the public key or secret and never assume legacy=live.
+  const razorpayKeyId = String(process.env.RAZORPAY_KEY_ID || '');
+  const keyMode = razorpayKeyId.startsWith('rzp_live_')
+    ? 'live' : (razorpayKeyId.startsWith('rzp_test_') ? 'test' : 'unrecognized');
+  // Paid prepaid deliveries start on the earliest morning allowed by IST cutoff.
+  // The paid-through date is derived from that start, preserving all purchased days.
+  const startDate = getEarliestPermittedDeliveryDateYMD();
   const address = order.address && typeof order.address === 'object' ? order.address : null;
   if (!startDate || !address) throw new Error('paid_subscription_address_or_start_missing');
 
@@ -379,6 +388,7 @@ async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
         lastPaymentId: capturedPaymentId,
         fulfillmentEntitled: true,
         authType: 'one_time',
+        keyMode,
         paidCount: 1,
         startDate,
         paidThroughDate,
@@ -400,7 +410,7 @@ async function materializeCustomDaysPlans(client, order, capturedPaymentId) {
           'Daily (Every Morning)', '6:00 AM – 7:00 AM',
           itemSize, 1, dailyRate, 'custom',
           String(days) + ' Days Custom Plan', days * dailyRate,
-          JSON.stringify(address), JSON.stringify(notes), 'active', 'Tomorrow, 6:00 AM'
+          JSON.stringify(address), JSON.stringify(notes), 'active', 'Pending delivery scheduling'
         ]
       );
     }
@@ -1315,7 +1325,7 @@ app.post('/api/v1/subscriptions', { preHandler: app.authenticate }, async (reque
        customer_id, product_id, product_name, image_url, frequency, time_slot, quantity, quantity_num,
        cost_per_day_paise, plan_type, duration_label, total_amount_paise, notes, status, next_delivery
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', 'Tomorrow, 6:00 AM'
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'active', 'Pending delivery scheduling'
      ) RETURNING *`,
     [
       request.customer.id,
@@ -1557,12 +1567,20 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const calculatedTotalAmountPaise = totalDays * dailyRatePaise;
   const amountPerMonthPaise = Math.round(calculatedTotalAmountPaise / months);
 
-  // Compute future start date and Razorpay start_at timestamp if offset > 0
+  // Persist the exact IST calendar month bought by the customer. On payment
+  // capture we can reconcile missed first-cycle mornings without guessing the
+  // purchase month from a later webhook or moving Razorpay billing dates.
   const now = new Date();
-  const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
-  const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
-  const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
-  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Tomorrow, 6:00 AM';
+  const firstCycleCoverage = previewRecurringFirstCycleCoverage({
+    checkoutAt: now, startOffset: offset, monthsCount: months, dailyRatePaise
+  });
+  const futureStartDateYMD = offset > 0 ? firstCycleCoverage.firstCycleStart : null;
+  const planEntitlementStartYMD = futureStartDateYMD || getISTCalendarYMD(now);
+  // 06:00 Asia/Kolkata is 00:30 UTC (server's local timezone is irrelevant).
+  const startAtTimestamp = futureStartDateYMD
+    ? Math.floor(new Date(`${futureStartDateYMD}T00:30:00Z`).getTime() / 1000)
+    : null;
+  const initialNextDelivery = 'Pending delivery scheduling';
 
   // Cross-instance lock: a repeated click must not issue a second subscription
   // POST while the first one is still creating its gateway subscription.
@@ -1716,10 +1734,15 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           months,
           days: totalDays,
           startOffset: offset,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: planEntitlementStartYMD,
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
+          planFirstCycleStartYMD: firstCycleCoverage.firstCycleStart,
+          planFirstCycleEndYMD: firstCycleCoverage.firstCycleEnd,
+          planEntitlementStartYMD,
+          purchaseEarliestEligibleYMD: firstCycleCoverage.earliestEligibleDate,
+          initialCalendarShortfallEstimate: firstCycleCoverage.initiallyUnservableDays,
           keyMode
         })
       ]
@@ -2259,7 +2282,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
           : null;
         const initialNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-          : 'Tomorrow, 6:00 AM';
+          : 'Pending delivery scheduling';
 
         if (recheck.rows.length > 0) {
           subRow = recheck.rows[0];
@@ -2437,7 +2460,7 @@ app.post('/api/v1/subscriptions/verify', { preHandler: app.authenticate }, async
     // Verified captured billing-cycle payment: activate fulfillment!
     const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
       ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-      : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+      : (subRow.next_delivery || 'Pending delivery scheduling');
 
     const updatedNotes = {
       ...existingNotes,
@@ -2836,7 +2859,7 @@ app.all('/api/v1/subscriptions/callback', async (request, reply) => {
       if (subRow.status === 'pending_authorization' || isPrematureCompletedExpiry) {
         const futureNextDelivery = gatewayStartAtYMD && gatewayStartAtYMD > new Date().toISOString().slice(0, 10)
           ? `${gatewayStartAtYMD}, 6:00 AM – 7:00 AM`
-          : (subRow.next_delivery || 'Tomorrow, 6:00 AM');
+          : (subRow.next_delivery || 'Pending delivery scheduling');
 
         const updateRes = await pool.query(
           `UPDATE customer_subscriptions 
@@ -5042,7 +5065,7 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
       });
     }
   } else {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     totalDeliveries = preview.eligibleCount;
     for (const sub of preview.eligibleSubscriptions) {
       const pName = (sub.productName || '').toLowerCase();
@@ -5130,7 +5153,7 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
       packBreakdown[packKey].totalLitres += totalVolume;
     }
   } else {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     for (const sub of preview.eligibleSubscriptions) {
       const qNum = sub.quantityNum || 1;
       const parsed = parseMilkVolumeInLitres(sub.quantity, qNum, { returnObject: true });
@@ -5669,7 +5692,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const actualPaidCount = hasPositivePaidCount ? rawPaidCount : 1;
 
             const { rows: currentRows } = await client.query(
-              `SELECT id, cost_per_day_paise, total_amount_paise, notes, created_at
+              `SELECT id, customer_id, razorpay_subscription_id, plan_type, status, cost_per_day_paise, total_amount_paise, notes, created_at
                FROM customer_subscriptions
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)`,
               [subEntity.id]
@@ -5677,7 +5700,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const currentSub = currentRows[0];
             const currNotes = typeof currentSub?.notes === 'object' && currentSub?.notes !== null ? currentSub.notes : {};
 
-            const startDate = currNotes.startDate || (currentSub?.created_at ? formatDateYMD(new Date(currentSub.created_at)) : null);
+            const startDate = currNotes.startDate || currNotes.planEntitlementStartYMD ||
+              (currentSub?.created_at ? getISTCalendarYMD(new Date(currentSub.created_at)) : null);
             const paidThroughYMD = derivePaidThroughDate({
               startDate,
               paidThroughDate: currNotes.paidThroughDate,
@@ -5688,7 +5712,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
               months: currNotes.months || 1
             });
 
-            await client.query(
+            const activationUpdate = await client.query(
               `UPDATE customer_subscriptions 
                SET status = 'active', 
                    razorpay_subscription_id = COALESCE(razorpay_subscription_id, $1), 
@@ -5724,6 +5748,27 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null)
               ]
             );
+
+            // Finance-review liability only. Defaults OFF, requires first
+            // captured live-mode charge with exact subscription and amount.
+            // Does not extend entitlement, charge/refund, or schedule deliveries.
+            if (activationUpdate.rowCount === 1 &&
+                currentSub?.razorpay_subscription_id === subEntity.id &&
+                !['cancelled', 'paused'].includes(currentSub.status)) {
+              await recordVerifiedRecurringInitialGap(client, {
+                subscription: {
+                  ...currentSub,
+                  notes: {
+                    ...currNotes,
+                    paidThroughDate: paidThroughYMD,
+                    fulfillmentEntitled: true
+                  }
+                },
+                paidCount: actualPaidCount,
+                capturedPayment: rawPaymentEntity,
+                verifiedAt: new Date()
+              });
+            }
           }
         } else if (['subscription.resumed'].includes(eventName)) {
           // Resume paused subscriptions, but never cancelled/expired
@@ -6700,7 +6745,7 @@ app.get('/api/v1/operations/deliveries/generate-preview', { preHandler: app.requ
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { targetDate } = request.query || {};
   try {
-    const preview = await previewDailyDeliveries(pool, targetDate);
+    const preview = await previewDailyDeliveries(pool, targetDate, { liveGatewayOnly: true });
     return reply.send(preview);
   } catch (err) {
     const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
@@ -6780,7 +6825,7 @@ app.post('/api/v1/operations/deliveries/generate', { preHandler: app.requireAdmi
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { targetDate } = request.body || {};
   try {
-    const result = await generateDailyDeliveries(pool, targetDate, { rejectPastDates: true });
+    const result = await generateDailyDeliveries(pool, targetDate, { rejectPastDates: true, liveGatewayOnly: true });
     return reply.send(result);
   } catch (err) {
     const code = err.statusCode || (err.message && (err.message.includes('date') || err.message.includes('past')) ? 400 : 500);
@@ -6804,6 +6849,7 @@ app.post('/api/v1/operations/deliveries/:id/status', { preHandler: app.requireAd
   const result = await updateDeliveryStatus(pool, {
     deliveryOrderId,
     status,
+    enforceLiveGateway: true,
     actor: authoritativeActor,
     notes,
     reason: reason || failureReason,

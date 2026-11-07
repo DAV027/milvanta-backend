@@ -1040,12 +1040,28 @@ describe('MILVANTA COMPLETE END-TO-END VERIFICATION: EMAIL, OTP, PAYMENTS & SUBS
 
     it('updates delivery status through operational states: scheduled -> packed -> out_for_delivery -> delivered', async () => {
       if (!generatedDeliveryId) {
+        // Test Mode captured payment must not authorize a physical order.
+        // Use a separate synthetic LIVE-mode fixture in disposable Postgres to
+        // exercise the admin transition state machine without reclassifying it.
+        const { rows: [syntheticLive] } = await pool.query(
+          `INSERT INTO customer_subscriptions
+           (customer_id, product_name, quantity, time_slot, frequency,
+            cost_per_day_paise, total_amount_paise, status, notes)
+           VALUES ($1, 'Pure Fresh Cow Milk', '1 Litre', '6:00 AM – 7:00 AM', 'Daily',
+                   10500, 315000, 'active', $2::jsonb)
+           RETURNING id`,
+          [customerUser.id, JSON.stringify({
+            keyMode: 'live', fulfillmentEntitled: true,
+            lastPaymentId: 'pay_synthetic_fixture_not_gateway',
+            startDate: deliveryDate, paidThroughDate: deliveryDate, paidCount: 1
+          })]
+        );
         const { rows } = await pool.query(
-          `INSERT INTO subscription_delivery_orders 
+          `INSERT INTO subscription_delivery_orders
            (subscription_id, customer_id, product_name, quantity, delivery_date, status, delivery_address, delivery_order_number)
            VALUES ($1, $2, 'Pure Fresh Cow Milk', 1, $3, 'scheduled', $4, 'DO-TEST-E2E-001')
            RETURNING id`,
-          [activatedSubscriptionId, customerUser.id, deliveryDate, JSON.stringify(validAddress)]
+          [syntheticLive.id, customerUser.id, deliveryDate, JSON.stringify(validAddress)]
         );
         generatedDeliveryId = rows[0].id;
       }

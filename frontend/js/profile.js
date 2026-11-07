@@ -134,7 +134,7 @@ function formatIstDateTime(isoStr) {
   }
 
   function renderSubDeliveryStatusBadge(status) {
-    const s = String(status || 'scheduled').toLowerCase();
+    const s = String(status || 'unknown').toLowerCase();
     if (s === 'delivered') {
       return '<span style="background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">✔ Delivered</span>';
     } else if (s === 'out_for_delivery') {
@@ -144,7 +144,10 @@ function formatIstDateTime(isoStr) {
     } else if (s === 'failed') {
       return '<span style="background:#fee2e2; color:#b91c1c; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">⚠️ Delivery Failed</span>';
     }
-    return '<span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🥛 Scheduled</span>';
+    if (s === 'scheduled') {
+      return '<span style="background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">🥛 Scheduled</span>';
+    }
+    return '<span style="background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:6px; font-size:0.8rem; font-weight:700;">Not delivered yet</span>';
   }
 
   function switchTab(tabId) {
@@ -1148,7 +1151,16 @@ function formatIstDateTime(isoStr) {
       totalAmount: row.totalAmount || row.total_amount || 0,
       days: row.days || (row.customDays || 30),
       status: row.status || 'active',
-      nextDelivery: row.next_delivery || row.nextDelivery || 'Tomorrow'
+      // Prefer recalculated backend eligibility over legacy stored free-text.
+      // Never re-display the old literal "Tomorrow" without a confirmed date.
+      nextDelivery: (() => {
+        const raw = Object.prototype.hasOwnProperty.call(row, 'next_eligible_delivery')
+          ? row.next_eligible_delivery
+          : (row.next_delivery || row.nextDelivery);
+        return typeof raw === 'string' && raw.trim() && !/^tomorrow\b/i.test(raw.trim())
+          ? raw.trim()
+          : 'Pending delivery scheduling';
+      })()
     };
   }
 
@@ -1218,7 +1230,7 @@ function formatIstDateTime(isoStr) {
           <div class="sub-hero-info">
             <div class="sub-hero-badges">
               <span class="sub-badge-status ${isPaused ? 'paused' : 'active'}">
-                ${isPaused ? '⏸ Paused' : '● Active Schedule'}
+                ${isPaused ? '⏸ Paused' : '● Active Plan'}
               </span>
               <span class="sub-badge-qty">${escapeHtml(sub.quantity || '1 Litre')} Daily</span>
               <span class="sub-badge-plan">🔄 Continuous Autopay</span>
@@ -1239,13 +1251,13 @@ function formatIstDateTime(isoStr) {
           <div class="sub-metric-tile">
             <div class="sub-metric-header">
               <span class="sub-metric-icon">⏰</span>
-              <span class="sub-metric-label">NEXT MORNING DROP</span>
+              <span class="sub-metric-label">NEXT DELIVERY STATUS</span>
             </div>
             <div class="sub-metric-val ${isPaused ? 'text-paused' : 'text-active'}">
-              ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Tomorrow, 19 Oct')}
+              ${isPaused ? '⏸ Paused for now' : escapeHtml(sub.nextDelivery || 'Pending delivery scheduling')}
             </div>
             <div class="sub-metric-sub">
-              ${isPaused ? 'Tap resume above to restart daily drops' : 'Cold-chain dispatch by 6:00 AM'}
+              ${isPaused ? 'Tap resume above to restart your plan' : '6:00–7:00 AM IST when a delivery order is generated'}
             </div>
           </div>
 
@@ -1292,7 +1304,7 @@ function formatIstDateTime(isoStr) {
             <div class="sub-delivery-stat-box">
               <span class="sub-delivery-stat-label">Last Fulfilled Date</span>
               <span class="sub-delivery-stat-val" style="font-size: 0.85rem; color: #475569;">
-                ${sub.last_delivered_at ? formatIstDateTime(sub.last_delivered_at) : 'Scheduled for first drop'}
+                ${sub.last_delivered_at ? formatIstDateTime(sub.last_delivered_at) : 'Not delivered yet'}
               </span>
             </div>
             <div class="sub-delivery-stat-box">
@@ -1575,9 +1587,9 @@ function formatIstDateTime(isoStr) {
       const status = tomDayData.status;
       const isDayEditable = tomDayData.isEditable !== false && !isCutoffPassed;
 
-      let stripClass = 'is-scheduled';
-      let statusClass = 'scheduled';
-      let statusText = '✓ Scheduled (6:00 AM – 7:00 AM)';
+      let stripClass = 'is-unknown';
+      let statusClass = 'unknown';
+      let statusText = 'Delivery status unavailable';
       let ctaHtml = '';
 
       if (status === 'scheduled') {
@@ -1597,6 +1609,29 @@ function formatIstDateTime(isoStr) {
             </span>
           `;
         }
+      } else if (status === 'eligible') {
+        stripClass = 'is-checking';
+        statusClass = 'checking';
+        statusText = 'Paid day eligible — delivery order not generated';
+        if (isDayEditable) {
+          ctaHtml = `
+            <button type="button" class="btn-tomorrow-toggle-action skip" data-toggle-tomorrow-sub="${sub.id}" data-tom-key="${tomKey}" data-action="skip">
+              ⏸ Skip This Day
+            </button>
+          `;
+        } else {
+          ctaHtml = '<span style="font-size:0.82rem; color:#64748b; font-weight:600;">Awaiting delivery-order scheduling</span>';
+        }
+      } else if (status === 'test_mode') {
+        stripClass = 'is-paused';
+        statusClass = 'pending';
+        statusText = 'Test payment — no physical delivery';
+        ctaHtml = '<span style="font-size:0.82rem; color:#64748b;">No dispatch</span>';
+      } else if (status === 'mode_unverified') {
+        stripClass = 'is-paused';
+        statusClass = 'pending';
+        statusText = 'Payment gateway verification required — no dispatch confirmed';
+        ctaHtml = '<span style="font-size:0.82rem; color:#92400e;">Awaiting operator verification</span>';
       } else if (status === 'skipped') {
         stripClass = 'is-paused';
         statusClass = 'paused';
@@ -1902,6 +1937,7 @@ function formatIstDateTime(isoStr) {
     const prevMonthDays = new Date(year, month, 0).getDate();
 
     let scheduledCount = 0;
+    let eligibleCount = 0;
     let deliveredCount = 0;
     let pausedCount = 0;
 
@@ -1958,6 +1994,13 @@ function formatIstDateTime(isoStr) {
         badgeHtml = `<span class="month-cal-day-badge badge-none">×</span>`;
       } else if (statusType === 'past') {
         badgeHtml = `<span class="month-cal-day-badge badge-none">–</span>`;
+      } else if (statusType === 'eligible') {
+        eligibleCount++;
+        badgeHtml = '<span class="cal-icon-badge badge-pending" title="Paid eligible date — delivery order not generated">○</span>';
+      } else if (statusType === 'test_mode') {
+        badgeHtml = '<span class="month-cal-day-badge badge-none" title="Test Mode — no physical delivery">T</span>';
+      } else if (statusType === 'mode_unverified') {
+        badgeHtml = '<span class="month-cal-day-badge badge-none" title="Unverified payment gateway mode — no dispatch">?</span>';
       } else if (statusType === 'scheduled') {
         scheduledCount++;
         if (isToday) {
@@ -2005,7 +2048,8 @@ function formatIstDateTime(isoStr) {
         <div style="display:flex; align-items:center; gap:6px;">
           <strong style="color:#0f172a;">${monthNames[month]} Overview:</strong>
         </div>
-        <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Drops Scheduled</span>
+        <span style="background:#e0f2fe; color:#0369a1; padding:3px 8px; border-radius:6px; font-weight:700;">🥛 ${scheduledCount} Orders Scheduled</span>
+        ${eligibleCount > 0 ? `<span style="background:#fff7ed; color:#9a3412; padding:3px 8px; border-radius:6px; font-weight:700;">◯ ${eligibleCount} Paid Days — Not Yet Scheduled</span>` : ''}
         <span style="background:#dcfce7; color:#15803d; padding:3px 8px; border-radius:6px; font-weight:700;">✔ ${deliveredCount} Delivered</span>
         ${pausedCount > 0 ? `<span style="background:#fee2e2; color:#991b1b; padding:3px 8px; border-radius:6px; font-weight:700;">⏸ ${pausedCount} Paused/Skipped</span>` : ''}
         <span style="margin-left:auto; color:#64748b; font-size:0.8rem;">Drop Window: <strong style="color:#0f172a;">6:00 AM – 7:00 AM IST</strong></span>
@@ -2016,9 +2060,9 @@ function formatIstDateTime(isoStr) {
     const initialDayData = dayMap.get(selectedCalDate) || {
       date: selectedKey,
       day: selectedCalDate,
-      status: 'scheduled',
-      detail: '',
-      isEditable: true,
+      status: 'unknown',
+      detail: 'Delivery status unavailable',
+      isEditable: false,
       productName: calSubInfo?.productName || 'Milk Plan',
       quantity: calSubInfo?.quantity || '500 ml'
     };
@@ -2077,6 +2121,19 @@ function formatIstDateTime(isoStr) {
     } else if (status === 'past') {
       statusBadge = `<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Past Date</span>`;
       actionBtn = `<span style="font-size:0.82rem; color:#64748b; font-weight:600;">No past delivery recorded</span>`;
+    } else if (status === 'eligible') {
+      statusBadge = '<span style="background:#fff7ed; color:#9a3412; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Paid Day Eligible — Order Pending</span>';
+      if (isEditable) {
+        actionBtn = '<button type="button" class="btn-pause-day" id="btnToggleDayDelivery" style="background:#ffffff; color:#b91c1c; border:1px solid #fca5a5; border-radius:8px; padding:8px 16px; font-weight:600; cursor:pointer;">⏸ Skip This Day</button>';
+      } else {
+        actionBtn = '<span style="font-size:0.82rem; color:#64748b;">Delivery order not generated</span>';
+      }
+    } else if (status === 'test_mode') {
+      statusBadge = '<span style="background:#f1f5f9; color:#64748b; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Test Mode — No Dispatch</span>';
+      actionBtn = '<span style="font-size:0.82rem; color:#64748b;">No physical delivery is scheduled for test payments</span>';
+    } else if (status === 'mode_unverified') {
+      statusBadge = '<span style="background:#fef3c7; color:#92400e; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">Gateway Verification Required</span>';
+      actionBtn = '<span style="font-size:0.82rem; color:#92400e;">Physical delivery cannot be confirmed until gateway mode is verified</span>';
     } else if (status === 'scheduled') {
       statusBadge = `<span style="background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:9999px; font-weight:700; font-size:0.75rem;">🥛 Scheduled Morning Drop</span>`;
       if (isEditable) {
@@ -2119,7 +2176,7 @@ function formatIstDateTime(isoStr) {
             method: 'DELETE'
           });
           showToast(`▶ Delivery resumed for ${formattedDate}!`);
-        } else if (status === 'scheduled') {
+        } else if (status === 'scheduled' || status === 'eligible') {
           await apiRequest(`/api/v1/subscriptions/${state.selectedSubId}/skip-date`, {
             method: 'POST',
             body: JSON.stringify({ skipDate: dateKey, reason: 'Customer single-day skip' })
@@ -2143,7 +2200,7 @@ function formatIstDateTime(isoStr) {
       const cleanUrl = `${window.location.pathname}?tab=subscription`;
       window.history.replaceState({}, document.title, cleanUrl);
       setTimeout(() => {
-        showToast('🥛 Morning Milk Subscription Activated! Your fresh delivery starts tomorrow at 6:00 AM.');
+        showToast('Subscription return received. Check your profile for verified payment and delivery scheduling status.');
       }, 500);
     }
   }
@@ -2901,35 +2958,31 @@ function formatIstDateTime(isoStr) {
 
   // Continuous Months calculation helper
   function getContinuousMonthsDetails(startOffset = 0, count = 1) {
-    const now = new Date();
+    const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
     let totalDays = 0;
     const mList = [];
 
-    let startDate;
-    if (startOffset === 0) {
-      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    } else {
-      startDate = new Date(now.getFullYear(), now.getMonth() + startOffset, 1);
-    }
+    // The browser estimates the first eligible morning using the same IST cutoff
+    // as the backend, but never derives a paid-through entitlement on its own.
+    const schedule = window.MilvantaSubscriptionSchedule;
+    const firstYMD = schedule?.earliestFirstDeliveryYMD({ startOffset });
 
     for (let i = 0; i < count; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() + startOffset + i, 1);
-      const y = d.getFullYear();
-      const m = d.getMonth();
-      const daysInMonth = new Date(y, m + 1, 0).getDate();
-      const sName = d.toLocaleString('en-IN', { month: 'short' });
-      const lName = d.toLocaleString('en-IN', { month: 'long' });
+      const d = new Date(Date.UTC(year, monthIndex + startOffset + i, 1));
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth();
+      const daysInMonth = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      const sName = d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+      const lName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
 
       mList.push({ year: y, month: m, sName, lName, days: daysInMonth });
       totalDays += daysInMonth;
     }
 
-    const endDate = new Date(startDate.getTime() + (totalDays - 1) * 24 * 60 * 60 * 1000);
-
-    const startFormatted = startOffset === 0
-      ? `Tomorrow, ${startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`
-      : startDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-    const endFormatted = endDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    const startFormatted = firstYMD
+      ? `From ${schedule.formatYMD(firstYMD)} (estimate)`
+      : 'Pending delivery scheduling';
+    const endFormatted = 'Confirmed after payment';
 
     let rangeLabel = '';
     if (count === 1) {
@@ -2938,7 +2991,7 @@ function formatIstDateTime(isoStr) {
       rangeLabel = `${mList[0].sName} ${mList[0].year} – ${mList[mList.length - 1].sName} ${mList[mList.length - 1].year} (${count} Months · ${totalDays} Days)`;
     }
 
-    return { totalDays, startDate, endDate, startFormatted, endFormatted, rangeLabel, mList };
+    return { totalDays, startFormatted, endFormatted, rangeLabel, mList };
   }
 
   // Create Subscription Modal Logic & Dynamic Pricing
@@ -3007,14 +3060,14 @@ function formatIstDateTime(isoStr) {
 
     function populateProfileMonths() {
       if (!monthSelect) return;
-      const now = new Date();
+      const { year, monthIndex } = window.MilvantaSubscriptionSchedule.currentIstYearMonth();
       monthSelect.innerHTML = '';
       for (let i = 0; i < 6; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-        const y = d.getFullYear();
-        const m = d.getMonth();
-        const monthName = d.toLocaleString('en-IN', { month: 'long' });
-        const days = new Date(y, m + 1, 0).getDate();
+        const d = new Date(Date.UTC(year, monthIndex + i, 1));
+        const y = d.getUTCFullYear();
+        const m = d.getUTCMonth();
+        const monthName = d.toLocaleString('en-IN', { month: 'long', timeZone: 'UTC' });
+        const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
         const opt = document.createElement('option');
         opt.value = String(i);
         opt.textContent = i === 0 ? `${monthName} ${y} (Starts Now · ${days} Days)` : `${monthName} ${y} (${days} Days)`;
@@ -3077,7 +3130,7 @@ function formatIstDateTime(isoStr) {
       const savings = days * (oneTimeRate - dailyRate);
 
       // Update Delivery Period Card
-      if ($('#profileSubPeriodDaysBadge')) $('#profileSubPeriodDaysBadge').textContent = `${days} Mornings`;
+      if ($('#profileSubPeriodDaysBadge')) $('#profileSubPeriodDaysBadge').textContent = `${days} days priced`;
       if ($('#profileSubPeriodStartDate')) $('#profileSubPeriodStartDate').textContent = startFormatted;
       if ($('#profileSubPeriodEndDate')) $('#profileSubPeriodEndDate').textContent = endFormatted;
 

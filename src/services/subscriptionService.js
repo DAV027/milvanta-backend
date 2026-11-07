@@ -5,9 +5,21 @@ import crypto from 'node:crypto';
  */
 
 import { queueNotification } from './notificationService.js';
+import { getEarliestPermittedDeliveryDateYMD } from './deliveryCronPolicy.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
+
+/**
+ * Strictly interpret a recorded Razorpay key mode. An absent, legacy, or
+ * unrecognized mode must never be inferred as live from a paidThroughDate,
+ * payment ID, subscription status, or the current server configuration.
+ */
+export function getSubscriptionGatewayMode(notes) {
+  const mode = notes && typeof notes === 'object' ? notes.keyMode : null;
+  return mode === 'live' || mode === 'test' ? mode : 'unverified';
+}
+
 
 /**
  * Universal pool/client connector
@@ -389,37 +401,16 @@ export function derivePaidThroughDate({
 }
 
 export function isDeliveryCutoffPassed(targetDateStr) {
-  const istNow = getNowInIST();
-  const todayYMD = formatDateYMD(istNow);
-
-  // If target date is today or in the past, cutoff has definitely passed
-  if (targetDateStr <= todayYMD) return true;
-
-  // Compute tomorrow in IST
-  const tomorrow = new Date(istNow);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowYMD = formatDateYMD(tomorrow);
-
-  // If target date is tomorrow and current IST hour >= 20 (8 PM), cutoff has passed
-  if (targetDateStr === tomorrowYMD && istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-    return true;
-  }
-
-  return false;
+  // Keep customer edits and server scheduling under the same IST cutoff rule.
+  return typeof targetDateStr === 'string' &&
+    targetDateStr < getEarliestPermittedDeliveryDateYMD();
 }
 
 /**
  * Calculate the earliest editable delivery date based on 8:00 PM cutoff
  */
 export function getEarliestEditableDeliveryDate() {
-  const istNow = getNowInIST();
-  const d = new Date(istNow);
-  if (istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-    d.setDate(d.getDate() + 2); // Day after tomorrow
-  } else {
-    d.setDate(d.getDate() + 1); // Tomorrow morning
-  }
-  return formatDateYMD(d);
+  return getEarliestPermittedDeliveryDateYMD();
 }
 
 /**
@@ -440,17 +431,20 @@ export async function getVerifiedSubscription(pool, subscriptionId, customerId) 
  * Calculate the next scheduled delivery date for a subscription
  */
 export async function calculateNextDeliveryDate(pool, subscriptionId) {
-  const istNow = getNowInIST();
   const earliest = getEarliestEditableDeliveryDate();
 
   let subStartDate = null;
   let subPaidThroughEndDate = null;
   try {
     const { rows: subRows } = await pool.query(
-      'SELECT id, customer_id, notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at, plan_type, razorpay_subscription_id FROM customer_subscriptions WHERE id = $1',
+      'SELECT id, customer_id, status, notes, next_delivery, cost_per_day_paise, total_amount_paise, created_at, plan_type, razorpay_subscription_id FROM customer_subscriptions WHERE id = $1',
       [subscriptionId]
     );
     const subRecord = subRows[0];
+    if (!subRecord) return 'Pending delivery scheduling';
+    if (subRecord.status === 'paused') return 'On Hold (Paused)';
+    if (subRecord.status === 'cancelled') return 'Cancelled';
+    if (subRecord.status === 'expired') return 'Subscription Period Ended';
     const subNotes = typeof subRecord?.notes === 'object' && subRecord?.notes !== null ? subRecord.notes : {};
     subStartDate = subNotes.startDate || subNotes.start_date ||
       (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
@@ -464,26 +458,27 @@ export async function calculateNextDeliveryDate(pool, subscriptionId) {
     }
 
     const hasPayment = Boolean(
-      subNotes.fulfillmentEntitled === true && (
-        subNotes.lastPaymentId ||
-        subNotes.paymentId ||
-        (typeof subNotes.paidCount === 'number' && subNotes.paidCount > 0)
-      )
+      subNotes.fulfillmentEntitled === true &&
+      (subNotes.lastPaymentId || subNotes.paymentId) &&
+      subNotes.authType !== 'mandate_only'
     );
-    if (hasPayment) {
-      subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
-    }
-  } catch {}
+    if (!hasPayment) return 'Pending Billing Cycle Payment';
+    // This is only a potential next morning, NOT a promise of a generated order.
+    // Explicit live-mode evidence must precede any physical-delivery estimate.
+    const gatewayMode = getSubscriptionGatewayMode(subNotes);
+    if (gatewayMode === 'test') return 'Test Mode — No Physical Delivery';
+    if (gatewayMode !== 'live') return 'Payment Gateway Verification Required';
+    subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, subRecord);
+    if (!subPaidThroughEndDate) return 'Pending delivery scheduling';
+    if (subPaidThroughEndDate < earliest) return 'Subscription Period Ended';
+  } catch {
+    // Never produce an apparently scheduled date when DB/entitlement checks fail.
+    return 'Pending delivery scheduling';
+  }
 
   // Look ahead up to 90 days to find the next active date
   for (let i = 0; i < 90; i++) {
-    const candidate = new Date(istNow);
-    if (istNow.getHours() >= DAILY_DELIVERY_CUTOFF_HOUR_IST) {
-      candidate.setDate(candidate.getDate() + 2 + i);
-    } else {
-      candidate.setDate(candidate.getDate() + 1 + i);
-    }
-    const candidateYMD = formatDateYMD(candidate);
+    const candidateYMD = addDaysToYMD(earliest, i);
 
     // If subscription has a future start date, do not schedule delivery before start date
     if (subStartDate && candidateYMD < subStartDate) {
@@ -923,7 +918,8 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       await client.query(
         `UPDATE subscription_delivery_orders 
          SET status = 'scheduled', failed_reason = NULL, updated_at = NOW()
-         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'`,
+         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'
+           AND fulfillment_source = 'paid_entitlement'`,
         [subscriptionId, cleanSkipDate]
       );
 
@@ -1325,71 +1321,101 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
       : null);
 
-  const subPaidThroughEndDate = await getEffectivePaidThroughDate(pool, sub);
+  // Paid-through alone is insufficient: require captured payment evidence and
+  // explicit fulfillment entitlement before projecting an ungenerated morning.
+  const paymentId = (typeof subNotes.lastPaymentId === 'string' && subNotes.lastPaymentId.trim()) ||
+    (typeof subNotes.paymentId === 'string' && subNotes.paymentId.trim());
+  const hasPaidFulfillmentEvidence =
+    subNotes.fulfillmentEntitled === true && Boolean(paymentId) &&
+    subNotes.authType !== 'mandate_only';
+  const subPaidThroughEndDate = hasPaidFulfillmentEvidence
+    ? await getEffectivePaidThroughDate(pool, sub)
+    : null;
+  const gatewayMode = getSubscriptionGatewayMode(subNotes);
 
   const days = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    let status = 'scheduled';
-    let detail = 'Scheduled Delivery (6:00 AM – 7:00 AM)';
+    const order = orderMap.get(dateStr);
+    const pause = pauses.find(p =>
+      p.pause_start_date <= dateStr &&
+      (!p.pause_end_date || p.pause_end_date >= dateStr)
+    );
+    let status = 'unknown';
+    let detail = 'Delivery status unavailable';
 
-    if (sub.status === 'pending_authorization' || subNotes.fulfillmentEntitled === false) {
-      if (orderMap.has(dateStr)) {
-        const ord = orderMap.get(dateStr);
-        status = ord.status;
-        detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : ord.status;
-      } else if (dateStr < todayYMD) {
-        status = 'past';
-        detail = 'Past date';
+    // A persisted order is the sole source of "scheduled", "packed", and
+    // "out_for_delivery". Preserve historical deliveries even if the current
+    // subscription has since expired, been paused or been cancelled.
+    if (order && (order.status === 'delivered' || order.status === 'failed')) {
+      status = order.status;
+      detail = order.status === 'delivered'
+        ? (order.delivered_at
+          ? `Delivered at ${new Date(order.delivered_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}`
+          : 'Delivered')
+        : (order.failed_reason ? `Delivery failed: ${order.failed_reason}` : 'Delivery failed');
+    } else if (skipMap.has(dateStr) ||
+      (order?.status === 'cancelled' && order.failed_reason === 'Delivery date skipped by customer')) {
+      status = 'skipped';
+      detail = skipMap.get(dateStr) || 'Skipped by customer';
+    } else if (order && ['scheduled', 'packed', 'out_for_delivery'].includes(order.status) &&
+               gatewayMode !== 'live') {
+      // The persisted order remains visible as provenance; without explicit
+      // live-mode proof it is NOT customer-confirmed as dispatch-ready.
+      status = gatewayMode === 'test' ? 'test_mode' : 'mode_unverified';
+      detail = gatewayMode === 'test'
+        ? 'Test Mode: delivery order exists, but no physical dispatch is authorized'
+        : 'Delivery order exists, but gateway mode needs operator verification before dispatch';
+    } else if (order) {
+      // Respect an actual persisted operational order status, never synthesize one.
+      status = order.status;
+      if (order.status === 'out_for_delivery') {
+        detail = 'Out for delivery with morning driver';
+      } else if (order.status === 'packed') {
+        detail = 'Packed and ready for dispatch';
+      } else if (order.status === 'scheduled') {
+        detail = 'Delivery order generated (6:00 AM – 7:00 AM)';
+      } else if (order.status === 'cancelled') {
+        detail = order.failed_reason || 'Delivery cancelled';
       } else {
-        status = 'pending_payment';
-        detail = subNotes.mandateAuthorized ? 'Mandate authorized — awaiting billing payment' : 'Awaiting payment';
+        status = 'unknown';
       }
+    } else if (sub.status === 'cancelled') {
+      status = 'cancelled';
+      detail = 'Subscription cancelled';
+    } else if (sub.status === 'paused') {
+      status = 'paused';
+      detail = 'Subscription on hold';
+    } else if (sub.status === 'pending_authorization' || !hasPaidFulfillmentEvidence) {
+      status = 'pending_payment';
+      detail = subNotes.mandateAuthorized
+        ? 'Mandate authorized — awaiting captured billing payment'
+        : 'Awaiting verified payment';
     } else if (subStartDate && dateStr < subStartDate) {
       status = 'not_started';
       detail = `Subscription begins on ${subStartDate}`;
-    } else if (subPaidThroughEndDate && dateStr > subPaidThroughEndDate) {
+    } else if (!subPaidThroughEndDate) {
+      status = 'pending_payment';
+      detail = 'Unable to verify paid-through entitlement';
+    } else if (dateStr > subPaidThroughEndDate) {
       status = 'ended';
       detail = `Paid entitlement ended on ${subPaidThroughEndDate}`;
-    } else if (!subPaidThroughEndDate && dateStr >= todayYMD && !orderMap.has(dateStr)) {
-      status = 'pending_payment';
-      detail = 'Awaiting payment confirmation';
-    } else if (orderMap.has(dateStr) && (orderMap.get(dateStr).status === 'delivered' || orderMap.get(dateStr).status === 'failed')) {
-      const ord = orderMap.get(dateStr);
-      status = ord.status;
-      detail = ord.status === 'delivered' ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN')}` : (ord.failed_reason || 'Delivery failed');
-    } else if (skipMap.has(dateStr)) {
-      status = 'skipped';
-      detail = skipMap.get(dateStr) || 'Skipped by customer';
-    } else if (orderMap.has(dateStr) && (orderMap.get(dateStr).status !== 'cancelled' || orderMap.get(dateStr).failed_reason !== 'Delivery date skipped by customer')) {
-      const ord = orderMap.get(dateStr);
-      status = ord.status;
-      if (ord.status === 'delivered') {
-        detail = ord.delivered_at ? `Delivered at ${new Date(ord.delivered_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}` : 'Delivered';
-      } else if (ord.status === 'out_for_delivery') {
-        detail = 'Out for delivery with morning driver';
-      } else if (ord.status === 'packed') {
-        detail = 'Packed and ready for dispatch';
-      } else if (ord.status === 'failed') {
-        detail = ord.failed_reason ? `Delivery failed: ${ord.failed_reason}` : 'Delivery failed';
-      } else {
-        detail = ord.failed_reason || ord.status;
-      }
-    } else {
-      const activePause = pauses.find(p => p.pause_start_date <= dateStr && (!p.pause_end_date || p.pause_end_date >= dateStr));
-      if (activePause) {
-        status = activePause.pause_end_date ? 'vacation' : 'paused';
-        detail = activePause.reason || (activePause.pause_end_date ? 'Vacation mode' : 'Subscription paused');
-      } else if (sub.status === 'paused') {
-        status = 'paused';
-        detail = 'Subscription on hold';
-      } else if (sub.status === 'cancelled') {
-        status = 'cancelled';
-        detail = 'Subscription cancelled';
-      } else if (dateStr < todayYMD) {
-        status = 'past';
-        detail = 'Past date';
-      }
+    } else if (pause) {
+      status = pause.pause_end_date ? 'vacation' : 'paused';
+      detail = pause.reason || (pause.pause_end_date ? 'Vacation mode' : 'Subscription paused');
+    } else if (dateStr < todayYMD) {
+      status = 'past';
+      detail = 'No delivery order recorded';
+    } else if (gatewayMode === 'test') {
+      // Razorpay Test Mode never represents a promised physical milk delivery.
+      status = 'test_mode';
+      detail = 'Test Mode payment; no physical delivery order generated';
+    } else if (gatewayMode !== 'live') {
+      status = 'mode_unverified';
+      detail = 'Payment gateway mode requires verification before physical delivery scheduling';
+    } else if (sub.status === 'active') {
+      status = 'eligible';
+      detail = 'Paid delivery entitlement — order not generated yet';
     }
 
     days.push({
@@ -1398,10 +1424,14 @@ export async function getSubscriptionCalendar(pool, { subscriptionId, customerId
       dayOfWeek: new Date(y, m, d).toLocaleDateString('en-IN', { weekday: 'short' }),
       status,
       detail,
+      hasGeneratedDeliveryOrder: Boolean(order),
+      deliveryOrderNumber: order?.delivery_order_number || null,
       productName: sub.product_name,
       quantity: sub.quantity,
       isToday: dateStr === todayYMD,
-      isEditable: !isDeliveryCutoffPassed(dateStr)
+      isEditable: gatewayMode === 'live' &&
+        ['scheduled', 'eligible', 'skipped'].includes(status) &&
+        !isDeliveryCutoffPassed(dateStr)
     });
   }
 

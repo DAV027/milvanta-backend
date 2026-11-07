@@ -96,6 +96,8 @@ describe('Milvanta — Bodyless DELETE & Hardened Content-Type Parser Suite', ()
         customerId,
         JSON.stringify({
           fulfillmentEntitled: true,
+          keyMode: 'live',
+          lastPaymentId: 'pay_synthetic_bodyless_captured',
           paidThroughDate: '2026-12-31',
           startDate: '2026-10-01',
           paidCount: 1,
@@ -520,10 +522,10 @@ describe('Milvanta — Bodyless DELETE & Hardened Content-Type Parser Suite', ()
       assert.strictEqual(primary, cloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261022-3)', () => {
+    it('profile.html has incremented cache-busting version strings (?v=20261105-1)', () => {
       const primary = fs.readFileSync(path.join(process.cwd(), 'frontend/profile.html'), 'utf8');
       assert.ok(primary.includes('css/profile.css?v=20261022-3'));
-      assert.ok(primary.includes('js/profile.js?v=20261022-3'));
+      assert.ok(primary.includes('js/profile.js?v=20261105-1'));
     });
   });
 });
