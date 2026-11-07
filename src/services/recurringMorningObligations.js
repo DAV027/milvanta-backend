@@ -77,6 +77,17 @@ export async function recordVerifiedRecurringInitialGap(client,{
       capturedPayment.currency!=='INR' || Number(capturedPayment.amount)!==expectedAmount) {
     return {recorded:false,reason:'captured_payment_not_independently_verified'};
   }
+  // Never accrue new obligations against a customer already requesting or
+  // receiving a refund. The webhook owns the subscription row lock before
+  // invoking this function; refund approval takes the same lock first.
+  const { rows: conflictingRefunds } = await client.query(
+    "SELECT id FROM refund_requests WHERE subscription_id=$1 "+
+    "AND status IN ('pending','approved','processing','processed') LIMIT 1",
+    [subscription.id]
+  );
+  if (conflictingRefunds.length) {
+    return {recorded:false,reason:'refund_reconciliation_required'};
+  }
   const plan=previewRecurringMorningObligation({
     firstCycleStart,firstCycleEnd,plannedEntitlementStart,plannedPaidThrough,
     purchasedMornings,verifiedAt,dailyRatePaise:rate
