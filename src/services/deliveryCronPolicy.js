@@ -36,6 +36,13 @@ function istComponents(now) {
   return {year,month,day,hour};
 }
 
+/** YYYY-MM-DD for the exact India calendar date, independent of server timezone. */
+export function getISTCalendarYMD(now = new Date()) {
+  if (!(now instanceof Date) || Number.isNaN(now.getTime())) throw new Error('invalid_ist_calendar_clock');
+  const { year, month, day } = istComponents(now);
+  return new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10);
+}
+
 export function getDeliveryCronTarget(now = new Date()) {
   if (!(now instanceof Date) || Number.isNaN(now.getTime())) {
     throw new Error('invalid_delivery_cron_clock');
