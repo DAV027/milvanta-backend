@@ -80,6 +80,8 @@ import {
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
 import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { previewRecurringFirstCycleCoverage } from './services/recurringCoverageAudit.js';
+import { recordVerifiedRecurringInitialGap } from './services/recurringMorningObligations.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -1565,12 +1567,19 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
   const calculatedTotalAmountPaise = totalDays * dailyRatePaise;
   const amountPerMonthPaise = Math.round(calculatedTotalAmountPaise / months);
 
-  // Compute future start date and Razorpay start_at timestamp if offset > 0
+  // Persist the exact IST calendar month bought by the customer. On payment
+  // capture we can reconcile missed first-cycle mornings without guessing the
+  // purchase month from a later webhook or moving Razorpay billing dates.
   const now = new Date();
-  const futureStartDate = new Date(now.getFullYear(), now.getMonth() + offset, 1, 6, 0, 0);
-  const futureStartDateYMD = `${futureStartDate.getFullYear()}-${String(futureStartDate.getMonth() + 1).padStart(2, '0')}-01`;
-  const startAtTimestamp = offset > 0 ? Math.floor(futureStartDate.getTime() / 1000) : null;
-  const initialNextDelivery = offset > 0 ? `${futureStartDateYMD}, 6:00 AM – 7:00 AM` : 'Pending delivery scheduling';
+  const firstCycleCoverage = previewRecurringFirstCycleCoverage({
+    checkoutAt: now, startOffset: offset, monthsCount: months, dailyRatePaise
+  });
+  const futureStartDateYMD = offset > 0 ? firstCycleCoverage.firstCycleStart : null;
+  // 06:00 Asia/Kolkata is 00:30 UTC (server's local timezone is irrelevant).
+  const startAtTimestamp = futureStartDateYMD
+    ? Math.floor(new Date(`${futureStartDateYMD}T00:30:00Z`).getTime() / 1000)
+    : null;
+  const initialNextDelivery = 'Pending delivery scheduling';
 
   // Cross-instance lock: a repeated click must not issue a second subscription
   // POST while the first one is still creating its gateway subscription.
@@ -1728,6 +1737,10 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
+          planFirstCycleStartYMD: firstCycleCoverage.firstCycleStart,
+          planFirstCycleEndYMD: firstCycleCoverage.firstCycleEnd,
+          purchaseEarliestEligibleYMD: firstCycleCoverage.earliestEligibleDate,
+          initialCalendarShortfallEstimate: firstCycleCoverage.initiallyUnservableDays,
           keyMode
         })
       ]
@@ -5677,7 +5690,7 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const actualPaidCount = hasPositivePaidCount ? rawPaidCount : 1;
 
             const { rows: currentRows } = await client.query(
-              `SELECT id, cost_per_day_paise, total_amount_paise, notes, created_at
+              `SELECT id, customer_id, razorpay_subscription_id, plan_type, cost_per_day_paise, total_amount_paise, notes, created_at
                FROM customer_subscriptions
                WHERE (razorpay_subscription_id = $1 OR notes->>'subscriptionId' = $1 OR notes->>'razorpay_subscription_id' = $1)`,
               [subEntity.id]
@@ -5732,6 +5745,18 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 confirmedPaymentId || (rawPaymentEntity?.status === 'captured' ? rawPaymentEntity.id : null)
               ]
             );
+
+            // Finance-review liability only. Defaults OFF, requires first
+            // captured live-mode charge with exact subscription and amount.
+            // Does not extend entitlement, charge/refund, or schedule deliveries.
+            if (currentSub && currentSub.razorpay_subscription_id === subEntity.id) {
+              await recordVerifiedRecurringInitialGap(client, {
+                subscription: currentSub,
+                paidCount: actualPaidCount,
+                capturedPayment: rawPaymentEntity,
+                verifiedAt: new Date()
+              });
+            }
           }
         } else if (['subscription.resumed'].includes(eventName)) {
           // Resume paused subscriptions, but never cancelled/expired
