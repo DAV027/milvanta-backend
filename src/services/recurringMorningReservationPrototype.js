@@ -265,20 +265,17 @@ export async function transitionPrototypeOwedMorning(pool, {
          JSON.stringify({deliveryOrderId,actor,source:'test_only_reservation'})]
       );
     } else if (cancellation) {
-      await client.query(
-        "UPDATE subscription_recurring_morning_reservations "+
-        "SET status='released',release_reason=$2,updated_at=NOW() "+
-        "WHERE id=$1 AND status='reserved'",
-        [ob.reservation_id,'prototype_'+status]
+      // Migration 023 handles all cancelled/failed order updates, including
+      // bulk pause/vacation/cancellation SQL that bypasses this function.
+      // Require the trigger to release within this exact transaction.
+      const release = await client.query(
+        'SELECT status,release_reason FROM subscription_recurring_morning_reservations WHERE id=$1',
+        [ob.reservation_id]
       );
-      await client.query(
-        "INSERT INTO subscription_recurring_morning_obligation_events "+
-        "(obligation_id,event_key,event_type,days_delta,notes,evidence) "+
-        "VALUES ($1,$2,'adjusted',0,$3,$4::jsonb)",
-        [ob.id,'prototype_released:'+ob.reservation_id,
-         'Released unpaid physical morning prototype reservation',
-         JSON.stringify({deliveryOrderId,actor,releaseReason:status})]
-      );
+      if (release.rows[0]?.status !== 'released' ||
+          release.rows[0]?.release_reason !== 'prototype_'+status) {
+        throw Error('prototype_reservation_release_trigger_not_applied');
+      }
     }
     await client.query('COMMIT');
     return {success:true,deliveryOrderId,status,
