@@ -1,6 +1,6 @@
 # Recurring first-cycle billing policy — launch decision required
 
-**Status:** DRAFT / NOT APPROVED. Applies to new recurring month-based milk subscriptions. No billing change has been made.
+**Status:** DRAFT / NOT APPROVED FOR PRODUCTION. An opt-in, finance-review-only obligation ledger has been implemented; automatic credit redemption, refunds and payment-cycle adjustments remain disabled.
 
 ## Verified code facts
 
@@ -22,7 +22,20 @@ The pure read-only module src/services/recurringCoverageAudit.js computes *poten
 | Nov 6 2026 at 20:00:00, offset +1 | Dec 2026 | Dec 1 | 31 | 31 | 0 initial gap | ₹0 initially |
 | Dec 1 2026 at 00:00 IST | Dec 2026 | Dec 2 | 31 | 30 | 1 | ₹105 |
 
-**All rows assume eventual captured payment.** Payment processing delay, holidays, address validation, dispatch cancellation, stock, vacations and failed delivery can create further shortfall. These are not customer credits or refund amounts until finance verifies the actual account ledger.
+**These rows describe the gross unavailable portion of the customer's selected calendar month, NOT a payable credit balance.** Milvanta can already extend the first paid-through date into the following month (for example, a November 6 start with one paid month may cover through December 5). Those existing December mornings must be counted before creating any additional obligation. Gateway `current_end` may alter the authoritative paid-through date, so finance must use the actual verified cycle dates.
+
+**Net illustrative exposure, assuming a November 6 entitlement start and a December 5 inclusive paid-through date:**
+
+| Verified payment time (IST) | First possible morning | Mornings possible through Dec 5 | Purchased mornings | Additional owed mornings | Value at ₹105/day |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Nov 6, 19:59:59 | Nov 7 | 29 | 30 | 1 | ₹105 |
+| Nov 6, 20:00:00 | Nov 8 | 28 | 30 | 2 | ₹210 |
+
+The new `previewRecurringMorningObligation` calculation uses the *actual planned entitlement start, captured-payment verification time, paid-through date, and purchased day count*. It does not double-issue credits for calendar mornings already covered in the paid-through period.
+
+**Implementation status:** Migration `021_recurring_morning_obligations.sql` defines an auditable obligation/event ledger with unique cycle/payment constraints. The captured-payment webhook can record an initial **pending_reconciliation** obligation for one-month plans, but only when `RECURRING_MORNING_OBLIGATIONS_ENABLED=true`. This flag defaults OFF. The feature requires an exact captured INR payment tied to the known live Razorpay subscription and first cycle; mandate-only, Test Mode, missing-cycle, and multi-month cases are excluded. Ledger recording does not itself extend delivery eligibility, issue/refund cash, change Razorpay billing dates, or send notifications. Production enablement, obligation redemption, refund settlement, and multi-month accounting remain separate review gates.
+
+**Important:** Payment delays, failed deliveries, skips, pauses, and gateway current-end discrepancies can change actual obligations. This is not an automatic customer refund or guarantee of immediate dispatch.
 
 ## Choose and approve ONE policy before enabling public recurring checkout
 
