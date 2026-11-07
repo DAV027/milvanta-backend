@@ -36,11 +36,21 @@ The new internal module `src/services/recurringMorningReservationPrototype.js` h
 
 Both functions **reject every non-test environment**, even if `RECURRING_MORNING_PHYSICAL_REDEMPTION_ENABLED=true`. They additionally require that exact flag in isolated tests. They are NOT imported into the existing delivery generator, admin routes, worker, or cron. They do not send notifications or call Razorpay. **The simulated prototype delivery does not constitute an actual delivered milk order.**
 
+## Bulk cancellation and refund safeguards — prototype only
+
+Migration **023** adds a PostgreSQL trigger for orders explicitly marked `owed_morning_prototype`. Whenever such an order transitions to **cancelled** or **failed**, the same database transaction releases a still-active reservation and writes at most one idempotent audit event. This also works when customer pause, vacation, skip or subscription cancellation updates scheduled orders directly via bulk SQL; a SQL rollback reverses both the order update and reservation release. Repeated terminal updates produce no additional events. **Paid-entitlement orders are unaffected.**
+
+The prototype state machine now relies on this trigger for cancellation/failure rather than independently issuing another release event. The ordinary **unskip** service restores only orders whose `fulfillment_source` is `paid_entitlement`, so a released prototype reservation cannot be revived by unskip.
+
+Refund approval in `src/services/refundService.js` conservatively blocks **before calling Razorpay** whenever an associated purchased-mornings obligation exists, even if its balance has changed. This is a manual finance review hold, not an automatic refund or entitlement settlement. The refund path locks the subscription row, while the captured-payment webhook checks for pending/approved/processing/processed refund requests before recording a new obligation. Those checks reduce double-payment races.
+
+**Limitations:** Bulk pause, vacation and skip credit accounting was designed for ordinary paid-entitlement dates, not prototype owed days. Do not consider its existing billing adjustments as reconciled with the new obligations. The trigger releases reservations but does not net out independent vacation/skip credits, and an unskip may still reverse an earlier ordinary credit. The prototype remains isolated from any production physical dispatch.
+
 ## What still blocks production physical redemption
 
 A later renewal can overwrite a previously valid owed morning; the prototype proves a lock order and a recheck, but **is not a production entitlement or refund ledger**. Before release:
 
-1. Design a release-grade transactional boundary shared by the normal delivery generator, gateway webhook, manual admin and all bulk cancellation/skip/vacation paths. The prototype alone is insufficient: operational bulk cancellations currently bypass its release hook.
+1. Design a release-grade transactional boundary shared by the normal delivery generator, gateway webhook, manual admin and customer skip/vacation paths. Migration 023 handles *prototype* terminal order releases, but the production entitlement and billing-credit ledgers are **not** yet reconciled across bulk actions.
 2. Review delivery status transitions and customer proof-of-delivery; connect counters and idempotent audit only after genuine physical fulfillment, not a simulated transition.
 3. Reconcile future Razorpay renewal cycles, including the case where an order was reserved before a later renewal, and specify what amount should be credited or refunded instead.
 4. Block double refunds: reserved/fulfilled/refunded accounting must be consistent with the existing refund_requests, subscription_entitlement_ledger and subscription_billing_adjustments.
@@ -54,6 +64,8 @@ A later renewal can overwrite a previously valid owed morning; the prototype pro
 - Isolated PostgreSQL approval and preview: tests/recurring-morning-redemption-postgresql.test.js
 - Migrations 021 and 022 define the independent liability and test-only order-reservation schemas.
 - Concurrent/failed/cancelled/renewal/paused test cases: `tests/recurring-morning-reservation-prototype-postgresql.test.js`.
+- Bulk cancellation, SQL rollback, idempotent release, customer unskip and Razorpay refund hold: `tests/recurring-prototype-bulk-release-refund-hold-postgresql.test.js`.
+- Refund/accrual conflict: `tests/recurring-morning-obligations.test.js`.
 - No production delivery-generation, scheduler or HTTP API integration was added.
 - All test records are synthetic, using disposable PostgreSQL schemas; no production or staging access.
 
