@@ -23,10 +23,6 @@ function nonneg(x) {
   if (n < 0) throw Error('invalid_finance_reconciliation_nonnegative');
   return n;
 }
-function groupTotal(rows, keyField, countField, desired) {
-  return rows.filter(row=>row[keyField]===desired)
-    .reduce((sum,row)=>sum+nonneg(row[countField]),0);
-}
 const unique = entries=>[...new Set(entries)];
 
 export function assessRecurringFinanceReconciliation({
@@ -89,13 +85,17 @@ export function assessRecurringFinanceReconciliation({
     const obligationId=nonneg(ob.id);
     const days=nonneg(ob.owed_mornings),completed=nonneg(ob.fulfilled_mornings),
       returned=nonneg(ob.refunded_mornings),rate=nonneg(ob.daily_rate_paise);
-    const hold=groupTotal(reservations,'obligation_id','reservation_count',ob.id,'reserved');
     const activeHold=reservations.filter(r=>Number(r.obligation_id)===obligationId &&
       r.status==='reserved').reduce((sum,r)=>sum+nonneg(r.reservation_count),0);
     const settled=completed+returned;
     const available=days-settled-activeHold;
     if (available<0) issues.push('owed_morning_reserved_balance_violation');
     if (rate!==dailyRate) issues.push('obligation_price_mismatch');
+    if (!ob.payment_id || !ob.razorpay_subscription_id ||
+        ob.razorpay_subscription_id!==subscription.razorpay_subscription_id ||
+        ob.payment_id!==(notes.lastPaymentId || notes.paymentId)) {
+      issues.push('obligation_and_payment_evidence_mismatch');
+    }
     if (ob.status!=='approved' && ob.status!=='pending_reconciliation' && ob.status!=='closed') {
       issues.push('unknown_obligation_status');
     }
@@ -124,8 +124,10 @@ export function assessRecurringFinanceReconciliation({
       refunds.pendingPaise+=amount;refunds.pendingCount++;
     } else if(req.status==='approved') {
       refunds.approvedUnconfirmedPaise+=approved;refunds.approvedCount++;
+      if (approved===0) issues.push('approved_refund_missing_amount');
     } else if(req.status==='processed') {
       refunds.processedPaise+=approved;refunds.processedCount++;
+      if (approved===0) issues.push('processed_refund_missing_amount');
       if (!req.gateway_refund_id) issues.push('processed_refund_missing_gateway_receipt');
     } else if(req.status==='failed') refunds.failedCount++;
   }
