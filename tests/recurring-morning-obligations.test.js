@@ -31,6 +31,9 @@ function fakeLedger() {
     async query(sql, params) {
       const q = String(sql);
       statements.push(q);
+      if (q.includes('SELECT id FROM refund_requests WHERE subscription_id')) {
+        return {rows:[]};
+      }
       if (q.includes('INSERT INTO subscription_recurring_morning_obligations')) {
         const key = params[0] + ':' + params[4];
         if (rows.has(key)) return {rows:[],rowCount:0};
@@ -140,6 +143,24 @@ test('refuse Test Mode, legacy, mandate-only, missing evidence and later paid cy
     assert.equal(result.recorded,false);
     assert.equal(db.statements.length,0);
   }
+});
+
+test('pending customer refund prevents new recurring liability accrual',async()=>{
+  const db=fakeLedger();
+  const query=db.client.query.bind(db.client);
+  db.client.query=async(sql,params)=>{
+    if (String(sql).includes('SELECT id FROM refund_requests WHERE subscription_id')) {
+      return {rows:[{id:99}]};
+    }
+    return query(sql,params);
+  };
+  const result=await recordVerifiedRecurringInitialGap(db.client,{
+    subscription:bill,paidCount:1,capturedPayment:payment,verifiedAt:atCutoff,enabled:true
+  });
+  assert.equal(result.recorded,false);
+  assert.equal(result.reason,'refund_reconciliation_required');
+  assert.equal(db.rows.size,0);
+  assert.equal(db.events.size,0);
 });
 
 test('one captured first-cycle payment creates one pending obligation + event; retries idempotent',async()=>{
