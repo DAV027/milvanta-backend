@@ -358,6 +358,21 @@ export async function approveRefundRequest(poolOrClient, {
     // This check runs BEFORE any Razorpay refund call. It is a review hold,
     // not an automatic debit/credit or a silent reduction in refundable amount.
     if (req.subscription_id) {
+      // Lock in the SAME order as the payment webhook, which updates the
+      // subscription before attempting an owed-morning accrual. A webhook
+      // arriving during refund approval must wait and then see its outcome.
+      const { rows: lockedSubscription } = await client.query(
+        'SELECT id FROM customer_subscriptions WHERE id = $1 FOR UPDATE',
+        [req.subscription_id]
+      );
+      if (lockedSubscription.length !== 1) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'refund_subscription_missing_for_reconciliation',
+          statusCode: 409
+        };
+      }
       const { rows: liabilityRows } = await client.query(
         `SELECT id FROM subscription_recurring_morning_obligations
          WHERE subscription_id = $1 LIMIT 1`,
