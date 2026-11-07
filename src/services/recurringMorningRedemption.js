@@ -87,7 +87,7 @@ export async function previewRecurringMorningRedemption(pool, {
     const subscription = subscriptions[0];
     if (!subscription) return { eligible: false, reason: 'subscription_not_found', canGeneratePhysicalOrder: false };
     const { rows: obligations } = await client.query(
-      "SELECT * FROM subscription_recurring_morning_obligations WHERE subscription_id = $1 AND status = 'approved' ORDER BY first_cycle_start ASC LIMIT 1",
+      "SELECT *, first_eligible_delivery::text AS first_eligible_delivery FROM subscription_recurring_morning_obligations WHERE subscription_id = $1 AND status = 'approved' ORDER BY first_cycle_start ASC LIMIT 1",
       [subscriptionId]
     );
     const obligation = obligations[0];
