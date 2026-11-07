@@ -668,6 +668,20 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     }
 
     const order = rows[0];
+
+    // 022 owes-morning reservations are an isolated TEST-ONLY prototype.
+    // Production's normal admin/driver status endpoint must NEVER dispatch
+    // or settle these rows, including if somebody copies data from a test DB.
+    // A separate, unexposed prototype state machine is tested in isolation.
+    if (order.fulfillment_source === 'owed_morning_prototype') {
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        error: 'prototype_owed_morning_not_operational',
+        message: 'Owed-morning prototype orders are not authorized for operations dispatch',
+        statusCode: 409
+      };
+    }
     const allowed = VALID_STATUS_TRANSITIONS[order.status] || [];
 
     // Do not let manually created legacy or Test Mode rows progress into
