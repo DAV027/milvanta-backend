@@ -79,7 +79,7 @@ import {
   updateDeliveryStatus,
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
-import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
+import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, getISTCalendarYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 import { previewRecurringFirstCycleCoverage } from './services/recurringCoverageAudit.js';
 import { recordVerifiedRecurringInitialGap } from './services/recurringMorningObligations.js';
 
@@ -1575,6 +1575,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
     checkoutAt: now, startOffset: offset, monthsCount: months, dailyRatePaise
   });
   const futureStartDateYMD = offset > 0 ? firstCycleCoverage.firstCycleStart : null;
+  const planEntitlementStartYMD = futureStartDateYMD || getISTCalendarYMD(now);
   // 06:00 Asia/Kolkata is 00:30 UTC (server's local timezone is irrelevant).
   const startAtTimestamp = futureStartDateYMD
     ? Math.floor(new Date(`${futureStartDateYMD}T00:30:00Z`).getTime() / 1000)
@@ -1733,12 +1734,13 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           months,
           days: totalDays,
           startOffset: offset,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: planEntitlementStartYMD,
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
           planFirstCycleStartYMD: firstCycleCoverage.firstCycleStart,
           planFirstCycleEndYMD: firstCycleCoverage.firstCycleEnd,
+          planEntitlementStartYMD,
           purchaseEarliestEligibleYMD: firstCycleCoverage.earliestEligibleDate,
           initialCalendarShortfallEstimate: firstCycleCoverage.initiallyUnservableDays,
           keyMode
@@ -5698,7 +5700,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             const currentSub = currentRows[0];
             const currNotes = typeof currentSub?.notes === 'object' && currentSub?.notes !== null ? currentSub.notes : {};
 
-            const startDate = currNotes.startDate || (currentSub?.created_at ? formatDateYMD(new Date(currentSub.created_at)) : null);
+            const startDate = currNotes.startDate || currNotes.planEntitlementStartYMD ||
+              (currentSub?.created_at ? getISTCalendarYMD(new Date(currentSub.created_at)) : null);
             const paidThroughYMD = derivePaidThroughDate({
               startDate,
               paidThroughDate: currNotes.paidThroughDate,
@@ -5751,7 +5754,10 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
             // Does not extend entitlement, charge/refund, or schedule deliveries.
             if (currentSub && currentSub.razorpay_subscription_id === subEntity.id) {
               await recordVerifiedRecurringInitialGap(client, {
-                subscription: currentSub,
+                subscription: {
+                  ...currentSub,
+                  notes: { ...currNotes, paidThroughDate: paidThroughYMD }
+                },
                 paidCount: actualPaidCount,
                 capturedPayment: rawPaymentEntity,
                 verifiedAt: new Date()
