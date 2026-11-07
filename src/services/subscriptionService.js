@@ -918,7 +918,8 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       await client.query(
         `UPDATE subscription_delivery_orders 
          SET status = 'scheduled', failed_reason = NULL, updated_at = NOW()
-         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'`,
+         WHERE subscription_id = $1 AND delivery_date = $2 AND status = 'cancelled' AND failed_reason = 'Delivery date skipped by customer'
+           AND fulfillment_source = 'paid_entitlement'`,
         [subscriptionId, cleanSkipDate]
       );
 
