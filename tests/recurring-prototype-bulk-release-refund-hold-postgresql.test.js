@@ -6,7 +6,7 @@ import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {setupDisposableTestSchema,cleanupDisposableTestSchema} from './helpers/testDbGuard.js';
 import {getISTCalendarYMD,getEarliestPermittedDeliveryDateYMD} from '../src/services/deliveryCronPolicy.js';
-import {addDaysToYMD} from '../src/services/subscriptionService.js';
+import {addDaysToYMD,unskipDeliveryDate} from '../src/services/subscriptionService.js';
 import {reservePrototypeOwedMorning} from '../src/services/recurringMorningReservationPrototype.js';
 import {approveRefundRequest} from '../src/services/refundService.js';
 
@@ -158,12 +158,16 @@ test('unskip cannot revive a released prototype reservation',async()=>{
     "VALUES($1,$2,$3,'Test-only skip')",
     [subId,customerId,restoreDate]
   );
+  // The ordinary customer unskip API is allowed to undo a real paid-order
+  // skip, but it must never resurrect a released owed-morning prototype.
   await pool.query(
-    "UPDATE subscription_delivery_orders SET status='scheduled',failed_reason=NULL,updated_at=NOW() "+
-    "WHERE subscription_id=$1 AND delivery_date=$2 AND status='cancelled' "+
-    "AND failed_reason='Delivery date skipped by customer' AND fulfillment_source='paid_entitlement'",
+    "UPDATE customer_subscriptions SET notes=jsonb_set(notes,'{paidThroughDate}',to_jsonb($2::text)) WHERE id=$1",
     [subId,restoreDate]
   );
+  const unskip=await unskipDeliveryDate(pool,{
+    subscriptionId:subId,customerId,skipDate:restoreDate
+  });
+  assert.equal(unskip.success,true,JSON.stringify(unskip));
   const r=await pool.query(
     'SELECT status FROM subscription_delivery_orders WHERE id=$1',
     [third]
