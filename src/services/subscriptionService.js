@@ -647,12 +647,14 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
              VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
             [subscriptionId, customerId, adjType, pausedDays, totalAmount, `Indefinite pause ${adjType} (${pausedDays} days)`]
           );
+          if (!isPrepaid && process.env.RECURRING_CREDIT_PROVENANCE_ENABLED === 'true') {
           await recordBillingCreditProvenance(client, {
             subscription: sub, adjustmentId: resumeAdjustment.rows[0].id,
             sourceKind: 'pause_resume', sourceReference: 'pause:' + p.id,
             startDate: pauseStart, daysCount: pausedDays, totalAmountPaise: totalAmount,
             isRecurringAutopay: !isPrepaid
           });
+          }
 
           await recordEntitlementLedgerEntry(client, {
             subscriptionId,
@@ -805,6 +807,7 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
          VALUES ($1, $2, $3, 1, $4, $5) RETURNING id`,
         [subscriptionId, customerId, adjType, sub.cost_per_day_paise || 10500, adjNotes]
       );
+      if (!isPrepaid && process.env.RECURRING_CREDIT_PROVENANCE_ENABLED === 'true') {
       await recordBillingCreditProvenance(client, {
         subscription: sub, adjustmentId: skipAdjustment.rows[0].id,
         sourceKind: 'skip', sourceReference: 'skip:' + insertRes.rows[0].id,
@@ -812,6 +815,7 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
         totalAmountPaise: sub.cost_per_day_paise || 10500,
         isRecurringAutopay: !isPrepaid
       });
+      }
 
       await recordEntitlementLedgerEntry(client, {
         subscriptionId,
@@ -946,6 +950,7 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
          VALUES ($1, $2, $3, -1, $4, $5) RETURNING id`,
         [subscriptionId, customerId, adjType, -(sub.cost_per_day_paise || 10500), `Reverted 1 day ${adjType} for unskipped date ${cleanSkipDate}`]
       );
+      if (!isPrepaid && process.env.RECURRING_CREDIT_PROVENANCE_ENABLED === 'true') {
       await recordBillingCreditProvenance(client, {
         subscription: sub, adjustmentId: unskipAdjustment.rows[0].id,
         sourceKind: 'unskip', sourceReference: 'unskip:' + deleteRes.rows[0].id,
@@ -953,6 +958,7 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
         totalAmountPaise: -(sub.cost_per_day_paise || 10500),
         isRecurringAutopay: !isPrepaid
       });
+      }
 
       await recordEntitlementLedgerEntry(client, {
         subscriptionId,
@@ -1053,12 +1059,14 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       [subscriptionId, customerId, adjType, daysCount, totalAmount, `Vacation ${adjType} from ${startDate} to ${endDate}`]
     );
+    if (!isPrepaid && process.env.RECURRING_CREDIT_PROVENANCE_ENABLED === 'true') {
     await recordBillingCreditProvenance(client, {
       subscription: sub, adjustmentId: vacationAdjustment.rows[0].id,
       sourceKind: 'vacation', sourceReference: 'vacation:' + vacationPause.rows[0].id,
       startDate, daysCount, totalAmountPaise: totalAmount,
       isRecurringAutopay: !isPrepaid
     });
+    }
 
     await recordEntitlementLedgerEntry(client, {
       subscriptionId,
