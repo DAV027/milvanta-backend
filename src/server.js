@@ -82,6 +82,7 @@ import {
 import { getDeliveryCronTarget, getEarliestPermittedDeliveryDateYMD, getISTCalendarYMD, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 import { previewRecurringFirstCycleCoverage } from './services/recurringCoverageAudit.js';
 import { recordVerifiedRecurringInitialGap } from './services/recurringMorningObligations.js';
+import { recordSignedRecurringCaptureObservation } from './services/recurringCaptureObservations.js';
 
 const { Pool } = pg;
 const scrypt = promisify(crypto.scrypt);
@@ -5767,6 +5768,16 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 paidCount: actualPaidCount,
                 capturedPayment: rawPaymentEntity,
                 verifiedAt: new Date()
+              });
+              // Capture observations are independent finance evidence only:
+              // signed raw payment entity, exact live subscription & amount.
+              // OFF until explicitly approved. Neither invoices nor fallback
+              // fetched payment IDs are presumed to be captured evidence.
+              await recordSignedRecurringCaptureObservation(client, {
+                subscription: currentSub,
+                rawPaymentEntity,
+                eventId,
+                paidCount: actualPaidCount
               });
             }
           }
