@@ -157,6 +157,37 @@ test('unobserved gateway payments, missing paid cycles and foreign data fail clo
     assert.ok(altered.reviewFlags.includes(flag),flag);
   }
 });
+test('complete multi-cycle gateway invoice evidence must cover paid cycles and paid invoices',()=>{
+  const missingCycle=run({
+    gatewaySnapshot:{...snapshot,
+      invoices:[invoices[0]],
+      payments:[payments[0]],
+      refunds
+    }
+  });
+  assert.ok(missingCycle.reviewFlags.includes('local_paid_cycles_exceed_gateway_invoice_evidence'));
+  assert.ok(missingCycle.reviewFlags.includes('webhook_cycle_exceeds_gateway_invoice_evidence'));
+  assert.ok(missingCycle.reviewFlags.includes('webhook_capture_absent_from_gateway_snapshot'));
+
+  const unpaidInvoice=run({
+    gatewaySnapshot:{...snapshot,
+      invoices:[...invoices,{
+        id:'inv_gateway_paid_unlinked',status:'paid',
+        subscription_id:subscription.razorpay_subscription_id,
+        payment_id:'pay_gateway_unseen',
+        billing_start:1798761600,billing_end:1801440000
+      }]
+    }
+  });
+  assert.ok(unpaidInvoice.reviewFlags.includes('paid_gateway_invoice_without_matching_capture'));
+
+  const testModeLocal=run({subscription:{
+    ...subscription,notes:{...subscription.notes,keyMode:'test'}
+  }});
+  assert.ok(testModeLocal.reviewFlags.includes('local_gateway_mode_not_verified_live'));
+  assert.equal(testModeLocal.mayAutoRefund,false);
+});
+
 test('non-integral currency subunits fail instead of rounded finance results',()=>{
   assert.throws(()=>run({
     gatewaySnapshot:{...snapshot,payments:[{...payments[0],amount:100.5},payments[1]]}
