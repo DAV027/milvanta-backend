@@ -144,6 +144,30 @@ test('processed local refund must match exact gateway refund ID, payment ID and 
   assert.ok(altered.reviewFlags.includes('local_processed_refund_receipt_mismatch'));
   assert.equal(altered.customerRefundableAmountPaise,null);
 });
+test('captures with foreign subscription or missing invoice never enter reconciled captured total',()=>{
+  const altered=run({
+    gatewaySnapshot:{...snapshot,
+      payments:[
+        {...payments[0],subscription_id:'sub_unrelated'},
+        {...payments[1],invoice_id:'inv_missing'}
+      ]
+    }
+  });
+  assert.equal(altered.capturedPaymentCount,0);
+  assert.equal(altered.observedCapturedAmountPaise,0);
+  assert.ok(altered.reviewFlags.includes('capture_not_reconciled_to_subscription_cycle'));
+  assert.equal(altered.mayAutoRefund,false);
+});
+
+test('two processed local requests for one refund must not be counted as two legitimate settlements',()=>{
+  const duplicated=run({
+    localRefundRequests:[...localRefundRequests,{...localRefundRequests[0]}]
+  });
+  assert.ok(duplicated.reviewFlags.includes('duplicate_local_processed_refund_claim'));
+  assert.equal(duplicated.processedRefundAmountPaise,5000);
+  assert.equal(duplicated.customerRefundableAmountPaise,null);
+});
+
 test('unobserved gateway payments, missing paid cycles and foreign data fail closed',()=>{
   const altered=run({
     captureObservations:[observations[0]],
