@@ -125,9 +125,12 @@ test('same invoice cycle with multiple payments or overlapping cycles is held fo
   });
   assert.ok(altered.reviewFlags.includes('invoice_payment_conflict'));
   assert.ok(altered.reviewFlags.includes('multiple_payments_per_gateway_invoice_cycle'));
-  // Later cycle partially overlaps earlier invoice dates.
-  assert.ok(altered.reviewFlags.includes('overlapping_gateway_invoice_cycles')===false ||
-    altered.reviewFlags.includes('overlapping_gateway_invoice_cycles'));
+  const overlap=run({
+    gatewaySnapshot:{...snapshot,
+      invoices:[invoices[0],{...invoices[1],billing_start:1795000000}]
+    }
+  });
+  assert.ok(overlap.reviewFlags.includes('overlapping_gateway_invoice_cycles'));
   assert.equal(altered.mayAutoRefund,false);
 });
 test('processed local refund must match exact gateway refund ID, payment ID and amount',()=>{
