@@ -7,6 +7,8 @@
  * The caller must independently establish account, source authenticity,
  * completeness, and time before relying on the report. No UI/cron routes.
  */
+import { acquireClient } from './subscriptionService.js';
+
 function safeInt(value, field, {positive=false}={}) {
   const n = typeof value==='number' ? value :
     typeof value==='string' && /^[0-9]+$/.test(value) ? Number(value) : NaN;
@@ -266,4 +268,52 @@ export function assessRecurringGatewaySnapshot({
   // No monetary compensation can ever be concluded from this module, even
   // when every supplied record matches. A snapshot is not bank settlement.
   return report;
+}
+
+
+/**
+ * Internal-only database-backed comparison with separately supplied gateway
+ * evidence. A transaction snapshots Milvanta tables READ ONLY; no network,
+ * Razorpay credentials, webhook modifications, customer changes or dispatch.
+ * The supplied snapshot's provenance is not authenticated here.
+ */
+export async function previewRecurringGatewaySnapshotReconciliation(pool,{
+  subscriptionId,gatewaySnapshot
+}={}) {
+  const idNum=Number(subscriptionId);
+  if(!Number.isSafeInteger(idNum)||idNum<=0){
+    return {success:false,reason:'invalid_subscription_id'};
+  }
+  const {client,release}=await acquireClient(pool);
+  try {
+    await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const subs=await client.query(
+      'SELECT id,customer_id,razorpay_subscription_id,plan_type,notes FROM customer_subscriptions WHERE id=$1',
+      [idNum]);
+    const sub=subs.rows[0];
+    if(!sub){
+      await client.query('COMMIT');
+      return {success:false,reason:'subscription_not_found'};
+    }
+    const obs=await client.query(
+      'SELECT gateway_payment_id,gateway_subscription_id,amount_paise,currency,'+
+      'paid_count_at_event,proof_level FROM recurring_subscription_capture_observations '+
+      'WHERE subscription_id=$1 ORDER BY id',
+      [idNum]
+    );
+    const refunds=await client.query(
+      'SELECT status,approved_amount_paise,gateway_refund_id,payment_id '+
+      'FROM refund_requests WHERE subscription_id=$1 ORDER BY id',
+      [idNum]
+    );
+    const report=assessRecurringGatewaySnapshot({
+      subscription:sub,captureObservations:obs.rows,
+      localRefundRequests:refunds.rows,gatewaySnapshot
+    });
+    await client.query('COMMIT');
+    return {success:true,...report};
+  }catch(err){
+    await client.query('ROLLBACK').catch(()=>{});
+    throw err;
+  }finally{release();}
 }
