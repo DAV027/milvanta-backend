@@ -133,6 +133,27 @@ test('same invoice cycle with multiple payments or overlapping cycles is held fo
   assert.ok(overlap.reviewFlags.includes('overlapping_gateway_invoice_cycles'));
   assert.equal(altered.mayAutoRefund,false);
 });
+test('foreign processed refund cannot increase matched refund amount',()=>{
+  const report=run({
+    gatewaySnapshot:{...snapshot,refunds:[
+      ...refunds,{id:'rfnd_foreign_gateway',payment_id:'pay_outside_subscription',
+        currency:'USD',status:'processed',amount:500000}
+    ]}
+  });
+  assert.equal(report.processedRefundAmountPaise,5000);
+  assert.ok(report.reviewFlags.includes('processed_refund_not_linked_to_valid_gateway_payment'));
+  assert.ok(report.reviewFlags.includes('gateway_refund_currency_or_payment_mismatch'));
+  assert.equal(report.mayAutoRefund,false);
+});
+
+test('processed local claim with missing approved amount is reviewable, not payable',()=>{
+  const report=run({localRefundRequests:[
+    {...localRefundRequests[0],approved_amount_paise:null}
+  ]});
+  assert.ok(report.reviewFlags.includes('local_processed_refund_approved_amount_missing'));
+  assert.equal(report.customerRefundableAmountPaise,null);
+});
+
 test('processed local refund must match exact gateway refund ID, payment ID and amount',()=>{
   const altered=run({localRefundRequests:[
     {status:'processed',gateway_refund_id:'rfnd_missing',
