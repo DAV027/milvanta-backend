@@ -16,7 +16,7 @@ export async function recordSignedRecurringCaptureObservation(client,{
     return {recorded:false,reason:'live_subscription_identity_not_verified'};
   }
   if (!rawPaymentEntity || rawPaymentEntity.status!=='captured' ||
-      !rawPaymentEntity.id?.startsWith('pay_') ||
+      typeof rawPaymentEntity.id!=='string' || !rawPaymentEntity.id.startsWith('pay_') ||
       rawPaymentEntity.subscription_id!==subscription.razorpay_subscription_id ||
       rawPaymentEntity.currency!=='INR' ||
       !Number.isSafeInteger(rawPaymentEntity.amount) ||
