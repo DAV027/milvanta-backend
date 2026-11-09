@@ -5777,7 +5777,8 @@ app.post('/api/v1/payments/webhook', async (request, reply) => {
                 subscription: currentSub,
                 rawPaymentEntity,
                 eventId,
-                paidCount: actualPaidCount
+                // Never label an inferred fallback count as gateway cycle evidence.
+                paidCount: hasPositivePaidCount ? rawPaidCount : 0
               });
             }
           }
