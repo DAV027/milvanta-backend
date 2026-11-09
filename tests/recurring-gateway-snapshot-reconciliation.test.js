@@ -119,12 +119,20 @@ test('forged payment identity, wrong currency, inconsistent amount and duplicate
 test('same invoice cycle with multiple payments or overlapping cycles is held for review',()=>{
   const altered=run({
     gatewaySnapshot:{...snapshot,
-      invoices:[invoices[0],{...invoices[1],billing_start:1795000000}],
+      // Two legitimate paid invoice/payment pairs for the SAME billing range.
+      invoices:[invoices[0],{...invoices[1],
+        billing_start:invoices[0].billing_start,
+        billing_end:invoices[0].billing_end}]
+    }
+  });
+  assert.ok(altered.reviewFlags.includes('multiple_payments_per_gateway_invoice_cycle'));
+  const wrongLink=run({
+    gatewaySnapshot:{...snapshot,
       payments:[payments[0],{...payments[1],invoice_id:'inv_gateway_01'}]
     }
   });
-  assert.ok(altered.reviewFlags.includes('invoice_payment_conflict'));
-  assert.ok(altered.reviewFlags.includes('multiple_payments_per_gateway_invoice_cycle'));
+  assert.ok(wrongLink.reviewFlags.includes('invoice_payment_conflict'));
+  assert.ok(wrongLink.reviewFlags.includes('capture_not_reconciled_to_subscription_cycle'));
   const overlap=run({
     gatewaySnapshot:{...snapshot,
       invoices:[invoices[0],{...invoices[1],billing_start:1795000000}]
