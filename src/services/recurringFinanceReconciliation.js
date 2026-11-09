@@ -28,7 +28,8 @@ const unique = entries=>[...new Set(entries)];
 export function assessRecurringFinanceReconciliation({
   subscription, paidThroughDate=null,
   billingAdjustments=[], entitlementLedger=[], obligations=[],
-  reservations=[], refundRequests=[], deliveryOrders=[]
+  reservations=[], refundRequests=[], deliveryOrders=[],
+  datedCreditProvenance=[],captureObservations=[]
 }={}) {
   if (!subscription?.id || !subscription?.customer_id) throw Error('finance_subscription_required');
   const notes=subscription.notes && typeof subscription.notes==='object' ? subscription.notes : {};
@@ -67,6 +68,88 @@ export function assessRecurringFinanceReconciliation({
     if (v.days<0 || v.amountPaise<0) issues.push('negative_net_'+key+'_adjustment');
     if (v.days*dailyRate!==v.amountPaise && v.days!==0) {
       issues.push(key+'_amount_day_rate_mismatch');
+    }
+  }
+
+  // A date-stamped source is NOT a validated payment/cycle match.
+  // Overlapping positive claims remain in the report even if an unskip
+  // cancels part of their net amount. No automatic credit is calculated.
+  const byDate=new Map();
+  let evidencedCreditDays=0, evidencedCreditPaise=0;
+  for(const r of datedCreditProvenance){
+    const day=String(r.delivery_date||'');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+      issues.push('credit_provenance_invalid_delivery_date');
+      continue;
+    }
+    const signedDays=finiteInt(r.days_delta),amount=finiteInt(r.amount_paise);
+    if (signedDays!==1 && signedDays!==-1) issues.push('credit_provenance_invalid_direction');
+    if (Math.sign(signedDays)!==Math.sign(amount) || Math.abs(amount)!==dailyRate) {
+      issues.push('credit_provenance_price_or_direction_mismatch');
+    }
+    if (r.evidence_state!=='date_known_payment_unverified') {
+      issues.push('unexpected_credit_capture_proof_claim');
+    }
+    const data=byDate.get(day)||{positive:0,negative:0,netDays:0,netPaise:0};
+    data.positive+=signedDays>0?1:0;
+    data.negative+=signedDays<0?1:0;
+    data.netDays+=signedDays;
+    data.netPaise+=amount;
+    byDate.set(day,data);
+    if (r.adjustment_type==='credit'){
+      evidencedCreditDays+=signedDays;
+      evidencedCreditPaise+=amount;
+    }
+  }
+  const overlappingDates=[...byDate.entries()]
+    .filter(([,v])=>v.positive>1)
+    .map(([day])=>day);
+  if (overlappingDates.length) issues.push('multiple_positive_credit_claims_same_date');
+  const missingDateEvidence=adjustments.credit.days!==evidencedCreditDays ||
+    adjustments.credit.amountPaise!==evidencedCreditPaise;
+  if (missingDateEvidence && (adjustments.credit.entries>0 || datedCreditProvenance.length>0)){
+    issues.push('credit_date_provenance_incomplete_or_legacy');
+  }
+  // Signed webhook observations are historical evidence, not proof of
+  // settlement, nor a substitute for querying Razorpay before a refund.
+  let observedCapturedTotalPaise=0;
+  const observedCycles=new Map();
+  const observedPaymentIds=new Set();
+  for(const payment of captureObservations){
+    const amount=nonneg(payment.amount_paise);
+    const cycle=nonneg(payment.paid_count_at_event);
+    if(amount<=0||cycle<1 || payment.currency!=='INR' ||
+       payment.proof_level!=='signed_webhook_payment_entity' ||
+       payment.gateway_subscription_id!==subscription.razorpay_subscription_id){
+      issues.push('capture_observation_invalid_or_foreign');
+      continue;
+    }
+    if(observedPaymentIds.has(payment.gateway_payment_id)){
+      issues.push('duplicate_capture_observation_identity');
+      continue;
+    }
+    observedPaymentIds.add(payment.gateway_payment_id);
+    observedCapturedTotalPaise+=amount;
+    if(!Number.isSafeInteger(observedCapturedTotalPaise)) {
+      throw Error('capture_observation_amount_overflow');
+    }
+    observedCycles.set(cycle,(observedCycles.get(cycle)||0)+1);
+  }
+  if([...observedCycles.values()].some(n=>n>1)) {
+    issues.push('multiple_captures_same_paid_cycle_require_review');
+  }
+  if (captureObservations.length && Number.isInteger(paidCycles) &&
+      paidCycles>Math.max(0,...observedCycles.keys())) {
+    issues.push('capture_observations_missing_paid_cycles');
+  }
+  if((obligations.length>0||adjustments.credit.entries>0) &&
+     captureObservations.length===0){
+    issues.push('no_signed_capture_observations_for_finance_claim');
+  }
+  for(const ob of obligations){
+    if (captureObservations.length>0 &&
+       !observedPaymentIds.has(ob.payment_id)) {
+      issues.push('obligation_payment_absent_from_signed_capture_observations');
     }
   }
 
@@ -160,6 +243,21 @@ export function assessRecurringFinanceReconciliation({
     months:Number.isInteger(months)?months:null,paidThroughDate:paidThroughDate||null,
     dailyRatePaise:dailyRate,
     billingAdjustments:adjustments,entitlementLedger:auditEntryCounts,
+    datedCreditProvenance:{
+      recordedRows:datedCreditProvenance.length,
+      distinctDates:byDate.size,
+      netCreditDaysEvidenced:evidencedCreditDays,
+      netCreditPaiseEvidenced:evidencedCreditPaise,
+      legacyOrMissingEvidence:missingDateEvidence,
+      overlappingPositiveClaimDates:overlappingDates,
+      captureEvidenceAttached:false
+    },
+    signedWebhookCaptureObservations:{
+      recordedPayments:observedPaymentIds.size,
+      observedCapturedAmountPaise:observedCapturedTotalPaise,
+      observedPaidCycleNumbers:[...observedCycles.keys()].sort((a,b)=>a-b),
+      evidenceOnlyNotSettlementProof:true
+    },
     owedMorningObligations: {
       recordedCount:obligations.length,owedMornings:owed,
       fulfilledMornings:fulfilled,refundedMornings:refunded,
@@ -230,11 +328,26 @@ export async function previewRecurringFinanceReconciliation(pool,{subscriptionId
       'FROM subscription_delivery_orders WHERE subscription_id=$1 GROUP BY status,fulfillment_source',
       [subscriptionId]
     );
+    const provenanceRows=await client.query(
+      "SELECT p.delivery_date::text AS delivery_date,p.days_delta,p.amount_paise,"+
+      "p.evidence_state,a.adjustment_type FROM subscription_billing_credit_provenance p "+
+      "JOIN subscription_billing_adjustments a ON a.id=p.billing_adjustment_id "+
+      "WHERE p.subscription_id=$1 ORDER BY p.delivery_date,p.id",
+      [subscriptionId]
+    );
+    const captureRows=await client.query(
+      "SELECT gateway_payment_id,gateway_subscription_id,amount_paise,currency,"+
+      "paid_count_at_event,proof_level FROM recurring_subscription_capture_observations "+
+      "WHERE subscription_id=$1 ORDER BY paid_count_at_event,id",
+      [subscriptionId]
+    );
     const review=assessRecurringFinanceReconciliation({
       subscription,paidThroughDate,
       billingAdjustments:adjustmentRows.rows,entitlementLedger:ledgerRows.rows,
       obligations:obligationRows.rows,reservations:reservationRows.rows,
-      refundRequests:refundRows.rows,deliveryOrders:deliveryRows.rows
+      refundRequests:refundRows.rows,deliveryOrders:deliveryRows.rows,
+      datedCreditProvenance:provenanceRows.rows,
+      captureObservations:captureRows.rows
     });
     await client.query('COMMIT');
     return {success:true,...review};
