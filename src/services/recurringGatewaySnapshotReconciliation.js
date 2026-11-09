@@ -227,13 +227,14 @@ export function assessRecurringGatewaySnapshot({
     }
     refundsById.set(refund.id,refund);
     const amount=safeInt(refund.amount,'refund_amount',{positive:true});
-    if(refund.currency!=='INR' || !id(refund.payment_id,'pay_') ||
-       !paymentsById.has(refund.payment_id)){
-      flags.push('gateway_refund_currency_or_payment_mismatch');
-    }
+    const linkedPaymentValid=refund.currency==='INR' &&
+      id(refund.payment_id,'pay_') && paymentsById.has(refund.payment_id);
+    if(!linkedPaymentValid) flags.push('gateway_refund_currency_or_payment_mismatch');
     if(refund.status==='processed'){
-      processedTotals.set(refund.payment_id,
-        sumSafe([processedTotals.get(refund.payment_id)||0,amount],'processed_refunds'));
+      if(linkedPaymentValid){
+        processedTotals.set(refund.payment_id,
+          sumSafe([processedTotals.get(refund.payment_id)||0,amount],'processed_refunds'));
+      }else flags.push('processed_refund_not_linked_to_valid_gateway_payment');
     }else if(['pending','created','queued','processing'].includes(refund.status)){
       pendingTotals.push(amount);
       flags.push('gateway_refund_not_final');
@@ -242,7 +243,8 @@ export function assessRecurringGatewaySnapshot({
     }
     report.refundComparisons.push({
       refundId:refund.id,paymentId:refund.payment_id,status:refund.status,
-      amountPaise:amount,terminalProcessed:refund.status==='processed'
+      amountPaise:amount,terminalProcessed:refund.status==='processed',
+      reconciledToGatewayPayment:linkedPaymentValid
     });
   }
   report.processedRefundAmountPaise=sumSafe([...processedTotals.values()],'total_processed_refunds');
@@ -274,8 +276,11 @@ export function assessRecurringGatewaySnapshot({
         flags.push('local_processed_refund_missing_from_gateway_snapshot');
       }else{
         const ref=refundsById.get(req.gateway_refund_id);
-        if(ref.status!=='processed'||ref.payment_id!==req.payment_id ||
-           safeInt(ref.amount,'local_match_gateway_amount')!==safeInt(req.approved_amount_paise,'local_approved_amount',{positive:true})){
+        const locallyApproved=Number(req.approved_amount_paise);
+        if(!Number.isSafeInteger(locallyApproved)||locallyApproved<=0){
+          flags.push('local_processed_refund_approved_amount_missing');
+        }else if(ref.status!=='processed'||ref.payment_id!==req.payment_id ||
+           safeInt(ref.amount,'local_match_gateway_amount')!==locallyApproved){
           flags.push('local_processed_refund_receipt_mismatch');
         }
       }
