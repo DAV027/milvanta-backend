@@ -97,6 +97,29 @@ test('unskip reverses the same morning, with independent signed provenance',asyn
   assert.equal(review.mayAutoRefund,false);
 });
 
+test('resuming an indefinite pause writes one dated source row per paused morning',async()=>{
+  const istToday=getISTCalendarYMD();
+  const pauseStart=addDaysToYMD(istToday,-2);
+  const inserted=await pool.query(
+    "INSERT INTO subscription_delivery_pauses "+
+    "(subscription_id,customer_id,pause_start_date,pause_end_date,reason) "+
+    "VALUES($1,$2,$3,NULL,'Synthetic indefinite pause') RETURNING id",
+    [subId,customerId,pauseStart]
+  );
+  await pool.query("UPDATE customer_subscriptions SET status='paused' WHERE id=$1",[subId]);
+  const result=await resumeSubscription(pool,{subscriptionId:subId,customerId});
+  assert.equal(result.success,true,JSON.stringify(result));
+  const rows=await pool.query(
+    "SELECT delivery_date::text AS day,days_delta,amount_paise "+
+    "FROM subscription_billing_credit_provenance "+
+    "WHERE subscription_id=$1 AND source_kind='pause_resume' AND source_reference=$2 ORDER BY delivery_date",
+    [subId,'pause:'+inserted.rows[0].id]
+  );
+  assert.equal(rows.rowCount,2);
+  assert.deepEqual(rows.rows.map(r=>r.day),[pauseStart,addDaysToYMD(pauseStart,1)]);
+  assert.ok(rows.rows.every(r=>r.days_delta===1&&r.amount_paise===10500));
+});
+
 test('signed captured recurring payment observation is one per payment, never whole contract estimate',async()=>{
   const row=(await pool.query('SELECT * FROM customer_subscriptions WHERE id=$1',[subId])).rows[0];
   const client=await pool.connect();
