@@ -71,9 +71,13 @@ test('only captured INR signed-webhook raw payments can be observed, flag OFF by
   const client={query:async()=>{throw Error('No DB write expected')}};
   const args={subscription,rawPaymentEntity:payment,eventId:'evt_capture_001',paidCount:1};
   assert.equal((await recordSignedRecurringCaptureObservation(client,{...args,enabled:false})).reason,'feature_disabled');
+  const missingCycle=await recordSignedRecurringCaptureObservation(client,{
+    ...args,paidCount:0,enabled:true
+  });
+  assert.equal(missingCycle.reason,'invalid_verified_webhook_or_cycle');
   const bad=[
     {status:'authorized'}, {currency:'USD'}, {subscription_id:'sub_other'},
-    {amount:0},{amount:'315000'}, {id:'inv_fake'}
+    {amount:0},{amount:'315000'}, {id:'inv_fake'}, {id:{malformed:true}}
   ];
   for(const change of bad){
     const res=await recordSignedRecurringCaptureObservation(client,{
