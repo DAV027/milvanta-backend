@@ -133,23 +133,26 @@ export function assessRecurringGatewaySnapshot({
     if(!captured) flags.push('gateway_payment_not_confirmed_captured_inr');
     if(refunded===null) flags.push('gateway_payment_refund_total_missing');
     if(refunded!==null && refunded>amount) flags.push('gateway_payment_refunded_exceeds_capture');
-    if(p.subscription_id!=null &&
-       p.subscription_id!==subscription.razorpay_subscription_id) {
-      flags.push('gateway_payment_foreign_subscription');
-    }
+    const identityMatches=p.subscription_id==null ||
+      p.subscription_id===subscription.razorpay_subscription_id;
+    if(!identityMatches) flags.push('gateway_payment_foreign_subscription');
+    let verifiedCycle=false;
     const invoiceId=p.invoice_id||invoicePaymentAssignments.get(p.id)||null;
     const invoice=invoiceId?invoicesById.get(invoiceId):null;
     if(!invoice) flags.push('gateway_payment_cycle_invoice_missing');
     else {
-      if(invoice.payment_id && invoice.payment_id!==p.id) flags.push('invoice_payment_conflict');
-      if(p.invoice_id && p.invoice_id!==invoice.id) flags.push('invoice_payment_conflict');
-      if(invoice.subscription_id!==subscription.razorpay_subscription_id ||
+      const paymentLinkMatches=(!invoice.payment_id || invoice.payment_id===p.id) &&
+        (!p.invoice_id || p.invoice_id===invoice.id);
+      if(!paymentLinkMatches) flags.push('invoice_payment_conflict');
+      if(!paymentLinkMatches ||
+         invoice.subscription_id!==subscription.razorpay_subscription_id ||
          invoice.status!=='paid' ||
          !Number.isSafeInteger(invoice.billing_start) ||
          !Number.isSafeInteger(invoice.billing_end) ||
          invoice.billing_end<=invoice.billing_start) {
         flags.push('gateway_payment_cycle_unverified');
       } else {
+        verifiedCycle=true;
         const k=invoice.billing_start+':'+invoice.billing_end;
         const cycle=cycleMap.get(k)||{
           billingStart:invoice.billing_start,billingEnd:invoice.billing_end,
@@ -157,7 +160,7 @@ export function assessRecurringGatewaySnapshot({
         };
         cycle.paymentIds.push(p.id);
         cycle.invoiceIds.push(invoice.id);
-        if(captured) cycle.capturedAmountPaise=sumSafe([cycle.capturedAmountPaise,amount],'cycle_total');
+        if(captured && identityMatches) cycle.capturedAmountPaise=sumSafe([cycle.capturedAmountPaise,amount],'cycle_total');
         cycleMap.set(k,cycle);
       }
     }
@@ -168,9 +171,13 @@ export function assessRecurringGatewaySnapshot({
       obs.proof_level!=='signed_webhook_payment_entity') {
       flags.push('gateway_and_webhook_observation_mismatch');
     }
-    if(captured)capturedAmounts.push(amount);
+    const reconciledCapture=captured && identityMatches && verifiedCycle;
+    if(captured && !reconciledCapture){
+      flags.push('capture_not_reconciled_to_subscription_cycle');
+    }
+    if(reconciledCapture)capturedAmounts.push(amount);
     report.paymentComparisons.push({
-      paymentId:p.id,invoiceId,captured,currency:p.currency,
+      paymentId:p.id,invoiceId,captured,reconciledToSubscriptionCycle:reconciledCapture,currency:p.currency,
       amountPaise:amount,reportedRefundedPaise:refunded,
       observedWebhook:!!obs,
       consistentWithWebhook:!!obs &&
@@ -276,9 +283,13 @@ export function assessRecurringGatewaySnapshot({
       flags.push('local_unknown_refund_status');
     }
   }
-  const localProcessedIds=new Set(localRefundRequests
+  const processedLocalIds=localRefundRequests
     .filter(x=>x.status==='processed' && id(x.gateway_refund_id,'rfnd_'))
-    .map(x=>x.gateway_refund_id));
+    .map(x=>x.gateway_refund_id);
+  const localProcessedIds=new Set(processedLocalIds);
+  if(localProcessedIds.size!==processedLocalIds.length){
+    flags.push('duplicate_local_processed_refund_claim');
+  }
   for(const ref of refunds){
     if(ref.status==='processed' && !localProcessedIds.has(ref.id)){
       flags.push('gateway_processed_refund_absent_from_local_records');
