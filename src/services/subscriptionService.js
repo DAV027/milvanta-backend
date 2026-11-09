@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 
 import { queueNotification } from './notificationService.js';
 import { getEarliestPermittedDeliveryDateYMD } from './deliveryCronPolicy.js';
+import { recordBillingCreditProvenance } from './billingCreditProvenance.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -641,11 +642,17 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
           const adjType = isPrepaid ? 'extension' : 'credit';
           const totalAmount = (sub.cost_per_day_paise || 10500) * pausedDays;
 
-          await client.query(
+          const resumeAdjustment = await client.query(
             `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
             [subscriptionId, customerId, adjType, pausedDays, totalAmount, `Indefinite pause ${adjType} (${pausedDays} days)`]
           );
+          await recordBillingCreditProvenance(client, {
+            subscription: sub, adjustmentId: resumeAdjustment.rows[0].id,
+            sourceKind: 'pause_resume', sourceReference: 'pause:' + p.id,
+            startDate: pauseStart, daysCount: pausedDays, totalAmountPaise: totalAmount,
+            isRecurringAutopay: !isPrepaid
+          });
 
           await recordEntitlementLedgerEntry(client, {
             subscriptionId,
@@ -793,11 +800,18 @@ export async function skipDeliveryDate(pool, { subscriptionId, customerId, skipD
         ? `Carried forward 1 day delivery for skipped date ${cleanSkipDate}`
         : `Accrued 1 day billing credit for skipped date ${cleanSkipDate}`;
 
-      await client.query(
+      const skipAdjustment = await client.query(
         `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-         VALUES ($1, $2, $3, 1, $4, $5)`,
+         VALUES ($1, $2, $3, 1, $4, $5) RETURNING id`,
         [subscriptionId, customerId, adjType, sub.cost_per_day_paise || 10500, adjNotes]
       );
+      await recordBillingCreditProvenance(client, {
+        subscription: sub, adjustmentId: skipAdjustment.rows[0].id,
+        sourceKind: 'skip', sourceReference: 'skip:' + insertRes.rows[0].id,
+        startDate: cleanSkipDate, daysCount: 1,
+        totalAmountPaise: sub.cost_per_day_paise || 10500,
+        isRecurringAutopay: !isPrepaid
+      });
 
       await recordEntitlementLedgerEntry(client, {
         subscriptionId,
@@ -927,11 +941,18 @@ export async function unskipDeliveryDate(pool, { subscriptionId, customerId, ski
       const isPrepaid = isPrepaidSubscription(sub);
       const adjType = isPrepaid ? 'extension' : 'credit';
 
-      await client.query(
+      const unskipAdjustment = await client.query(
         `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-         VALUES ($1, $2, $3, -1, $4, $5)`,
+         VALUES ($1, $2, $3, -1, $4, $5) RETURNING id`,
         [subscriptionId, customerId, adjType, -(sub.cost_per_day_paise || 10500), `Reverted 1 day ${adjType} for unskipped date ${cleanSkipDate}`]
       );
+      await recordBillingCreditProvenance(client, {
+        subscription: sub, adjustmentId: unskipAdjustment.rows[0].id,
+        sourceKind: 'unskip', sourceReference: 'unskip:' + deleteRes.rows[0].id,
+        startDate: cleanSkipDate, daysCount: -1,
+        totalAmountPaise: -(sub.cost_per_day_paise || 10500),
+        isRecurringAutopay: !isPrepaid
+      });
 
       await recordEntitlementLedgerEntry(client, {
         subscriptionId,
@@ -1008,9 +1029,9 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
     const daysCount = Math.round((dEnd - dStart) / (24 * 3600 * 1000)) + 1;
 
     // Record vacation in pauses
-    await client.query(
+    const vacationPause = await client.query(
       `INSERT INTO subscription_delivery_pauses (subscription_id, customer_id, pause_start_date, pause_end_date, reason)
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
       [subscriptionId, customerId, startDate, endDate, reason]
     );
 
@@ -1027,11 +1048,17 @@ export async function setVacation(pool, { subscriptionId, customerId, startDate,
     const adjType = isPrepaid ? 'extension' : 'credit';
     const totalAmount = (sub.cost_per_day_paise || 10500) * daysCount;
 
-    await client.query(
+    const vacationAdjustment = await client.query(
       `INSERT INTO subscription_billing_adjustments (subscription_id, customer_id, adjustment_type, days_count, amount_paise, notes)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       [subscriptionId, customerId, adjType, daysCount, totalAmount, `Vacation ${adjType} from ${startDate} to ${endDate}`]
     );
+    await recordBillingCreditProvenance(client, {
+      subscription: sub, adjustmentId: vacationAdjustment.rows[0].id,
+      sourceKind: 'vacation', sourceReference: 'vacation:' + vacationPause.rows[0].id,
+      startDate, daysCount, totalAmountPaise: totalAmount,
+      isRecurringAutopay: !isPrepaid
+    });
 
     await recordEntitlementLedgerEntry(client, {
       subscriptionId,
