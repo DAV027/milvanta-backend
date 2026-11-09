@@ -71,6 +71,7 @@ export function assessRecurringGatewaySnapshot({
   report.snapshotComplete=snapshot.complete===true;
   if(snapshot.complete!==true) flags.push('gateway_snapshot_partial_or_unknown');
   if(snapshot.accountMode!=='live') flags.push('gateway_snapshot_not_explicitly_live');
+  if(subscription.notes?.keyMode!=='live') flags.push('local_gateway_mode_not_verified_live');
   if(snapshot.subscriptionId!==subscription.razorpay_subscription_id) flags.push('gateway_snapshot_foreign_subscription');
   if(typeof snapshot.retrievedAt!=='string' ||
      !Number.isFinite(Date.parse(snapshot.retrievedAt))) {
@@ -88,6 +89,10 @@ export function assessRecurringGatewaySnapshot({
       continue;
     }
     observationById.set(o.gateway_payment_id,o);
+    if(!Number.isSafeInteger(Number(o.paid_count_at_event)) ||
+       Number(o.paid_count_at_event)<1) {
+      flags.push('webhook_observed_paid_cycle_invalid');
+    }
   }
   const invoicesById=new Map(),invoicePaymentAssignments=new Map();
   for(const invoice of invoices) {
@@ -183,6 +188,21 @@ export function assessRecurringGatewaySnapshot({
     if(cycle.paymentIds.length!==1) flags.push('multiple_payments_per_gateway_invoice_cycle');
   }
   const cycles=[...cycleMap.values()].sort((a,b)=>a.billingStart-b.billingStart);
+  for(const invoice of invoicesById.values()){
+    if(invoice.status==='paid' &&
+       ![...paymentsById.values()].some(p=>p.invoice_id===invoice.id ||
+          p.id===invoice.payment_id)){
+      flags.push('paid_gateway_invoice_without_matching_capture');
+    }
+  }
+  if(snapshot.complete===true && Number.isSafeInteger(Number(subscription.notes?.paidCount)) &&
+     Number(subscription.notes.paidCount)>cycles.length){
+    flags.push('local_paid_cycles_exceed_gateway_invoice_evidence');
+  }
+  if(snapshot.complete===true && [...observationById.values()].some(o=>
+       Number(o.paid_count_at_event)>cycles.length)){
+    flags.push('webhook_cycle_exceeds_gateway_invoice_evidence');
+  }
   for(let i=1;i<cycles.length;i++){
     if(cycles[i].billingStart<cycles[i-1].billingEnd){
       flags.push('overlapping_gateway_invoice_cycles');
