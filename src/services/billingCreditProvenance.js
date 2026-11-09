@@ -3,7 +3,6 @@
  * No credit, refund, gateway or entitlement mutation. Writes only source
  * evidence inside the caller's existing SQL transaction, or nothing when OFF.
  */
-import { isRecurringAutopaySubscription } from './subscriptionService.js';
 
 function parseYMD(ymd) {
   if (typeof ymd!=='string'|| !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
@@ -60,11 +59,11 @@ export function planBillingCreditProvenance({
 
 export async function recordBillingCreditProvenance(client,{
   subscription,adjustmentId,sourceKind,sourceReference,startDate,
-  daysCount,totalAmountPaise,
+  daysCount,totalAmountPaise,isRecurringAutopay=false,
   enabled=process.env.RECURRING_CREDIT_PROVENANCE_ENABLED==='true'
 }={}) {
   if (!enabled) return {recorded:false,reason:'feature_disabled'};
-  if (!isRecurringAutopaySubscription(subscription)) {
+  if (!isRecurringAutopay) {
     return {recorded:false,reason:'not_recurring_autopay'};
   }
   const days=planBillingCreditProvenance({
