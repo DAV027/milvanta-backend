@@ -17,6 +17,12 @@ const safeInt = value => {
   return n;
 };
 const positiveId = value => safeInt(value) > 0;
+// Ownership fields are read from the actual linked database rows. Invalid IDs
+// are evidence discrepancies, not permission to infer or backfill ownership.
+const sameOwnerId = (actual, expected) => {
+  try { return safeInt(actual) === safeInt(expected); }
+  catch { return false; }
+};
 function validDay(day) {
   if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
   const [y,m,d] = day.split('-').map(Number);
@@ -73,6 +79,11 @@ export function buildRecurringFinanceDecisionWorksheet({
   for(const a of adjustments) {
     const id=safeInt(a.id),days=safeInt(a.days_count),amount=safeInt(a.amount_paise);
     if(id<=0||adjustmentMap.has(id))throw new Error('invalid_or_duplicate_finance_adjustment_id');
+    if (a.subscription_id !== undefined && a.customer_id !== undefined &&
+        (!sameOwnerId(a.subscription_id,subscription.id) ||
+         !sameOwnerId(a.customer_id,subscription.customer_id))) {
+      globalFlags.push('adjustment_owner_mismatch');
+    }
     adjustmentMap.set(id,{id,type:a.adjustment_type,expectedDays:days,
       expectedPaise:amount,provenanceDays:0,provenancePaise:0,provenanceRows:0});
   }
@@ -80,8 +91,19 @@ export function buildRecurringFinanceDecisionWorksheet({
   for(const source of creditSources){
     const id=safeInt(source.billing_adjustment_id);
     const adjustment=adjustmentMap.get(id);
+    const ownerColumns=[
+      ['provenance_subscription_id',subscription.id],
+      ['provenance_customer_id',subscription.customer_id],
+      ['adjustment_subscription_id',subscription.id],
+      ['adjustment_customer_id',subscription.customer_id]
+    ];
+    const ownerEvidenceComplete=ownerColumns.every(([key])=>Object.hasOwn(source,key));
+    const ownerMismatch=ownerEvidenceComplete && ownerColumns.some(
+      ([key,expected])=>!sameOwnerId(source[key],expected));
     if(!adjustment) {
       globalFlags.push('orphan_date_source');
+      if(ownerMismatch)globalFlags.push('date_source_cross_subscription_or_customer_link');
+      if(!ownerEvidenceComplete)globalFlags.push('date_source_ownership_unverified');
       continue;
     }
     const day=source.delivery_date;
@@ -91,6 +113,9 @@ export function buildRecurringFinanceDecisionWorksheet({
     }
     const delta=safeInt(source.days_delta), amount=safeInt(source.amount_paise);
     const dayInfo=dates.get(day)||initDate(day);
+    if(!ownerEvidenceComplete)dayInfo.flags.push('date_source_ownership_unverified');
+    if(ownerMismatch)dayInfo.flags.push('date_source_cross_subscription_or_customer_link');
+    if(adjustment.type!=='credit')dayInfo.flags.push('date_source_linked_non_credit_adjustment');
     if(![-1,1].includes(delta) || amount!==dailyRate*delta){
       dayInfo.flags.push('date_source_inconsistent_amount_or_sign');
     }
@@ -163,6 +188,11 @@ export function buildRecurringFinanceDecisionWorksheet({
     if(validDay(paidThroughDate) && rec.deliveryDate>paidThroughDate &&
        rec.positiveSourceRows>0) rec.flags.push('credit_claim_after_paid_through');
     if(rec.deliveryStatuses.length>1)rec.flags.push('multiple_delivery_orders_same_day');
+    if(rec.flags.some(flag=>[
+      'date_source_ownership_unverified',
+      'date_source_cross_subscription_or_customer_link',
+      'date_source_linked_non_credit_adjustment'
+    ].includes(flag)))globalFlags.push('credit_source_link_integrity_requires_review');
     rec.flags=unique(rec.flags);
     rec.creditAdjustmentIds=unique(rec.creditAdjustmentIds);
     rec.sourceKinds=unique(rec.sourceKinds);
@@ -173,7 +203,9 @@ export function buildRecurringFinanceDecisionWorksheet({
     a.provenanceMatchesAdjustment=(a.expectedDays===a.provenanceDays &&
       a.expectedPaise===a.provenancePaise);
     if(!a.provenanceMatchesAdjustment)globalFlags.push('legacy_or_incomplete_date_provenance');
-    if(a.type==='credit' && a.provenanceMatchesAdjustment && a.provenanceRows===0 &&
+    // Without dated evidence a nonzero credit cannot reconcile, so checking
+    // provenanceMatchesAdjustment here would make this warning unreachable.
+    if(a.type==='credit' && a.provenanceRows===0 &&
        (a.expectedDays!==0||a.expectedPaise!==0)) {
       globalFlags.push('credit_adjustment_missing_source_dates');
     }
@@ -253,11 +285,15 @@ export async function previewRecurringFinanceDecisionWorksheet(pool,{
     const sub=subResult.rows[0];
     const paidThroughDate=await getEffectivePaidThroughDate(client,sub);
     const adj=await client.query(
-      'SELECT id,adjustment_type,days_count,amount_paise FROM subscription_billing_adjustments WHERE subscription_id=$1 ORDER BY id',
+      'SELECT id,subscription_id,customer_id,adjustment_type,days_count,amount_paise FROM subscription_billing_adjustments WHERE subscription_id=$1 ORDER BY id',
       [id]);
     const sources=await client.query(
-      'SELECT billing_adjustment_id,source_kind,source_reference,delivery_date::text AS delivery_date,days_delta,amount_paise,evidence_state,payment_id,billing_cycle_reference '+
-      'FROM subscription_billing_credit_provenance WHERE subscription_id=$1 ORDER BY delivery_date,id',
+      'SELECT p.billing_adjustment_id,p.source_kind,p.source_reference,p.delivery_date::text AS delivery_date,p.days_delta,p.amount_paise,p.evidence_state,p.payment_id,p.billing_cycle_reference,'+
+      'p.subscription_id AS provenance_subscription_id,p.customer_id AS provenance_customer_id,'+
+      'a.subscription_id AS adjustment_subscription_id,a.customer_id AS adjustment_customer_id '+
+      'FROM subscription_billing_credit_provenance p '+
+      'LEFT JOIN subscription_billing_adjustments a ON a.id=p.billing_adjustment_id '+
+      'WHERE p.subscription_id=$1 ORDER BY p.delivery_date,p.id',
       [id]);
     const orders=await client.query(
       'SELECT id,delivery_date::text AS delivery_date,fulfillment_source,status FROM subscription_delivery_orders WHERE subscription_id=$1 ORDER BY delivery_date,id',
