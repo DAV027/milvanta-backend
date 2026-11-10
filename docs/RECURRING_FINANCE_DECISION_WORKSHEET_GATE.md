@@ -12,6 +12,8 @@ The internal \`src/services/recurringFinanceDecisionWorksheet.js\` produces a fi
 
 - Each date-stamped skip/vacation/pause-resume/unskip evidence row is grouped by **actual delivery date**, not merely the month or nominal plan total.
 - The row's signed amount and +/- one day must match the subscription's daily rate. Incomplete or orphaned source entries are reported separately from legacy adjustments without provable dates.
+- Credit source type must agree with its sign: `skip`, `vacation` and `pause_resume` must add a morning, while `unskip` must reverse one. Numeric totals can cancel despite semantically invalid input; such cases now receive `date_source_kind_direction_mismatch`.
+- Even populated `payment_id` and `billing_cycle_reference` are **not proof of capture or settlement** while evidence state is `date_known_payment_unverified`. Those rows remain explicitly flagged `date_credit_payment_cycle_unverified`.
 - A morning with multiple **positive** credit claims is flagged, even if a later unskip brings the **net** number down. Reversal without a corresponding positive source is flagged.
 - Real paid-entitlement deliveries on credited dates are flagged. Prototype reservations and prototype orders are explicitly **not** counted as genuine delivered milk or approved financial compensation.
 - Credits recorded after the effective paid-through date are flagged for review rather than silently carried into another billing cycle.
