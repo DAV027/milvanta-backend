@@ -99,6 +99,11 @@ export function buildRecurringFinanceDecisionWorksheet({
     }
     if(!['skip','unskip','vacation','pause_resume'].includes(source.source_kind)){
       dayInfo.flags.push('date_source_unknown_kind');
+    } else if ((source.source_kind==='unskip' && delta!==-1) ||
+               (source.source_kind!=='unskip' && delta!==1)) {
+      // A numerically valid row is not valid evidence if its operation
+      // direction contradicts the operation (e.g. positive "unskip").
+      dayInfo.flags.push('date_source_kind_direction_mismatch');
     }
     if(delta>0)dayInfo.positiveSourceRows++;
     if(delta<0)dayInfo.reversalSourceRows++;
@@ -109,7 +114,11 @@ export function buildRecurringFinanceDecisionWorksheet({
     adjustment.provenanceDays=sumChecked(adjustment.provenanceDays,delta);
     adjustment.provenancePaise=sumChecked(adjustment.provenancePaise,amount);
     adjustment.provenanceRows++;
-    if(!source.payment_id || !source.billing_cycle_reference) {
+    // Even if someone populates both identifiers later, the only allowed
+    // provenance state is date_known_payment_unverified. Mere references
+    // never prove a captured payment, billing cycle or settlement.
+    if(source.evidence_state==='date_known_payment_unverified' ||
+       !source.payment_id || !source.billing_cycle_reference) {
       dayInfo.flags.push('date_credit_payment_cycle_unverified');
     }
     dates.set(day,dayInfo);
