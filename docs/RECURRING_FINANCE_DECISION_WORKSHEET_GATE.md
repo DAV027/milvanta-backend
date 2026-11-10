@@ -11,6 +11,8 @@ The internal \`src/services/recurringFinanceDecisionWorksheet.js\` produces a fi
 ## What the worksheet checks
 
 - Each date-stamped skip/vacation/pause-resume/unskip evidence row is grouped by **actual delivery date**, not merely the month or nominal plan total.
+- The read-only query checks both the credit-evidence row and its linked billing adjustment against the **same subscription ID and customer ID**. Wrong-customer evidence, a foreign adjustment, incomplete owner fields, or a credit provenance row linked to an `extension`/`refund` adjustment remains a review blocker. Merely satisfying foreign keys or having matching monetary totals is insufficient.
+- Nonzero credits with **zero** dated evidence are specifically flagged as `credit_adjustment_missing_source_dates`; previously a contradictory condition could suppress that warning.
 - The row's signed amount and +/- one day must match the subscription's daily rate. Incomplete or orphaned source entries are reported separately from legacy adjustments without provable dates.
 - Credit source type must agree with its sign: `skip`, `vacation` and `pause_resume` must add a morning, while `unskip` must reverse one. Numeric totals can cancel despite semantically invalid input; such cases now receive `date_source_kind_direction_mismatch`.
 - Even populated `payment_id` and `billing_cycle_reference` are **not proof of capture or settlement** while evidence state is `date_known_payment_unverified`. Those rows remain explicitly flagged `date_credit_payment_cycle_unverified`.
@@ -37,7 +39,7 @@ The output always contains \`manualDecisionRequired=true\`, \`customerPayableCre
 ## Tests / isolation
 
 - \`tests/recurring-finance-decision-worksheet.test.js\`: duplicate credits, signed reversals, already-delivered mornings, invalid dates/rates, prototype holds, unpaid or multi-month evidence and all no-action contracts.
-- \`tests/recurring-finance-decision-worksheet-postgresql.test.js\`: a disposable PostgreSQL snapshot of two positive credits for the same morning, an outstanding obligation, a prototype hold and a pending refund; verifies absolutely no changes to those rows.
+- \`tests/recurring-finance-decision-worksheet-postgresql.test.js\`: a disposable PostgreSQL snapshot of two positive credits for the same morning, an outstanding obligation, a prototype hold and a pending refund; verifies absolutely no changes to those rows, and separately injects deliberately foreign-linked evidence **only in the disposable test schema** to prove the ownership alerts.
 - The worksheet is not imported by \`src/server.js\`, scheduled jobs, refund approval, or delivery generation. It creates no migration or new financial data.
 
 **Keep PR #37 DRAFT and do not enable credit evidence/accrual/finance approval flags, dispatch, merge, deployment or customer-facing payouts until policy and evidence gates are independently approved.** Related Issue #36.
