@@ -298,6 +298,12 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     allowPastDates: process.env.NODE_ENV === 'test' && !options.rejectPastDates,
     ...options
   });
+  // Production physical order generation MUST require explicit live gateway
+  // evidence. No caller (including manual admin and standalone scripts) may
+  // bypass this with liveGatewayOnly:false. Legacy test fixtures can opt into
+  // their isolated test-only behavior; actual admin/cron routes pass true.
+  const enforceLiveGatewayOnly =
+    process.env.NODE_ENV !== 'test' || options.liveGatewayOnly === true;
 
   const { client, release } = await acquireClient(pool);
   let generatedCount = 0;
@@ -318,11 +324,9 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
     );
 
     for (const sub of activeSubs) {
-      // Unattended production dispatch must never include Razorpay Test Mode
-      // subscriptions that share the Neon database with live customers.
-      // Unknown/legacy mode is excluded unless an authorized manual operator
-      // explicitly chooses the existing admin generator instead.
-      if (options.liveGatewayOnly === true) {
+      // All production generation paths reject Test Mode and missing/legacy
+      // gateway modes, including manual admin and standalone scheduled scripts.
+      if (enforceLiveGatewayOnly) {
         const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
         if (notes.keyMode !== 'live') {
           skippedCount++;
@@ -408,9 +412,12 @@ export async function generateDailyDeliveries(pool, targetDateYMD = null, option
  * Strictly read-only: does not insert any records.
  * Uses shared evaluateSubscriptionDeliveryEligibility() for 100% parity with generation.
  */
-export async function previewDailyDeliveries(pool, targetDateYMD = null) {
+export async function previewDailyDeliveries(pool, targetDateYMD = null, options = {}) {
   if (!pool) throw new Error('Database pool required');
   const targetDate = validateDeliveryTargetDate(targetDateYMD);
+  // Keep operator preview consistent with the production generation filter.
+  const enforceLiveGatewayOnly =
+    process.env.NODE_ENV !== 'test' || options.liveGatewayOnly === true;
 
   const { client, release } = await acquireClient(pool);
   try {
@@ -435,12 +442,28 @@ export async function previewDailyDeliveries(pool, targetDateYMD = null) {
       beyondEntitlement: 0,
       skippedDate: 0,
       onVacationOrPause: 0,
-      missingOrInvalidAddress: 0
+      missingOrInvalidAddress: 0,
+      gatewayModeNotLive: 0
     };
     const eligibleList = [];
     const excludedList = [];
 
     for (const sub of activeSubs) {
+      if (enforceLiveGatewayOnly) {
+        const notes = typeof sub.notes === 'object' && sub.notes !== null ? sub.notes : {};
+        if (notes.keyMode !== 'live') {
+          skippedBreakdown.gatewayModeNotLive++;
+          excludedList.push({
+            subscriptionId: sub.id,
+            customerId: sub.customer_id,
+            customerName: sub.full_name,
+            productName: sub.product_name,
+            reason: 'gatewayModeNotLive',
+            exclusionMessage: 'Explicit live Razorpay gateway evidence is required before delivery order generation'
+          });
+          continue;
+        }
+      }
       const evalRes = await evaluateSubscriptionDeliveryEligibility(client, sub, targetDate);
       if (!evalRes.eligible) {
         if (skippedBreakdown[evalRes.reason] !== undefined) {
@@ -608,6 +631,7 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
   let actor = 'driver';
   let notes = null;
   let reason = null;
+  let enforceLiveGateway = process.env.NODE_ENV !== 'test';
 
   if (orderIdOrParams && typeof orderIdOrParams === 'object') {
     deliveryOrderId = orderIdOrParams.deliveryOrderId;
@@ -615,12 +639,14 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     actor = orderIdOrParams.actor || 'driver';
     notes = orderIdOrParams.notes || orderIdOrParams.driverNotes || null;
     reason = orderIdOrParams.reason || orderIdOrParams.failureReason || orderIdOrParams.failedReason || null;
+    enforceLiveGateway = enforceLiveGateway || orderIdOrParams.enforceLiveGateway === true;
   } else {
     deliveryOrderId = orderIdOrParams;
     status = maybeStatus;
     actor = options.actor || 'driver';
     notes = options.notes || options.driverNotes || null;
     reason = options.reason || options.failedReason || null;
+    enforceLiveGateway = enforceLiveGateway || options.enforceLiveGateway === true;
   }
 
   const { client, release } = await acquireClient(pool);
@@ -642,7 +668,41 @@ export async function updateDeliveryStatus(pool, orderIdOrParams, maybeStatus, o
     }
 
     const order = rows[0];
+
+    // 022 owes-morning reservations are an isolated TEST-ONLY prototype.
+    // Production's normal admin/driver status endpoint must NEVER dispatch
+    // or settle these rows, including if somebody copies data from a test DB.
+    // A separate, unexposed prototype state machine is tested in isolation.
+    if (order.fulfillment_source === 'owed_morning_prototype') {
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        error: 'prototype_owed_morning_not_operational',
+        message: 'Owed-morning prototype orders are not authorized for operations dispatch',
+        statusCode: 409
+      };
+    }
     const allowed = VALID_STATUS_TRANSITIONS[order.status] || [];
+
+    // Do not let manually created legacy or Test Mode rows progress into
+    // packing, physical dispatch or false delivered events. Cancellation and
+    // failure reporting remain available for an operator to correct bad rows.
+    if (enforceLiveGateway && ['scheduled', 'packed', 'out_for_delivery', 'delivered'].includes(status)) {
+      const { rows: subscriptionRows } = await client.query(
+        'SELECT notes FROM customer_subscriptions WHERE id = $1',
+        [order.subscription_id]
+      );
+      const gatewayNotes = subscriptionRows[0]?.notes;
+      if (!gatewayNotes || gatewayNotes.keyMode !== 'live') {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'delivery_gateway_mode_not_verified',
+          message: 'Live Razorpay payment mode must be verified before physical fulfillment can progress',
+          statusCode: 409
+        };
+      }
+    }
 
     if (!allowed.includes(status)) {
       await client.query('ROLLBACK');

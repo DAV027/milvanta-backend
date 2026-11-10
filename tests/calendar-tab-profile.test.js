@@ -51,9 +51,9 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       assert.strictEqual(scriptJsPrimary, scriptJsCloudflare);
     });
 
-    it('profile.html has incremented cache-busting version strings (?v=20261022-3)', () => {
+    it('profile.html has incremented cache-busting version strings (?v=20261105-1)', () => {
       assert.ok(profileHtmlPrimary.includes('css/profile.css?v=20261022-3'));
-      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261022-3'));
+      assert.ok(profileHtmlPrimary.includes('js/profile.js?v=20261105-1'));
     });
 
     it('milvanta-cloudflare-upload.zip exists and is non-empty', () => {
@@ -579,6 +579,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
         created_at: new Date('2026-10-01'),
         notes: {
           fulfillmentEntitled: true,
+          keyMode: 'live',
           paidThroughDate: '2026-11-30',
           startDate: '2026-10-01'
         }
@@ -717,6 +718,8 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
           created_at: new Date('2026-10-01'),
           notes: {
             fulfillmentEntitled: true,
+            keyMode: 'live',
+            lastPaymentId: 'pay_synthetic_mock_captured',
             paidThroughDate: '2026-12-31',
             startDate: '2026-10-01',
             paidCount: 3
@@ -871,7 +874,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       return { db, pool };
     }
 
-    it('8.1: Resumed vacation visibility sequence (create vacation -> shows vacation -> resume -> future dates show scheduled)', async () => {
+    it('8.1: Resumed vacation visibility sequence (create vacation -> shows vacation -> resume -> future date eligible, not generated)', async () => {
       const vStart = new Date();
       vStart.setDate(vStart.getDate() + 5);
       const vEnd = new Date();
@@ -884,7 +887,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       // 1. Initial calendar shows scheduled
       const calInitial = await getSubscriptionCalendar(pool, { subscriptionId: 101, customerId: 1, year: vStart.getFullYear(), month: vStart.getMonth() });
       const dayInitial = calInitial.days.find(d => d.date === startStr);
-      assert.strictEqual(dayInitial.status, 'scheduled', 'Date should initially be scheduled');
+      assert.strictEqual(dayInitial.status, 'eligible', 'A paid date without an order is eligible, not scheduled');
 
       // 2. Customer creates vacation
       const vacRes = await setVacation(pool, { subscriptionId: 101, customerId: 1, startDate: startStr, endDate: endStr, reason: 'Family trip' });
@@ -905,7 +908,7 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       // 5. Future eligible dates no longer show vacation
       const calAfterResume = await getSubscriptionCalendar(pool, { subscriptionId: 101, customerId: 1, year: vStart.getFullYear(), month: vStart.getMonth() });
       const dayAfterResume = calAfterResume.days.find(d => d.date === startStr);
-      assert.strictEqual(dayAfterResume.status, 'scheduled', 'Future date must restore to scheduled and no longer show vacation');
+      assert.strictEqual(dayAfterResume.status, 'eligible', 'Resumed date without an order is eligible, not scheduled');
     });
 
     it('8.2: getSubscriptionCalendar strictly queries subscription_delivery_pauses with resumed_at IS NULL condition', async () => {

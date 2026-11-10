@@ -14,14 +14,20 @@ import 'dotenv/config';
 import pg from 'pg';
 import { generateDailyDeliveries } from '../src/services/deliveryEngine.js';
 import { processNotificationOutbox, queueBillingReminders } from '../src/services/notificationService.js';
-import { getNowInIST, formatDateYMD } from '../src/services/subscriptionService.js';
+import { getNowInIST } from '../src/services/subscriptionService.js';
+import { getDeliveryCronTarget } from '../src/services/deliveryCronPolicy.js';
 import { assertStagingDatabaseIsolation } from '../src/migrate.js';
 
 const { Pool } = pg;
 
 async function main() {
-  if (process.env.DELIVERY_SCHEDULER_ENABLED === 'false') {
-    console.log('ℹ️ Delivery scheduler is disabled (DELIVERY_SCHEDULER_ENABLED=false). Exiting cleanly without generating deliveries.');
+  if (process.env.DELIVERY_SCHEDULER_ENABLED !== 'true') {
+    console.log('Delivery scheduler disabled by default; set DELIVERY_SCHEDULER_ENABLED=true only after owner approval.');
+    process.exit(0);
+  }
+  const plan = getDeliveryCronTarget();
+  if (!plan.allowed) {
+    console.log('Delivery scheduler skipped: ' + plan.reason);
     process.exit(0);
   }
 
@@ -50,9 +56,12 @@ async function main() {
   });
 
   try {
-    // 1. Generate Daily Delivery Orders for Tomorrow
-    console.log('Generating next-morning milk delivery orders...');
-    const result = await generateDailyDeliveries(pool);
+    // 1. Generate only after the IST cutoff, and only for live-mode payments.
+    console.log('Generating live-payment next-morning milk delivery orders...');
+    const result = await generateDailyDeliveries(pool, plan.targetDate, {
+      rejectPastDates: true,
+      liveGatewayOnly: true
+    });
     console.log(`✅ Deliveries generated successfully for ${result.targetDate}:`, {
       targetDate: result.targetDate,
       generatedCount: result.generatedCount,

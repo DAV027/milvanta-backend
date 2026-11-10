@@ -732,22 +732,23 @@
             <!-- Dedicated Delivery Period & Schedule Card -->
             <div class="sub-period-card" id="profileSubPeriodCard">
               <div class="sub-period-top">
-                <span class="sub-period-kicker">📅 Delivery Period</span>
-                <span class="sub-period-total-pill" id="profileSubPeriodDaysBadge">31 Mornings</span>
+                <span class="sub-period-kicker">📅 Estimated Delivery Timing</span>
+                <span class="sub-period-total-pill" id="profileSubPeriodDaysBadge">Days priced</span>
               </div>
               <div class="sub-period-timeline">
                 <div class="sub-timeline-box start">
-                  <span class="sub-timeline-tag">START DATE</span>
-                  <span class="sub-timeline-date" id="profileSubPeriodStartDate">Tomorrow, 17 Oct 2026</span>
+                  <span class="sub-timeline-tag">EARLIEST POSSIBLE DELIVERY</span>
+                  <span class="sub-timeline-date" id="profileSubPeriodStartDate">Calculating IST date…</span>
                 </div>
                 <div class="sub-timeline-arrow">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
                 </div>
                 <div class="sub-timeline-box end">
-                  <span class="sub-timeline-tag">END DATE</span>
-                  <span class="sub-timeline-date" id="profileSubPeriodEndDate">16 Nov 2026</span>
+                  <span class="sub-timeline-tag">PAID-THROUGH DATE</span>
+                  <span class="sub-timeline-date" id="profileSubPeriodEndDate">Confirmed after payment</span>
                 </div>
               </div>
+              <p style="font-size: 0.76rem; line-height: 1.45; color: #64748b; margin: 10px 0 0;">Estimate only. The 8:00 PM IST cutoff applies; payment verification, chosen start month and confirmed paid entitlement determine the actual schedule. No delivery is guaranteed before confirmation.</p>
             </div>
           </div>
 
@@ -1059,6 +1060,7 @@
     <script src="js/config.js?v=20261019-1"></script>
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="js/delivery.js?v=20261016-5"></script>
-    <script src="js/profile.js?v=20261022-3"></script>
+    <script src="js/subscriptionDeliveryEstimate.js?v=20261105-1"></script>
+    <script src="js/profile.js?v=20261105-1"></script>
   </body>
 </html>
