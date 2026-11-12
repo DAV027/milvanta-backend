@@ -1,7 +1,7 @@
 # Milvanta transactional email redesign — manual approval gate
 
 **Branch:** feature/branded-transactional-emails-20261112
-**PR:** #38 (draft; no deployment or sending performed)
+**PR:** #38 (review branch; no deployment or sending performed)
 
 ## Design and compatibility
 - Presentation module: src/emailTemplateRenderers.js. Transport, outbox, gateway and authentication code remain in src/email.js.
@@ -35,3 +35,9 @@ Open email-previews/index.html locally. This generator uses fake customer, trans
 
 ## Integration note
 PR #37 also changes authoritative subscription delivery-date logic. Before merging both branches, reconcile which verified first-eligible-date fields should be passed to the email layer; rerun financial, cutoff, PostgreSQL, and visual tests. Do not restore the unsupported tomorrow language.
+
+## Reviewable CI preview artifact (no delivery)
+- Every email-template PR build also runs `email-preview-artifact` from the payment/receipt regression workflow. It creates **only synthetic HTML** and uploads a seven-file folder (six templates + index.html) as `milvanta-synthetic-email-previews`, retained for seven days.
+- Open the successful GitHub Actions workflow run, locate **Artifacts**, download the named archive, unzip locally and open `index.html` to inspect all six emails. This is a static review artifact, **not** live email provider testing or a website deployment.
+- Automated evidence checks now reject impossible eligible calendar dates, conflicting line item amounts, invalid money coercion and unsupported tomorrow promises. Even when order totals reconcile, a mismatched item line is marked for review rather than silently presented as authoritative.
+- The long full-suite workflow must finish successfully on the **latest** commit. A cancelled run cannot be interpreted as success.
