@@ -252,7 +252,7 @@ function safeReceiptPaise(value) {
   // Never coerce booleans, blanks, decimals, scientific notation or objects
   // into a seemingly valid payment amount.
   if (typeof value !== 'number' &&
-      (typeof value !== 'string' || !/^\\d+$/.test(value))) return null;
+      (typeof value !== 'string' || !/^\d+$/.test(value))) return null;
   const amount = Number(value);
   return Number.isSafeInteger(amount) && amount >= 0 ? amount : null;
 }
