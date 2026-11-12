@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildCustomerOrderEmail,buildAdminOrderEmail,
-  buildCustomerSubscriptionEmail,buildAdminSubscriptionEmail,
-  buildPasswordResetEmail,buildWelcomeEmail
-} from '../src/email.js';
+  renderCustomerOrderEmail as buildCustomerOrderEmail,
+  renderAdminOrderEmail as buildAdminOrderEmail,
+  renderCustomerSubscriptionEmail as buildCustomerSubscriptionEmail,
+  renderAdminSubscriptionEmail as buildAdminSubscriptionEmail,
+  renderPasswordResetEmail as buildPasswordResetEmail,
+  renderWelcomeEmail as buildWelcomeEmail
+} from '../src/emailTemplateRenderers.js';
 
 const order = {
   id:4,order_number:'MV-20261112-0004',
