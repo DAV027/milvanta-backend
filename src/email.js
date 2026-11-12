@@ -623,13 +623,39 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       let text = '';
 
       if (item.email_type === 'order_confirmation') {
-        subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
+        const paid = payload.order?.payment_status === 'paid' &&
+          payload.order?.order_status === 'confirmed';
+        const number = payload.order?.order_number || 'Order';
+        const total = validOrderReceiptFinancials(payload.order)
+          ? formatInr(payload.order.total_paise, true) : 'Pending verification';
+        subject = paid
+          ? `Order Confirmed: #${number} - Milvanta Farm Fresh`
+          : `Milvanta Order Update: #${number}`;
         html = buildCustomerOrderEmail(payload);
-        text = `Milvanta order details for ${payload.customer?.name || 'Customer'}\n\nOrder #${payload.order?.order_number || ''}\nMilvanta Order Total: ${formatInr(payload.order?.total_paise, true)}\nStatus: See your account for latest payment and delivery status.\nVisit https://milvanta.in/profile.html`;
+        text = [
+          `Milvanta order details for ${payload.customer?.name || 'Customer'}`,
+          `Order #${number}`,
+          `Payment status: ${paid ? 'Paid and confirmed' : 'Requires verification'}`,
+          `Milvanta order total: ${total}`,
+          'Review your latest delivery status at https://milvanta.in/profile.html'
+        ].join('\n');
       } else if (item.email_type === 'order_notification') {
-        subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
+        const paid = payload.order?.payment_status === 'paid' &&
+          payload.order?.order_status === 'confirmed';
+        const number = payload.order?.order_number || 'Order';
+        const total = validOrderReceiptFinancials(payload.order)
+          ? formatInr(payload.order.total_paise, true) : 'Pending verification';
+        subject = paid
+          ? `New Paid Order #${number} - ${total} - Milvanta`
+          : `Milvanta Operations: Order Review #${number}`;
         html = buildAdminOrderEmail(payload);
-        text = `ALERT: New Paid Order #${payload.order?.order_number}\nAmount: ${formatInr(payload.order?.total_paise, true)}\nCustomer: ${payload.customer?.name} (${payload.customer?.phone}, ${payload.customer?.email})`;
+        text = [
+          `Milvanta operations: ${paid ? 'Verified paid order' : 'Order requires payment review'}`,
+          `Order #${number}`,
+          `Milvanta order total: ${total}`,
+          `Customer: ${payload.customer?.name || 'Customer'}`,
+          'Verify delivery eligibility in the operations dashboard.'
+        ].join('\n');
       } else if (item.email_type === 'subscription_confirmation') {
         const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
         subject = isRefundable
