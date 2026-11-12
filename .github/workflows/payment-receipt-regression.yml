@@ -173,3 +173,49 @@ jobs:
           path: email-previews/
           if-no-files-found: error
           retention-days: 7
+
+
+  # Focused end-to-end email tests; the full backend suite can exceed its
+  # independent 18-minute timeout. Safe isolated DB and mocked providers.
+  email-integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: milvanta_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d milvanta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/milvanta_test
+      DATABASE_SSL: 'false'
+      WHATSAPP_ENABLED: 'false'
+      # No live API keys, SMTP credentials, or production DB URL.
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install lockfile dependencies
+        run: npm ci
+      - name: Guard test environment before loading application
+        run: |
+          node --input-type=module -e "import {testDbConfig,assertTestDatabaseConfigured} from './tests/helpers/testDbGuard.js'; assertTestDatabaseConfigured(); if (testDbConfig.dbName !== 'milvanta_test' || !['localhost','127.0.0.1'].includes(testDbConfig.hostname)) process.exit(1); console.log('Disposable PostgreSQL confirmed')"
+      - name: Run email OTP, outbox, payment blockers and provider-fallback tests
+        run: |
+          node --test --test-concurrency=1 \
+            tests/branded-email-templates.test.js \
+            tests/email-outbox-payment-blockers.test.js \
+            tests/complete-e2e-email-otp-payments.test.js
