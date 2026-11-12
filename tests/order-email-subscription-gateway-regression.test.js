@@ -10,7 +10,9 @@ const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8
 
 function emailHelpers() {
   const start = email.indexOf('export function publicEmailImageUrl(');
-  const end = email.indexOf('/**\n * Format currency helper', start);
+  // Anchor the helper range to the next exported renderer wrapper rather than
+  // a mutable comment heading, so currency validation changes remain testable.
+  const end = email.indexOf('/**\n * Generate Customer Order Confirmation Email HTML', start);
   assert.ok(start >= 0 && end > start, 'email helpers must be present');
   const script = email.slice(start, end).replaceAll('export function', 'function') +
     '\n;globalThis.helpers = { publicEmailImageUrl, validOrderReceiptFinancials };';
