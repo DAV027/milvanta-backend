@@ -380,13 +380,15 @@ export async function enqueueSubscriptionOutbox(client, { subscription, customer
       quantity: subscription.quantity,
       frequency: subscription.frequency || 'Daily (Every Morning)',
       timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
-      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      costPerDay: subscription.cost_per_day_paise != null ? Number(subscription.cost_per_day_paise) / 100 : (subscription.costPerDay ?? null),
+      cost_per_day_paise: subscription.cost_per_day_paise ?? null,
       planType: subscription.plan_type || subscription.planType || 'custom',
       durationLabel: subscription.duration_label || subscription.durationLabel || '7 Days Custom Plan',
-      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      totalAmount: subscription.total_amount_paise != null ? Number(subscription.total_amount_paise) / 100 : (subscription.totalAmount ?? null),
+      total_amount_paise: subscription.total_amount_paise ?? null,
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -466,13 +468,15 @@ export async function enqueueRecurringSubscriptionOutbox(client, {
       quantity: subscription.quantity,
       frequency: subscription.frequency || 'Daily (Every Morning)',
       timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
-      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      costPerDay: subscription.cost_per_day_paise != null ? Number(subscription.cost_per_day_paise) / 100 : (subscription.costPerDay ?? null),
+      cost_per_day_paise: subscription.cost_per_day_paise ?? null,
       planType: subscription.plan_type || subscription.planType || 'monthly',
       durationLabel: subscription.duration_label || subscription.durationLabel || 'Monthly Recurring',
-      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      totalAmount: subscription.total_amount_paise != null ? Number(subscription.total_amount_paise) / 100 : (subscription.totalAmount ?? null),
+      total_amount_paise: subscription.total_amount_paise ?? null,
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -621,7 +625,7 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       if (item.email_type === 'order_confirmation') {
         subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
         html = buildCustomerOrderEmail(payload);
-        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nMilvanta Order Total: ${formatInr(payload.order?.total_paise, true)}`;
+        text = `Milvanta order details for ${payload.customer?.name || 'Customer'}\n\nOrder #${payload.order?.order_number || ''}\nMilvanta Order Total: ${formatInr(payload.order?.total_paise, true)}\nStatus: See your account for latest payment and delivery status.\nVisit https://milvanta.in/profile.html`;
       } else if (item.email_type === 'order_notification') {
         subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
         html = buildAdminOrderEmail(payload);
@@ -631,8 +635,8 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
         subject = isRefundable
           ? `🥛 Subscription E-Mandate Registered: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
           : (payload.isRenewal
-              ? `🥛 Subscription Renewal Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
-              : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`);
+              ? `Milvanta subscription billing update: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'}`
+              : `Milvanta subscription details: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'}`);
         html = buildCustomerSubscriptionEmail(payload);
         text = `Milvanta subscription details\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh milk'}\nReview payment eligibility and delivery scheduling in your Milvanta profile.\nTeam Milvanta`;
       } else if (item.email_type === 'subscription_notification') {
@@ -640,8 +644,8 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
         subject = isRefundable
           ? `🚨 ACTION REQUIRED: New Morning Milk Mandate Registered`
           : (payload.isRenewal
-              ? `🚨 NOTICE: Morning Milk Subscription Renewed`
-              : `🚨 ACTION REQUIRED: New Morning Milk Subscription`);
+              ? `Milvanta operations: recurring subscription update`
+              : `Milvanta operations: subscription review`);
         html = buildAdminSubscriptionEmail(payload);
         text = `ALERT: Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
       }
@@ -1105,10 +1109,12 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
             quantity: row.quantity,
             frequency: row.frequency,
             timeSlot: row.time_slot,
-            costPerDay: Math.round(row.cost_per_day_paise / 100),
+            costPerDay: row.cost_per_day_paise != null ? Number(row.cost_per_day_paise) / 100 : null,
+            cost_per_day_paise: row.cost_per_day_paise ?? null,
             planType: row.plan_type || 'month',
             durationLabel: row.duration_label || '',
-            totalAmount: Math.round((row.total_amount_paise || 0) / 100),
+            totalAmount: row.total_amount_paise != null ? Number(row.total_amount_paise) / 100 : null,
+            total_amount_paise: row.total_amount_paise ?? null,
             image: row.image_url,
             status: row.status,
             nextDelivery: row.next_delivery,
@@ -1272,13 +1278,21 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
       };
     } else if (recipientCustomerEmail && recipientCustomerEmail.includes('@')) {
       const custHtml = buildCustomerSubscriptionEmail({ subscription, customer, address, paymentId });
-      const custText = `Your Milvanta Milk Subscription is Confirmed!\n\nProduct: ${subscription.productName} (${subscription.quantity})\nSchedule: ${subscription.frequency} (${subscription.timeSlot})\nDuration: ${subscription.durationLabel}\nDaily Rate: ₹${subscription.costPerDay}/day\nNext Delivery: Tomorrow at 6:00 AM\n\nDelivering to:\n${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nManage anytime from your Milvanta Profile.\nTeam Milvanta`;
+      const custText = [
+        'Your Milvanta subscription details',
+        'Product: ' + (subscription.productName || subscription.product_name || 'Fresh milk'),
+        'Plan: ' + (subscription.durationLabel || 'See your profile for plan terms'),
+        'Payment / mandate status: refer to your account and gateway records.',
+        'First delivery: Pending delivery scheduling.',
+        'Visit https://milvanta.in/profile.html?tab=subscription to manage your plan.',
+        'Team Milvanta'
+      ].join('\n');
 
       const custSendRes = await sendEmail({
         to: recipientCustomerEmail,
         subject: isRefundableAuth
           ? `🥛 Subscription E-Mandate Registered: ${subscription.productName} - Milvanta Farm Fresh`
-          : `🥛 Subscription Confirmed: ${subscription.productName} - Milvanta Farm Fresh`,
+          : `Milvanta subscription details: ${subscription.productName || 'Fresh milk'}`,
         html: custHtml,
         text: custText,
         from: sender
@@ -1334,13 +1348,19 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
       };
     } else if (adminEmail && adminEmail.includes('@')) {
       const admHtml = buildAdminSubscriptionEmail({ subscription, customer, address, paymentId });
-      const admText = `ALERT: New Morning Milk Subscription!\nCustomer: ${customer.name || address.name} (${customer.phone || address.phone}, ${customer.email || address.email})\nProduct: ${subscription.productName} (${subscription.quantity})\nPlan: ${subscription.planType === 'custom' ? 'Custom Days' : 'Continuous Monthly'} (${subscription.durationLabel})\nDaily Rate: ₹${subscription.costPerDay}/day\nAddress: ${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
+      const admText = [
+        'Milvanta subscription requires operations review',
+        'Customer: ' + (customer?.name || address?.name || 'Customer'),
+        'Product: ' + (subscription.productName || subscription.product_name || 'Fresh milk'),
+        'Payment reference: ' + (paymentId || 'Not provided'),
+        'Verify captured payment, entitlement and scheduling before dispatch.'
+      ].join('\n');
 
       const admSendRes = await sendEmail({
         to: adminEmail,
         subject: isRefundableAuth
           ? `🚨 New Morning Milk Mandate Registered! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`
-          : `🚨 New Morning Milk Subscription! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`,
+          : `Milvanta operations: subscription review - ${subscription.productName || 'Fresh milk'}`,
         html: admHtml,
         text: admText,
         from: sender
@@ -1488,7 +1508,7 @@ export function buildWelcomeEmail({ customerName }) {
 export async function sendWelcomeEmail({ to, customerName }) {
   const subject = 'Welcome to Milvanta — Pure Fresh Milk & Dairy';
   const html = buildWelcomeEmail({ customerName });
-  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in and order fresh morning milk, homemade pickles, and artisanal dairy delivered between 6:00 AM – 7:00 AM across Hyderabad.\n\nConnecting Farms to Families\nTeam Milvanta`;
+  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in, browse our products and manage orders. Delivery timing and availability will be shown during checkout or in your subscription calendar.\n\nConnecting Farms to Families\nTeam Milvanta`;
   const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
   return sendEmail({
     to,
