@@ -247,24 +247,44 @@ export function publicEmailImageUrl(value) {
   return '';
 }
 
+function safeReceiptPaise(value) {
+  // PostgreSQL integer and integer-string representations are both supported.
+  // Never coerce booleans, blanks, decimals, scientific notation or objects
+  // into a seemingly valid payment amount.
+  if (typeof value !== 'number' &&
+      (typeof value !== 'string' || !/^\\d+$/.test(value))) return null;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : null;
+}
+
 export function validOrderReceiptFinancials(order) {
   if (!order) return false;
-  const subtotal = Number(order.subtotal_paise);
-  const delivery = Number(order.delivery_charge_paise);
-  const total = Number(order.total_paise);
-  return order.subtotal_paise != null &&
-    order.delivery_charge_paise != null &&
-    order.total_paise != null &&
-    [subtotal, delivery, total].every(Number.isSafeInteger) &&
-    subtotal > 0 && delivery >= 0 && total === subtotal + delivery;
+  const subtotal = safeReceiptPaise(order.subtotal_paise);
+  const delivery = safeReceiptPaise(order.delivery_charge_paise);
+  const total = safeReceiptPaise(order.total_paise);
+  return subtotal !== null && subtotal > 0 &&
+    delivery !== null && total !== null &&
+    Number.isSafeInteger(subtotal + delivery) &&
+    subtotal + delivery === total;
 }
 
 /**
- * Format currency helper
+ * Exact currency formatter for receipt subjects/plain text.
+ * For paise values, preserve decimal precision exactly as the HTML renderer.
  */
-function formatInr(paiseOrRupees, isPaise = false) {
-  const val = isPaise ? Math.round(Number(paiseOrRupees) / 100) : Number(paiseOrRupees);
-  return '₹' + (isNaN(val) ? 0 : val).toLocaleString('en-IN');
+export function formatInr(paiseOrRupees, isPaise = false) {
+  if (isPaise) {
+    const amount = safeReceiptPaise(paiseOrRupees);
+    if (amount === null) return 'Pending verification';
+    return '₹' + (amount / 100).toLocaleString('en-IN', {
+      minimumFractionDigits: amount % 100 ? 2 : 0,
+      maximumFractionDigits: 2
+    });
+  }
+  const amount = Number(paiseOrRupees);
+  return Number.isFinite(amount) && amount >= 0
+    ? '₹' + amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+    : 'Pending verification';
 }
 
 /**
