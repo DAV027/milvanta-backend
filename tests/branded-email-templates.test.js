@@ -180,3 +180,44 @@ test('prices preserve paise precision and never invent an amount for incomplete 
   assert.doesNotMatch(missing,/Reference daily rate[\s\S]{0,130}₹0\b/);
   assert.doesNotMatch(missing,/Plan amount[\s\S]{0,130}₹0\b/);
 });
+
+
+test('invalid first eligible dates are not presented as real calendar mornings',()=>{
+  for(const day of ['2026-02-30','2026-13-01','2026-11-00','2026-11-31',
+    '2026-11-12T06:00:00Z','Tomorrow']){
+    const html=buildCustomerSubscriptionEmail({
+      subscription:{productName:'Milk',firstEligibleDeliveryDate:day},
+      customer,address
+    });
+    assert.match(html,/Pending delivery scheduling/);
+    assert.doesNotMatch(html,/Earliest eligible morning — not yet scheduled/);
+  }
+  const leap=buildCustomerSubscriptionEmail({
+    subscription:{productName:'Milk',firstEligibleDeliveryDate:'2028-02-29'},
+    customer,address
+  });
+  assert.match(leap,/Earliest eligible morning — not yet scheduled/);
+  assert.match(leap,/2028-02-29/);
+});
+
+test('contradictory item amount cannot appear as a reconciled line total',()=>{
+  const html=buildCustomerOrderEmail({
+    order:{...order,subtotal_paise:159900,delivery_charge_paise:5000,total_paise:164900},
+    customer,address,items:[{name:'Milk',quantity:2,unitPricePaise:5000,
+      lineTotalPaise:100000}]
+  });
+  assert.match(html,/Amount requires review/);
+  assert.doesNotMatch(html,/₹1,000\b/);
+  assert.match(html,/Milvanta Order Total[\s\S]*?₹1,649/);
+});
+
+test('invalid money input types never coerce into an apparently valid price',()=>{
+  const html=buildCustomerOrderEmail({
+    order:{...order,subtotal_paise:true,total_paise:5001,delivery_charge_paise:5000},
+    customer,address,items:[{name:'Milk',quantity:true,unitPricePaise:5000,
+      lineTotalPaise:false}]
+  });
+  assert.match(html,/Receipt totals are pending verification/);
+  assert.match(html,/Qty unavailable/);
+  assert.doesNotMatch(html,/₹0\b/);
+});
