@@ -88,7 +88,7 @@ test('Razorpay 401 is diagnostic, actionable and never leaks provider response t
 
 test('actual outbox function enqueues correct customer and admin amounts; missing values fail closed', async () => {
   const helperStart = email.indexOf('export function publicEmailImageUrl(');
-  const helperEnd = email.indexOf('/**\n * Format currency helper', helperStart);
+  const helperEnd = email.indexOf('/**\n * Generate Customer Order Confirmation Email HTML', helperStart);
   const outboxStart = email.indexOf('export async function enqueueOrderPaidOutbox(');
   const outboxEnd = email.indexOf('/**\n * Enqueue transactional email outbox records for a confirmed milk subscription', outboxStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart && outboxStart >= 0 && outboxEnd > outboxStart);
