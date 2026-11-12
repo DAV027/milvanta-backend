@@ -142,3 +142,34 @@ jobs:
         run: npm ci
       - name: Run full test suite against disposable PostgreSQL
         run: npm test
+
+  # Completely synthetic previews for design review. No npm packages,
+  # email provider keys, database, external fetches, or production access.
+  email-preview-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate synthetic email preview gallery
+        run: node scripts/preview-email-templates.mjs
+      - name: Verify preview file count and absence of live credentials
+        run: |
+          test "$(find email-previews -maxdepth 1 -name '*.html' -type f | wc -l)" -eq 7
+          ! grep -REl 'rzp_(live|test)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9]{16,}|@gmail\.com|@yahoo\.com' email-previews/
+          ! grep -REl '<script\b|javascript:' email-previews/
+          grep -q 'Pending delivery scheduling' email-previews/customer-subscription.html
+          ! grep -q 'Tomorrow, 6:00 AM' email-previews/customer-subscription.html
+      - name: Upload HTML previews for manual email-client review (NO DEPLOY)
+        uses: actions/upload-artifact@v4
+        with:
+          name: milvanta-synthetic-email-previews
+          path: email-previews/
+          if-no-files-found: error
+          retention-days: 7
