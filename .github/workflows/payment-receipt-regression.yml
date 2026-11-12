@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - 'src/email.js'
+      - 'src/emailTemplateRenderers.js'
+      - 'tests/branded-email-templates.test.js'
+      - 'tests/email-receipt-amount-validation.test.js'
+      - 'scripts/preview-email-templates.mjs'
       - 'src/server.js'
       - 'src/services/deliveryEngine.js'
       - 'src/services/deliveryCronPolicy.js'
@@ -45,6 +49,10 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check src/email.js
+          node --check src/emailTemplateRenderers.js
+          node --check scripts/preview-email-templates.mjs
+          node --check tests/branded-email-templates.test.js
+          node --check tests/email-receipt-amount-validation.test.js
           node --check src/server.js
           node --check src/services/deliveryEngine.js
           node --check src/services/deliveryCronPolicy.js
@@ -63,7 +71,7 @@ jobs:
           node --check tests/delivery-cron-cloudflare-worker.test.js
           node --check tests/razorpay-webhook-contract-audit.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
+        run: node --test tests/branded-email-templates.test.js tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest
@@ -136,3 +144,81 @@ jobs:
         run: npm ci
       - name: Run full test suite against disposable PostgreSQL
         run: npm test
+
+  # Completely synthetic previews for design review. No npm packages,
+  # email provider keys, database, external fetches, or production access.
+  email-preview-artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate synthetic email preview gallery
+        run: node scripts/preview-email-templates.mjs
+      - name: Verify preview file count and absence of live credentials
+        run: |
+          test "$(find email-previews -maxdepth 1 -name '*.html' -type f | wc -l)" -eq 7
+          ! grep -REl 'rzp_(live|test)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9]{16,}|@gmail\.com|@yahoo\.com' email-previews/
+          ! grep -REl '<script\b|javascript:' email-previews/
+          grep -q 'Pending delivery scheduling' email-previews/customer-subscription.html
+          ! grep -q 'Tomorrow, 6:00 AM' email-previews/customer-subscription.html
+      - name: Upload HTML previews for manual email-client review (NO DEPLOY)
+        uses: actions/upload-artifact@v4
+        with:
+          name: milvanta-synthetic-email-previews
+          path: email-previews/
+          if-no-files-found: error
+          retention-days: 7
+
+
+  # Focused end-to-end email tests; the full backend suite can exceed its
+  # independent 18-minute timeout. Safe isolated DB and mocked providers.
+  email-integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: milvanta_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d milvanta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/milvanta_test
+      DATABASE_SSL: 'false'
+      WHATSAPP_ENABLED: 'false'
+      # No live API keys, SMTP credentials, or production DB URL.
+    steps:
+      - name: Check out PR source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install lockfile dependencies
+        run: npm ci
+      - name: Guard test environment before loading application
+        run: |
+          node --input-type=module -e "import {testDbConfig,assertTestDatabaseConfigured} from './tests/helpers/testDbGuard.js'; assertTestDatabaseConfigured(); if (testDbConfig.dbName !== 'milvanta_test' || !['localhost','127.0.0.1'].includes(testDbConfig.hostname)) process.exit(1); console.log('Disposable PostgreSQL confirmed')"
+      - name: Run email OTP, outbox, payment blockers and provider-fallback tests
+        run: |
+          node --test --test-concurrency=1 \
+            tests/branded-email-templates.test.js \
+            tests/email-receipt-amount-validation.test.js \
+            tests/email-outbox-payment-blockers.test.js \
+            tests/complete-e2e-email-otp-payments.test.js

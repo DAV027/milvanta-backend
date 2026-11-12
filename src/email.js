@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import nodemailer from 'nodemailer';
+import {
+  renderCustomerOrderEmail, renderAdminOrderEmail,
+  renderCustomerSubscriptionEmail, renderAdminSubscriptionEmail,
+  renderPasswordResetEmail, renderWelcomeEmail
+} from './emailTemplateRenderers.js';
 
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
@@ -242,363 +247,58 @@ export function publicEmailImageUrl(value) {
   return '';
 }
 
+function safeReceiptPaise(value) {
+  // PostgreSQL integer and integer-string representations are both supported.
+  // Never coerce booleans, blanks, decimals, scientific notation or objects
+  // into a seemingly valid payment amount.
+  if (typeof value !== 'number' &&
+      (typeof value !== 'string' || !/^\d+$/.test(value))) return null;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) && amount >= 0 ? amount : null;
+}
+
 export function validOrderReceiptFinancials(order) {
   if (!order) return false;
-  const subtotal = Number(order.subtotal_paise);
-  const delivery = Number(order.delivery_charge_paise);
-  const total = Number(order.total_paise);
-  return order.subtotal_paise != null &&
-    order.delivery_charge_paise != null &&
-    order.total_paise != null &&
-    [subtotal, delivery, total].every(Number.isSafeInteger) &&
-    subtotal > 0 && delivery >= 0 && total === subtotal + delivery;
+  const subtotal = safeReceiptPaise(order.subtotal_paise);
+  const delivery = safeReceiptPaise(order.delivery_charge_paise);
+  const total = safeReceiptPaise(order.total_paise);
+  return subtotal !== null && subtotal > 0 &&
+    delivery !== null && total !== null &&
+    Number.isSafeInteger(subtotal + delivery) &&
+    subtotal + delivery === total;
 }
 
 /**
- * Format currency helper
+ * Exact currency formatter for receipt subjects/plain text.
+ * For paise values, preserve decimal precision exactly as the HTML renderer.
  */
-function formatInr(paiseOrRupees, isPaise = false) {
-  const val = isPaise ? Math.round(Number(paiseOrRupees) / 100) : Number(paiseOrRupees);
-  return '₹' + (isNaN(val) ? 0 : val).toLocaleString('en-IN');
+export function formatInr(paiseOrRupees, isPaise = false) {
+  if (isPaise) {
+    const amount = safeReceiptPaise(paiseOrRupees);
+    if (amount === null) return 'Pending verification';
+    return '₹' + (amount / 100).toLocaleString('en-IN', {
+      minimumFractionDigits: amount % 100 ? 2 : 0,
+      maximumFractionDigits: 2
+    });
+  }
+  const amount = Number(paiseOrRupees);
+  return Number.isFinite(amount) && amount >= 0
+    ? '₹' + amount.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+    : 'Pending verification';
 }
 
 /**
  * Generate Customer Order Confirmation Email HTML
  */
 export function buildCustomerOrderEmail({ order, customer, address, items, paymentId }) {
-  const orderNumber = escapeHtml(order.order_number || `MV-${order.id}`);
-  const customerName = escapeHtml(address?.name || customer?.full_name || customer?.name || 'Valued Customer');
-  const totalStr = formatInr(order.total_paise, true);
-  const subtotalStr = formatInr(order.subtotal_paise, true);
-  const deliveryStr = Number(order.delivery_charge_paise) > 0 ? formatInr(order.delivery_charge_paise, true) : 'FREE';
-
-  const orderDate = new Date(order.created_at || Date.now()).toLocaleDateString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-
-  const addressLines = [
-    address?.house,
-    address?.building,
-    address?.street,
-    address?.landmark ? `Landmark: ${address.landmark}` : null,
-    address?.city ? `${address.city} - ${address.pincode || ''}` : null
-  ].filter(Boolean).map(escapeHtml).join('<br/>');
-
-  const itemsRows = (items || []).map((item) => {
-    const name = escapeHtml(item.name || 'Artisanal Product');
-    const unit = escapeHtml(item.unit || item.size || '');
-    const qty = Number(item.quantity || 1);
-    const unitPrice = formatInr(item.unitPricePaise || Math.round((item.price || 0) * 100), true);
-    const lineTotal = formatInr(item.lineTotalPaise || Math.round((item.price || 0) * qty * 100), true);
-    const imgUrl = publicEmailImageUrl(item.imageUrl || item.image || '');
-
-    return `
-      <tr style="border-bottom: 1px solid #eef2f6;">
-        <td style="padding: 12px 8px; vertical-align: middle;">
-          ${imgUrl ? `<img src="${escapeHtml(imgUrl)}" alt="${name}" width="48" height="48" style="border-radius: 8px; object-fit: cover; display: block; background: #f8fafc; border: 1px solid #e2e8f0;" />` : ''}
-        </td>
-        <td style="padding: 12px 8px; vertical-align: middle;">
-          <div style="font-weight: 700; color: #0f172a; font-size: 14px;">${name}</div>
-          ${unit ? `<div style="font-size: 12px; color: #64748b;">${unit}</div>` : ''}
-        </td>
-        <td style="padding: 12px 8px; text-align: center; color: #475569; font-size: 13px; vertical-align: middle;">
-          ${qty} × ${unitPrice}
-        </td>
-        <td style="padding: 12px 8px; text-align: right; font-weight: 700; color: #0a3d66; font-size: 14px; vertical-align: middle;">
-          ${lineTotal}
-        </td>
-      </tr>
-    `;
-  }).join('');
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Order Confirmed - ${orderNumber}</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 24px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06);" cellspacing="0" cellpadding="0">
-          
-          <!-- Header Banner -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #0a3d66 0%, #072d4c 100%); padding: 32px 28px; text-align: center; color: #ffffff;">
-              <div style="letter-spacing: 2px; font-size: 22px; font-weight: 800; margin-bottom: 6px;">MILVANTA</div>
-              <div style="font-size: 12px; opacity: 0.85; text-transform: uppercase; letter-spacing: 1px;">Farm Fresh &amp; Artisanal Pantry</div>
-              <div style="margin-top: 18px; display: inline-block; background: #10b981; color: #ffffff; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
-                ✓ Order Paid &amp; Confirmed
-              </div>
-            </td>
-          </tr>
-
-          <!-- Content Body -->
-          <tr>
-            <td style="padding: 28px 24px;">
-              <h2 style="font-size: 20px; margin: 0 0 10px; color: #0f172a;">Thank you for your order, ${customerName}!</h2>
-              <p style="font-size: 14px; line-height: 1.6; color: #475569; margin: 0 0 20px;">
-                Your Milvanta order amount is <strong style="color: #0a3d66;">${totalStr}</strong>. Our cold-chain team is preparing your fresh farm favorites straight from our Hafeezpet hub. Any separate Razorpay convenience charges shown at checkout are not included in the Milvanta order total.
-              </p>
-
-              <!-- Order Metadata Card -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px;">
-                <tr>
-                  <td style="padding: 16px;">
-                    <table width="100%" cellspacing="0" cellpadding="4">
-                      <tr>
-                        <td style="font-size: 13px; color: #64748b; width: 40%;">Order Number:</td>
-                        <td style="font-size: 13px; font-weight: 700; color: #0a3d66;">#${orderNumber}</td>
-                      </tr>
-                      <tr>
-                        <td style="font-size: 13px; color: #64748b;">Order Date:</td>
-                        <td style="font-size: 13px; color: #0f172a;">${orderDate}</td>
-                      </tr>
-                      <tr>
-                        <td style="font-size: 13px; color: #64748b;">Payment Method:</td>
-                        <td style="font-size: 13px; color: #059669; font-weight: 600;">✓ Razorpay Online (${paymentId || 'Verified'})</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Items Breakdown Table -->
-              <h3 style="font-size: 15px; margin: 0 0 12px; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Your Ordered Items</h3>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 24px; border-collapse: collapse;">
-                <thead>
-                  <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0;">
-                    <th style="padding: 8px; text-align: left; font-size: 12px; color: #64748b; text-transform: uppercase;">Image</th>
-                    <th style="padding: 8px; text-align: left; font-size: 12px; color: #64748b; text-transform: uppercase;">Item</th>
-                    <th style="padding: 8px; text-align: center; font-size: 12px; color: #64748b; text-transform: uppercase;">Qty</th>
-                    <th style="padding: 8px; text-align: right; font-size: 12px; color: #64748b; text-transform: uppercase;">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${itemsRows}
-                </tbody>
-              </table>
-
-              <!-- Bill Breakdown -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px;">
-                <tr>
-                  <td style="padding: 16px;">
-                    <table width="100%" cellspacing="0" cellpadding="4">
-                      <tr>
-                        <td style="font-size: 13px; color: #475569;">Items Subtotal</td>
-                        <td style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right;">${subtotalStr}</td>
-                      </tr>
-                      <tr>
-                        <td style="font-size: 13px; color: #475569;">Cold-Chain Delivery Charges</td>
-                        <td style="font-size: 13px; font-weight: 600; color: #0f172a; text-align: right;">${deliveryStr}</td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="padding: 6px 0;"><div style="height: 1px; background: #cbd5e1;"></div></td>
-                      </tr>
-                      <tr>
-                        <td style="font-size: 15px; font-weight: 800; color: #0f172a;">Milvanta Order Total</td>
-                        <td style="font-size: 18px; font-weight: 800; color: #0a3d66; text-align: right;">${totalStr}</td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Destination Address -->
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 24px;">
-                <div style="font-size: 12px; text-transform: uppercase; font-weight: 700; color: #64748b; margin-bottom: 6px;">📍 Delivering To:</div>
-                <div style="font-size: 14px; font-weight: 700; color: #0f172a; margin-bottom: 2px;">${customerName} (${escapeHtml(address?.phone || customer?.phone || '')})</div>
-                <div style="font-size: 13px; color: #475569; line-height: 1.5;">${addressLines}</div>
-              </div>
-
-              <!-- Support Note -->
-              <div style="text-align: center; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px;">
-                <p style="font-size: 13px; color: #065f46; margin: 0; line-height: 1.4;">
-                  Have questions or need assistance? Reply to this email or WhatsApp us at <strong>+91 9052222256</strong>.
-                </p>
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background: #0f172a; padding: 24px; text-align: center; color: #94a3b8; font-size: 12px; line-height: 1.6;">
-              <strong style="color: #ffffff;">Milvanta Organics &amp; Direct Dairy</strong><br/>
-              Hafeezpet Hub, Hyderabad, Telangana 500049<br/>
-              © 2026 Milvanta. All rights reserved.
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderCustomerOrderEmail({ order, customer, address, items, paymentId });
 }
 
 /**
  * Generate Admin Order Notification Email HTML
  */
 export function buildAdminOrderEmail({ order, customer, address, items, paymentId }) {
-  const orderNumber = escapeHtml(order.order_number || `MV-${order.id}`);
-  const customerName = escapeHtml(address?.name || customer?.full_name || customer?.name || 'Customer');
-  const customerPhone = escapeHtml(address?.phone || customer?.phone || 'N/A');
-  const customerEmail = escapeHtml(address?.email || customer?.email || 'N/A');
-  const totalStr = formatInr(order.total_paise, true);
-  const subtotalStr = formatInr(order.subtotal_paise, true);
-  const deliveryStr = formatInr(order.delivery_charge_paise, true);
-
-  const orderDate = new Date(order.created_at || Date.now()).toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
-
-  const addressLines = [
-    address?.house,
-    address?.building,
-    address?.street,
-    address?.landmark ? `Landmark: ${address.landmark}` : null,
-    address?.city ? `${address.city} - ${address.pincode || ''}` : null
-  ].filter(Boolean).map(escapeHtml).join('<br/>');
-
-  const itemsRows = (items || []).map((item, idx) => {
-    const name = escapeHtml(item.name || 'Artisanal Product');
-    const unit = escapeHtml(item.unit || item.size || '');
-    const qty = Number(item.quantity || 1);
-    const lineTotal = formatInr(item.lineTotalPaise || Math.round((item.price || 0) * qty * 100), true);
-
-    return `
-      <tr style="border-bottom: 1px solid #e2e8f0; background: ${idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
-        <td style="padding: 10px 12px; font-weight: 700; color: #0f172a; font-size: 14px;">
-          ${name}
-          ${unit ? `<span style="font-weight: 400; color: #64748b; font-size: 12px;"> (${unit})</span>` : ''}
-        </td>
-        <td style="padding: 10px 12px; text-align: center; font-weight: 800; color: #0a3d66; font-size: 15px;">
-          ${qty}
-        </td>
-        <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #0f172a; font-size: 14px;">
-          ${lineTotal}
-        </td>
-      </tr>
-    `;
-  }).join('');
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>New Paid Order - ${orderNumber}</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 24px 0;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 14px; overflow: hidden; border: 1px solid #e2e8f0;" cellspacing="0" cellpadding="0">
-          
-          <!-- Admin Alert Banner -->
-          <tr>
-            <td style="background: #0a3d66; padding: 24px; color: #ffffff;">
-              <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; opacity: 0.85; margin-bottom: 4px;">ADMIN DISPATCH ALERT</div>
-              <h1 style="font-size: 22px; margin: 0 0 8px; color: #ffffff;">🚨 New Paid Order: #${orderNumber}</h1>
-              <div style="font-size: 15px; font-weight: 600; color: #34d399;">
-                Amount Received: ${totalStr} via Razorpay
-              </div>
-            </td>
-          </tr>
-
-          <!-- Customer Info -->
-          <tr>
-            <td style="padding: 24px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f1f5f9; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
-                <tr>
-                  <td>
-                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 4px;">Customer Details</div>
-                    <div style="font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 2px;">${customerName}</div>
-                    <div style="font-size: 13px; color: #334155;">
-                      📞 <a href="tel:${customerPhone}" style="color: #0a3d66; font-weight: 600; text-decoration: none;">${customerPhone}</a> · 
-                      ✉️ <a href="mailto:${customerEmail}" style="color: #0a3d66; text-decoration: none;">${customerEmail}</a>
-                    </div>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Delivery Address -->
-              <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 14px; margin-bottom: 20px;">
-                <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #1e40af; margin-bottom: 4px;">📍 Delivery Location</div>
-                <div style="font-size: 13px; color: #1e293b; line-height: 1.5;">${addressLines}</div>
-              </div>
-
-              <!-- Packing List -->
-              <h3 style="font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; color: #0f172a; margin: 0 0 10px;">📦 Packing Checklist</h3>
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse: collapse; margin-bottom: 20px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
-                <thead>
-                  <tr style="background: #e2e8f0;">
-                    <th style="padding: 8px 12px; text-align: left; font-size: 12px; color: #475569;">Item</th>
-                    <th style="padding: 8px 12px; text-align: center; font-size: 12px; color: #475569;">Qty</th>
-                    <th style="padding: 8px 12px; text-align: right; font-size: 12px; color: #475569;">Line Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${itemsRows}
-                </tbody>
-              </table>
-
-              <!-- Payment Breakdown -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="4" style="font-size: 13px; color: #475569; margin-bottom: 16px;">
-                <tr>
-                  <td>Items Subtotal</td>
-                  <td style="text-align: right; font-weight: 600; color: #0f172a;">${subtotalStr}</td>
-                </tr>
-                <tr>
-                  <td>Delivery Fee</td>
-                  <td style="text-align: right; font-weight: 600; color: #0f172a;">${deliveryStr}</td>
-                </tr>
-                <tr style="border-top: 1px solid #cbd5e1;">
-                  <td style="font-weight: 700; color: #0f172a; padding-top: 6px;">Milvanta Order Total</td>
-                  <td style="text-align: right; font-weight: 800; font-size: 16px; color: #0a3d66; padding-top: 6px;">${totalStr}</td>
-                </tr>
-              </table>
-
-              <div style="font-size: 11px; color: #64748b; padding-top: 10px; border-top: 1px solid #f1f5f9;">
-                Razorpay Payment ID: <code>${escapeHtml(paymentId || 'N/A')}</code> · Recorded At: ${orderDate} IST
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background: #f1f5f9; padding: 14px; text-align: center; color: #64748b; font-size: 12px;">
-              Automated Milvanta Operations Notification · Hafeezpet Hub Dispatch
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderAdminOrderEmail({ order, customer, address, items, paymentId });
 }
 
 /**
@@ -628,6 +328,8 @@ export async function enqueueOrderPaidOutbox(client, { order, customer, address,
       total_paise: order.total_paise,
       subtotal_paise: order.subtotal_paise,
       delivery_charge_paise: order.delivery_charge_paise,
+      payment_status: order.payment_status,
+      order_status: order.order_status,
       created_at: order.created_at
     },
     customer: {
@@ -698,13 +400,15 @@ export async function enqueueSubscriptionOutbox(client, { subscription, customer
       quantity: subscription.quantity,
       frequency: subscription.frequency || 'Daily (Every Morning)',
       timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
-      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      costPerDay: subscription.cost_per_day_paise != null ? Number(subscription.cost_per_day_paise) / 100 : (subscription.costPerDay ?? null),
+      cost_per_day_paise: subscription.cost_per_day_paise ?? null,
       planType: subscription.plan_type || subscription.planType || 'custom',
       durationLabel: subscription.duration_label || subscription.durationLabel || '7 Days Custom Plan',
-      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      totalAmount: subscription.total_amount_paise != null ? Number(subscription.total_amount_paise) / 100 : (subscription.totalAmount ?? null),
+      total_amount_paise: subscription.total_amount_paise ?? null,
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -784,13 +488,15 @@ export async function enqueueRecurringSubscriptionOutbox(client, {
       quantity: subscription.quantity,
       frequency: subscription.frequency || 'Daily (Every Morning)',
       timeSlot: subscription.time_slot || subscription.timeSlot || '6:00 AM – 7:00 AM',
-      costPerDay: subscription.cost_per_day_paise ? Math.round(subscription.cost_per_day_paise / 100) : (subscription.costPerDay || 55),
+      costPerDay: subscription.cost_per_day_paise != null ? Number(subscription.cost_per_day_paise) / 100 : (subscription.costPerDay ?? null),
+      cost_per_day_paise: subscription.cost_per_day_paise ?? null,
       planType: subscription.plan_type || subscription.planType || 'monthly',
       durationLabel: subscription.duration_label || subscription.durationLabel || 'Monthly Recurring',
-      totalAmount: subscription.total_amount_paise ? Math.round(subscription.total_amount_paise / 100) : (subscription.totalAmount || 0),
+      totalAmount: subscription.total_amount_paise != null ? Number(subscription.total_amount_paise) / 100 : (subscription.totalAmount ?? null),
+      total_amount_paise: subscription.total_amount_paise ?? null,
       image: subscription.image_url || subscription.image,
       status: subscription.status || 'active',
-      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Tomorrow, 6:00 AM',
+      nextDelivery: subscription.next_delivery || subscription.nextDelivery || 'Pending delivery scheduling',
       notes: subscription.notes || {}
     },
     customer: {
@@ -937,29 +643,55 @@ export async function processEmailOutbox(poolOrClient, options = {}) {
       let text = '';
 
       if (item.email_type === 'order_confirmation') {
-        subject = `Order Confirmed: #${payload.order?.order_number || ''} - Milvanta Farm Fresh`;
+        const paid = payload.order?.payment_status === 'paid' &&
+          payload.order?.order_status === 'confirmed';
+        const number = payload.order?.order_number || 'Order';
+        const total = validOrderReceiptFinancials(payload.order)
+          ? formatInr(payload.order.total_paise, true) : 'Pending verification';
+        subject = paid
+          ? `Order Confirmed: #${number} - Milvanta Farm Fresh`
+          : `Milvanta Order Update: #${number}`;
         html = buildCustomerOrderEmail(payload);
-        text = `Thank you for your order, ${payload.customer?.name || 'Valued Customer'}!\n\nYour order #${payload.order?.order_number} has been paid and confirmed.\nMilvanta Order Total: ${formatInr(payload.order?.total_paise, true)}`;
+        text = [
+          `Milvanta order details for ${payload.customer?.name || 'Customer'}`,
+          `Order #${number}`,
+          `Payment status: ${paid ? 'Paid and confirmed' : 'Requires verification'}`,
+          `Milvanta order total: ${total}`,
+          'Review your latest delivery status at https://milvanta.in/profile.html'
+        ].join('\n');
       } else if (item.email_type === 'order_notification') {
-        subject = `🚨 New Paid Order #${payload.order?.order_number || ''} - ${formatInr(payload.order?.total_paise, true)} (${payload.customer?.name || 'Customer'})`;
+        const paid = payload.order?.payment_status === 'paid' &&
+          payload.order?.order_status === 'confirmed';
+        const number = payload.order?.order_number || 'Order';
+        const total = validOrderReceiptFinancials(payload.order)
+          ? formatInr(payload.order.total_paise, true) : 'Pending verification';
+        subject = paid
+          ? `New Paid Order #${number} - ${total} - Milvanta`
+          : `Milvanta Operations: Order Review #${number}`;
         html = buildAdminOrderEmail(payload);
-        text = `ALERT: New Paid Order #${payload.order?.order_number}\nAmount: ${formatInr(payload.order?.total_paise, true)}\nCustomer: ${payload.customer?.name} (${payload.customer?.phone}, ${payload.customer?.email})`;
+        text = [
+          `Milvanta operations: ${paid ? 'Verified paid order' : 'Order requires payment review'}`,
+          `Order #${number}`,
+          `Milvanta order total: ${total}`,
+          `Customer: ${payload.customer?.name || 'Customer'}`,
+          'Verify delivery eligibility in the operations dashboard.'
+        ].join('\n');
       } else if (item.email_type === 'subscription_confirmation') {
         const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
         subject = isRefundable
           ? `🥛 Subscription E-Mandate Registered: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
           : (payload.isRenewal
-              ? `🥛 Subscription Renewal Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`
-              : `🥛 Subscription Confirmed: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'} - Milvanta Farm Fresh`);
+              ? `Milvanta subscription billing update: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'}`
+              : `Milvanta subscription details: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh Milk'}`);
         html = buildCustomerSubscriptionEmail(payload);
-        text = `Your Milvanta Milk Subscription is Confirmed!\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name}\nTeam Milvanta`;
+        text = `Milvanta subscription details\nProduct: ${payload.subscription?.productName || payload.subscription?.product_name || 'Fresh milk'}\nReview payment eligibility and delivery scheduling in your Milvanta profile.\nTeam Milvanta`;
       } else if (item.email_type === 'subscription_notification') {
         const isRefundable = payload.subscription?.notes?.authType === 'refundable_authorization';
         subject = isRefundable
           ? `🚨 ACTION REQUIRED: New Morning Milk Mandate Registered`
           : (payload.isRenewal
-              ? `🚨 NOTICE: Morning Milk Subscription Renewed`
-              : `🚨 ACTION REQUIRED: New Morning Milk Subscription`);
+              ? `Milvanta operations: recurring subscription update`
+              : `Milvanta operations: subscription review`);
         html = buildAdminSubscriptionEmail(payload);
         text = `ALERT: Milk Subscription\nCustomer: ${payload.customer?.name || payload.customer?.full_name}`;
       }
@@ -1375,313 +1107,14 @@ export async function sendOrderPaidEmails(pool, orderId, paymentId = '') {
  * Generate Customer Subscription Confirmation Email HTML
  */
 export function buildCustomerSubscriptionEmail({ subscription, customer, address, paymentId }) {
-  const customerName = escapeHtml(customer?.name || customer?.full_name || address?.name || 'Valued Customer');
-  const productName = escapeHtml(subscription?.productName || subscription?.product_name || subscription?.product || 'Pure Fresh Milk');
-  const size = escapeHtml(subscription?.quantity || subscription?.size || '500 ml');
-  const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
-  const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
-  const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
-  const isRefundableAuth = Boolean(
-    subscription?.authType === 'refundable_authorization' ||
-    subscription?.isRefundableAuth ||
-    (subscription?.notes && (subscription.notes.authType === 'refundable_authorization' || subscription.notes.isRefundableAuth))
-  );
-  const authAmountPaise = Number(subscription?.authAmountPaise || subscription?.notes?.authAmountPaise || 200);
-
-  const planTag = isRefundableAuth
-    ? 'E-Mandate Autopay Authorized & Registered'
-    : (isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription');
-  const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
-  const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
-  const subtotalPlan = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
-  const deliveryFee = Number(subscription?.deliveryFee || 50);
-  const totalPaid = subscription?.totalPaid || (subtotalPlan + deliveryFee);
-  const dailyRateStr = formatInr(dailyRate);
-  const subtotalPlanStr = formatInr(subtotalPlan);
-  const deliveryFeeStr = formatInr(deliveryFee);
-  const totalPaidStr = formatInr(totalPaid);
-  const nextDelivery = escapeHtml(subscription?.nextDelivery || subscription?.next_delivery || 'Tomorrow Morning · 6:00 AM – 7:00 AM');
-  const imgUrl = subscription?.image || subscription?.image_url || (productName.toLowerCase().includes('buffalo') ? 'https://milvanta.in/assets/milvanta-buffalo-milk.jpg' : 'https://milvanta.in/assets/milvanta-cow-milk.jpg');
-  const paymentMethod = isRefundableAuth
-    ? 'UPI Autopay / Card E-Mandate (Refundable Authorization)'
-    : (isCustom ? 'Paid Online via Razorpay (One-Time)' : 'Subscription Autopay (Razorpay Recurring)');
-
-  const addressLines = [
-    address?.house,
-    address?.building,
-    address?.street,
-    address?.landmark ? `Landmark: ${address.landmark}` : null,
-    address?.city ? `${address.city} - ${address.pincode || ''}` : null
-  ].filter(Boolean).map(escapeHtml).join('<br/>');
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${isRefundableAuth ? 'Your Milk Subscription E-Mandate is Registered' : 'Your Morning Milk Subscription is Confirmed'} - Milvanta</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f8fafc; padding: 24px 12px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" style="max-width: 600px; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06); border: 1px solid #e2e8f0;">
-          
-          <!-- Header Banner -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #0a3d66 0%, #065f46 100%); padding: 32px 28px; text-align: center;">
-              <h1 style="color: #ffffff; margin: 0 0 6px; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">🥛 Milvanta Farm Fresh</h1>
-              <p style="color: #d1fae5; margin: 0; font-size: 14px; font-weight: 500;">Direct from Ethical Local Dairy Farms to Your Doorstep</p>
-            </td>
-          </tr>
-
-          <!-- Welcome Body -->
-          <tr>
-            <td style="padding: 28px 28px 16px;">
-              <div style="display: inline-block; background: ${isRefundableAuth ? '#e0e7ff' : (isCustom ? '#dcfce7' : '#e0f2fe')}; color: ${isRefundableAuth ? '#3730a3' : (isCustom ? '#15803d' : '#0369a1')}; border: 1px solid ${isRefundableAuth ? '#c7d2fe' : (isCustom ? '#bbf7d0' : '#bae6fd')}; border-radius: 9999px; padding: 4px 12px; font-size: 12px; font-weight: 700; text-transform: uppercase; margin-bottom: 12px;">
-                ${planTag}
-              </div>
-              <h2 style="color: #0f172a; margin: 0 0 10px; font-size: 20px; font-weight: 700;">${isRefundableAuth ? `Mandate Activated, ${customerName}!` : `Welcome to Morning Fresh Milk, ${customerName}!`}</h2>
-              <p style="color: #475569; margin: 0 0 20px; font-size: 14px; line-height: 1.6;">
-                ${isRefundableAuth 
-                  ? `Your subscription autopay mandate has been registered successfully! Regular morning deliveries are scheduled to begin on <strong>${nextDelivery}</strong>. Monthly plan charges will be debited automatically at each recurring billing cycle.`
-                  : `Your daily milk subscription has been activated successfully! Fresh, chilled, unadulterated milk will be placed right at your doorstep every morning.`
-                }
-              </p>
-
-              <!-- Subscription Highlight Box -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 22px;">
-                <tr>
-                  <td width="70" style="vertical-align: top; padding-right: 14px;">
-                    <img src="${escapeHtml(imgUrl)}" alt="${productName}" width="70" height="70" style="border-radius: 10px; object-fit: cover; display: block; border: 1px solid #cbd5e1;" />
-                  </td>
-                  <td style="vertical-align: top;">
-                    <h3 style="margin: 0 0 4px; font-size: 16px; color: #0f172a;">${productName}</h3>
-                    <div style="font-size: 13px; color: #64748b; margin-bottom: 8px;">${size} · ${frequency}</div>
-                    <div style="font-size: 13px; color: #0284c7; font-weight: 600;">⏰ ${timeSlot}</div>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- Delivery & Plan Metrics -->
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="6" style="font-size: 13px; color: #475569; margin-bottom: 20px; border-bottom: 1px dashed #cbd5e1; padding-bottom: 14px;">
-                <tr>
-                  <td style="color: #64748b;">Plan Duration</td>
-                  <td style="text-align: right; font-weight: 700; color: #0f172a;">${durationLabel}</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Daily Rate</td>
-                  <td style="text-align: right; font-weight: 700; color: #059669;">${dailyRateStr}/day</td>
-                </tr>
-                ${isRefundableAuth ? `
-                <tr>
-                  <td style="color: #64748b;">Mandate Token Authorization</td>
-                  <td style="text-align: right; font-weight: 700; color: #4338ca;">${formatInr(authAmountPaise, true)} (Refundable Auth)</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Recurring Billing Amount</td>
-                  <td style="text-align: right; font-weight: 800; font-size: 14px; color: #0a3d66;">${subtotalPlanStr} / month</td>
-                </tr>
-                ` : `
-                <tr>
-                  <td style="color: #64748b;">Deliveries Subtotal</td>
-                  <td style="text-align: right; font-weight: 700; color: #0f172a;">${subtotalPlanStr}</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Delivery Charges</td>
-                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${deliveryFeeStr}</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Total Amount Paid</td>
-                  <td style="text-align: right; font-weight: 800; font-size: 15px; color: #0a3d66;">${totalPaidStr}</td>
-                </tr>
-                `}
-                <tr>
-                  <td style="color: #64748b;">Payment Method</td>
-                  <td style="text-align: right; font-weight: 600; color: #0f172a;">${paymentMethod}</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">First Delivery Scheduled</td>
-                  <td style="text-align: right; font-weight: 700; color: #0284c7;">${nextDelivery}</td>
-                </tr>
-              </table>
-
-              <!-- Delivery Address Box -->
-              <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 16px; margin-bottom: 22px;">
-                <div style="font-size: 12px; font-weight: 700; color: #0f172a; text-transform: uppercase; margin-bottom: 6px;">📍 Doorstep Delivery Destination</div>
-                <div style="font-size: 13px; color: #334155; line-height: 1.5;">${addressLines}</div>
-              </div>
-
-              <!-- Customer Profile Self-Service Help -->
-              <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 10px; padding: 14px 16px; margin-bottom: 20px;">
-                <div style="font-size: 13px; font-weight: 700; color: #065f46; margin-bottom: 4px;">📅 Complete Flexibility at Your Fingertips</div>
-                <div style="font-size: 12px; color: #047857; line-height: 1.5;">
-                  Going out of station or need extra milk for guests? You can <strong>pause delivery</strong>, <strong>resume</strong>, or <strong>modify bottle quantities</strong> anytime with one click in your <a href="https://milvanta.in/profile.html?tab=subscription" style="color: #065f46; font-weight: 700;">Milvanta Profile Subscriptions Tab</a>.
-                </div>
-              </div>
-
-              <div style="font-size: 11px; color: #94a3b8; padding-top: 10px; border-top: 1px solid #f1f5f9;">
-                Reference Payment ID: <code>${escapeHtml(paymentId || 'N/A')}</code> · Dispatch Hub: Hafeezpet Cold-Chain Center, Hyderabad
-              </div>
-
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background: #f1f5f9; padding: 20px; text-align: center; color: #64748b; font-size: 12px; line-height: 1.5;">
-              Milvanta Artisanal Foods & Dairy · Hafeezpet Hub, Hyderabad, Telangana 500049<br/>
-              Need assistance? WhatsApp us at <a href="https://wa.me/919052222256" style="color: #0a3d66; font-weight: 700; text-decoration: none;">+91 9052222256</a> or email <a href="mailto:orders@milvanta.in" style="color: #0a3d66; text-decoration: none;">orders@milvanta.in</a>.
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderCustomerSubscriptionEmail({ subscription, customer, address, paymentId });
 }
 
 /**
  * Generate Admin Subscription Notification Email HTML
  */
 export function buildAdminSubscriptionEmail({ subscription, customer, address, paymentId }) {
-  const customerName = escapeHtml(customer?.name || customer?.full_name || address?.name || 'Customer');
-  const customerEmail = escapeHtml(customer?.email || address?.email || 'N/A');
-  const customerPhone = escapeHtml(customer?.phone || address?.phone || 'N/A');
-  const productName = escapeHtml(subscription?.productName || subscription?.product_name || subscription?.product || 'Fresh Milk');
-  const size = escapeHtml(subscription?.quantity || subscription?.size || '500 ml');
-  const frequency = escapeHtml(subscription?.frequency || 'Daily (Every Morning)');
-  const timeSlot = escapeHtml(subscription?.timeSlot || subscription?.time_slot || '6:00 AM – 7:00 AM');
-  const isCustom = (subscription?.planType || subscription?.plan_type) === 'custom' || String(subscription?.durationLabel || '').toLowerCase().includes('custom');
-  const isRefundableAuth = Boolean(
-    subscription?.authType === 'refundable_authorization' ||
-    subscription?.isRefundableAuth ||
-    (subscription?.notes && (subscription.notes.authType === 'refundable_authorization' || subscription.notes.isRefundableAuth))
-  );
-  const authAmountPaise = Number(subscription?.authAmountPaise || subscription?.notes?.authAmountPaise || 200);
-
-  const planTag = isRefundableAuth
-    ? 'E-Mandate Autopay Authorized & Registered'
-    : (isCustom ? 'Custom Days Plan' : 'Continuous Monthly Subscription');
-  const durationLabel = escapeHtml(subscription?.durationLabel || subscription?.duration_label || (isCustom ? `${subscription?.days || 7} Days Custom Plan` : 'Continuous Monthly'));
-  const dailyRate = subscription?.costPerDay || subscription?.dailyRate || Math.round((subscription?.cost_per_day_paise || 5500) / 100);
-  const totalAmount = subscription?.totalAmount || Math.round((subscription?.total_amount_paise || 0) / 100) || (dailyRate * (subscription?.days || 30));
-  const deliveryFee = Number(subscription?.deliveryFee || 50);
-  const totalPaid = subscription?.totalPaid || (totalAmount + deliveryFee);
-
-  const addressLines = [
-    address?.house,
-    address?.building,
-    address?.street,
-    address?.landmark ? `Landmark: ${address.landmark}` : null,
-    address?.city ? `${address.city} - ${address.pincode || ''}` : null
-  ].filter(Boolean).map(escapeHtml).join('<br/>');
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${isRefundableAuth ? 'ALERT: New Morning Milk Mandate Registered' : 'ALERT: New Morning Milk Subscription'}</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" style="max-width: 600px; background: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #cbd5e1;">
-          
-          <tr style="background: #0a3d66; color: #ffffff;">
-            <td style="padding: 20px 24px;">
-              <h2 style="margin: 0 0 4px; font-size: 20px; color: #ffffff;">${isRefundableAuth ? '🚨 ACTION REQUIRED: New Morning Milk Mandate Registered' : '🚨 ACTION REQUIRED: New Morning Milk Subscription'}</h2>
-              <div style="font-size: 13px; color: #93c5fd;">Add customer to tomorrow's early morning route sheet</div>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="padding: 20px 24px;">
-              <div style="display: inline-block; background: ${isRefundableAuth ? '#e0e7ff' : (isCustom ? '#dcfce7' : '#e0f2fe')}; color: ${isRefundableAuth ? '#3730a3' : (isCustom ? '#15803d' : '#0369a1')}; border-radius: 6px; padding: 3px 8px; font-size: 12px; font-weight: 700; margin-bottom: 12px;">
-                ${planTag}
-              </div>
-
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="6" style="font-size: 13px; margin-bottom: 16px;">
-                <tr>
-                  <td width="140" style="color: #64748b;">Customer</td>
-                  <td><strong>${customerName}</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Phone</td>
-                  <td><a href="tel:${customerPhone}" style="color: #0a3d66; font-weight: 700;">${customerPhone}</a></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Email</td>
-                  <td><a href="mailto:${customerEmail}" style="color: #0a3d66;">${customerEmail}</a></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Product</td>
-                  <td><strong>${productName} (${size})</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Schedule</td>
-                  <td><strong>${frequency} · ${timeSlot}</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Plan Duration</td>
-                  <td><strong>${durationLabel}</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Daily Rate</td>
-                  <td style="color: #059669; font-weight: 700;">₹${dailyRate}/day</td>
-                </tr>
-                ${isRefundableAuth ? `
-                <tr>
-                  <td style="color: #64748b;">Mandate Auth Amount</td>
-                  <td style="color: #4338ca; font-weight: 700;">${formatInr(authAmountPaise, true)} (Refundable Token Auth)</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Recurring Plan Charge</td>
-                  <td style="color: #0a3d66; font-weight: 800; font-size: 14px;">₹${totalAmount.toLocaleString('en-IN')} / month</td>
-                </tr>
-                ` : `
-                <tr>
-                  <td style="color: #64748b;">Deliveries Subtotal</td>
-                  <td><strong>₹${totalAmount.toLocaleString('en-IN')}</strong></td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Delivery Fee</td>
-                  <td style="color: #0284c7; font-weight: 700;">₹${deliveryFee}</td>
-                </tr>
-                <tr>
-                  <td style="color: #64748b;">Total Paid</td>
-                  <td style="color: #0a3d66; font-weight: 800; font-size: 15px;">₹${totalPaid.toLocaleString('en-IN')}</td>
-                </tr>
-                `}
-                <tr>
-                  <td style="color: #64748b;">Payment / Sub ID</td>
-                  <td><code>${escapeHtml(paymentId || 'N/A')}</code></td>
-                </tr>
-              </table>
-
-              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                <div style="font-size: 12px; font-weight: 700; color: #0f172a; text-transform: uppercase; margin-bottom: 4px;">📍 Delivery Route Drop Address</div>
-                <div style="font-size: 13px; color: #334155; line-height: 1.4;">${addressLines}</div>
-              </div>
-
-              <div style="font-size: 11px; color: #64748b;">
-                Hafeezpet Hub Logistics Notification · Recorded at ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST
-              </div>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderAdminSubscriptionEmail({ subscription, customer, address, paymentId });
 }
 
 /**
@@ -1722,10 +1155,12 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
             quantity: row.quantity,
             frequency: row.frequency,
             timeSlot: row.time_slot,
-            costPerDay: Math.round(row.cost_per_day_paise / 100),
+            costPerDay: row.cost_per_day_paise != null ? Number(row.cost_per_day_paise) / 100 : null,
+            cost_per_day_paise: row.cost_per_day_paise ?? null,
             planType: row.plan_type || 'month',
             durationLabel: row.duration_label || '',
-            totalAmount: Math.round((row.total_amount_paise || 0) / 100),
+            totalAmount: row.total_amount_paise != null ? Number(row.total_amount_paise) / 100 : null,
+            total_amount_paise: row.total_amount_paise ?? null,
             image: row.image_url,
             status: row.status,
             nextDelivery: row.next_delivery,
@@ -1889,13 +1324,21 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
       };
     } else if (recipientCustomerEmail && recipientCustomerEmail.includes('@')) {
       const custHtml = buildCustomerSubscriptionEmail({ subscription, customer, address, paymentId });
-      const custText = `Your Milvanta Milk Subscription is Confirmed!\n\nProduct: ${subscription.productName} (${subscription.quantity})\nSchedule: ${subscription.frequency} (${subscription.timeSlot})\nDuration: ${subscription.durationLabel}\nDaily Rate: ₹${subscription.costPerDay}/day\nNext Delivery: Tomorrow at 6:00 AM\n\nDelivering to:\n${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\n\nManage anytime from your Milvanta Profile.\nTeam Milvanta`;
+      const custText = [
+        'Your Milvanta subscription details',
+        'Product: ' + (subscription.productName || subscription.product_name || 'Fresh milk'),
+        'Plan: ' + (subscription.durationLabel || 'See your profile for plan terms'),
+        'Payment / mandate status: refer to your account and gateway records.',
+        'First delivery: Pending delivery scheduling.',
+        'Visit https://milvanta.in/profile.html?tab=subscription to manage your plan.',
+        'Team Milvanta'
+      ].join('\n');
 
       const custSendRes = await sendEmail({
         to: recipientCustomerEmail,
         subject: isRefundableAuth
           ? `🥛 Subscription E-Mandate Registered: ${subscription.productName} - Milvanta Farm Fresh`
-          : `🥛 Subscription Confirmed: ${subscription.productName} - Milvanta Farm Fresh`,
+          : `Milvanta subscription details: ${subscription.productName || 'Fresh milk'}`,
         html: custHtml,
         text: custText,
         from: sender
@@ -1951,13 +1394,19 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
       };
     } else if (adminEmail && adminEmail.includes('@')) {
       const admHtml = buildAdminSubscriptionEmail({ subscription, customer, address, paymentId });
-      const admText = `ALERT: New Morning Milk Subscription!\nCustomer: ${customer.name || address.name} (${customer.phone || address.phone}, ${customer.email || address.email})\nProduct: ${subscription.productName} (${subscription.quantity})\nPlan: ${subscription.planType === 'custom' ? 'Custom Days' : 'Continuous Monthly'} (${subscription.durationLabel})\nDaily Rate: ₹${subscription.costPerDay}/day\nAddress: ${address.house || ''}, ${address.street || ''}, ${address.city || ''} - ${address.pincode || ''}\nRazorpay Payment ID: ${paymentId}`;
+      const admText = [
+        'Milvanta subscription requires operations review',
+        'Customer: ' + (customer?.name || address?.name || 'Customer'),
+        'Product: ' + (subscription.productName || subscription.product_name || 'Fresh milk'),
+        'Payment reference: ' + (paymentId || 'Not provided'),
+        'Verify captured payment, entitlement and scheduling before dispatch.'
+      ].join('\n');
 
       const admSendRes = await sendEmail({
         to: adminEmail,
         subject: isRefundableAuth
           ? `🚨 New Morning Milk Mandate Registered! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`
-          : `🚨 New Morning Milk Subscription! - ${subscription.productName} (${customer.name || address.name || 'Customer'})`,
+          : `Milvanta operations: subscription review - ${subscription.productName || 'Fresh milk'}`,
         html: admHtml,
         text: admText,
         from: sender
@@ -2071,71 +1520,7 @@ export async function sendSubscriptionConfirmationEmails(pool, subData, options 
  * Build branded HTML email for Password Reset OTP
  */
 export function buildPasswordResetEmail({ customerName, otp }) {
-  const safeName = escapeHtml(customerName || 'Valued Customer');
-  const safeOtp = escapeHtml(otp);
-
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Password Reset OTP - Milvanta</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b; -webkit-font-smoothing: antialiased;">
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color: #f8fafc; padding: 32px 16px;">
-    <tr>
-      <td align="center">
-        <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="max-width: 540px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;">
-          <!-- Brand Header -->
-          <tr>
-            <td style="background-color: #0a3d66; padding: 32px 28px; text-align: center;">
-              <span style="font-size: 13px; font-weight: 700; letter-spacing: 3px; color: #93c5fd; text-transform: uppercase; display: block; margin-bottom: 6px;">MILVANTA FARM DIRECT</span>
-              <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px;">Account Security</h1>
-            </td>
-          </tr>
-
-          <!-- Main Body -->
-          <tr>
-            <td style="padding: 32px 28px;">
-              <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0a3d66;">Hello ${safeName},</p>
-              <p style="margin: 0 0 20px; font-size: 15px; color: #475569; line-height: 1.6;">
-                We received a request to reset the password for your Milvanta account. Please use the 6-digit One-Time Password (OTP) below to verify your identity and set a new password:
-              </p>
-
-              <!-- OTP Highlight Box -->
-              <div style="background-color: #f0f7ff; border: 2px dashed #0284c7; border-radius: 12px; padding: 22px 20px; text-align: center; margin: 26px 0;">
-                <span style="font-size: 12px; font-weight: 700; color: #0369a1; text-transform: uppercase; letter-spacing: 1.5px; display: block; margin-bottom: 8px;">Your One-Time Password (OTP)</span>
-                <span style="font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 38px; font-weight: 800; letter-spacing: 10px; color: #0a3d66; display: inline-block;">${safeOtp}</span>
-              </div>
-
-              <!-- Expiry & Security Notice -->
-              <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 10px; padding: 14px 16px; margin-bottom: 24px;">
-                <p style="margin: 0; font-size: 13px; color: #92400e; line-height: 1.5;">
-                  <strong>⏱️ Valid for 10 minutes:</strong> This code can only be used once. For your protection, never share this code with anyone.
-                </p>
-              </div>
-
-              <p style="margin: 0; font-size: 13px; color: #64748b; line-height: 1.5;">
-                If you did not request a password reset, you can safely ignore this email. Your existing password remains secure and will not be changed.
-              </p>
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="background-color: #f8fafc; padding: 24px 28px; border-top: 1px solid #e2e8f0; text-align: center;">
-              <p style="margin: 0 0 6px; font-size: 13px; font-weight: 600; color: #0a3d66;">Milvanta Customer Care</p>
-              <p style="margin: 0; font-size: 12px; color: #94a3b8;">Fresh Farm-Direct Dairy & Artisanal Essentials · Hyderabad</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderPasswordResetEmail({ customerName, otp });
 }
 
 /**
@@ -2160,50 +1545,7 @@ export async function sendPasswordResetEmail({ to, customerName, otp }) {
  * Generate Customer Welcome Email HTML
  */
 export function buildWelcomeEmail({ customerName }) {
-  const name = escapeHtml(customerName || 'Valued Customer');
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Welcome to Milvanta</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="padding: 24px 12px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" style="max-width: 520px; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 16px rgba(15,23,42,0.06);">
-          <tr style="background: linear-gradient(135deg, #0a3d66 0%, #065f46 100%); color: #ffffff; text-align: center;">
-            <td style="padding: 28px 24px;">
-              <h1 style="margin: 0 0 6px; font-size: 24px; font-weight: 800;">🥛 Welcome to Milvanta</h1>
-              <p style="margin: 0; font-size: 14px; color: #d1fae5;">Pure Fresh Farm Milk & Artisanal Goodness</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding: 28px 24px; color: #0f172a;">
-              <h2 style="margin: 0 0 12px; font-size: 18px;">Hello ${name},</h2>
-              <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #475569;">
-                Thank you for joining Milvanta! Your account has been created successfully.
-              </p>
-              <p style="margin: 0 0 20px; font-size: 14px; line-height: 1.6; color: #475569;">
-                You can now log in anytime to order fresh morning milk, homemade pickles, and artisanal dairy delivered directly to your doorstep across Hyderabad between <strong>6:00 AM – 7:00 AM</strong>.
-              </p>
-              <div style="text-align: center; margin: 24px 0;">
-                <a href="https://milvanta.in" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 14px; display: inline-block;">Start Exploring</a>
-              </div>
-              <p style="margin: 0; font-size: 13px; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 16px;">
-                Connecting Farms to Families<br>
-                <strong>Team Milvanta · Hafeezpet Hub, Hyderabad</strong>
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-  `.trim();
+  return renderWelcomeEmail({ customerName });
 }
 
 /**
@@ -2212,7 +1554,7 @@ export function buildWelcomeEmail({ customerName }) {
 export async function sendWelcomeEmail({ to, customerName }) {
   const subject = 'Welcome to Milvanta — Pure Fresh Milk & Dairy';
   const html = buildWelcomeEmail({ customerName });
-  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in and order fresh morning milk, homemade pickles, and artisanal dairy delivered between 6:00 AM – 7:00 AM across Hyderabad.\n\nConnecting Farms to Families\nTeam Milvanta`;
+  const text = `Hi ${customerName || 'Valued Customer'},\n\nWelcome to Milvanta! Your account has been created successfully.\n\nYou can now log in, browse our products and manage orders. Delivery timing and availability will be shown during checkout or in your subscription calendar.\n\nConnecting Farms to Families\nTeam Milvanta`;
   const sender = (process.env.RESEND_FROM_EMAIL || process.env.SMTP_FROM || 'Milvanta <orders@milvanta.in>').trim().replace(/^["']|["']$/g, '');
   return sendEmail({
     to,

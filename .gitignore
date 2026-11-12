@@ -6,3 +6,6 @@ Thumbs.db
 .vscode/
 frontend/screenshot.png
 assets/
+
+# Generated synthetic HTML email previews (local only)
+email-previews/

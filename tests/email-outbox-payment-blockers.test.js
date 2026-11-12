@@ -23,8 +23,40 @@ process.env.RAZORPAY_KEY_ID = 'rzp_test_email_blocker_audit';
 process.env.RAZORPAY_KEY_SECRET = 'test_razorpay_secret_key_audit_32_chars';
 process.env.RAZORPAY_WEBHOOK_SECRET = 'test_razorpay_webhook_secret_key_outbox';
 process.env.WHATSAPP_ENABLED = 'false';
-process.env.ADMIN_EMAIL = 'projects@milvanta.in';
+process.env.ADMIN_EMAIL = 'admin@milvanta.test';
 process.env.SMTP_WEBHOOK_TOKEN = 'test_smtp_webhook_token_blockers';
+process.env.RESEND_API_KEY = 're_test_mock_key';
+// Enforce zero real emails, even when running with a local .env file.
+process.env.SMTP_HOST = '';
+process.env.SMTP_USER = '';
+process.env.SMTP_PASS = '';
+
+const originalFetchForIsolatedSuite = globalThis.fetch;
+let simulatedResendRequests = 0;
+globalThis.fetch = async (input, options = {}) => {
+  const url = typeof input === 'string' ? input : input?.url;
+  if (url !== 'https://api.resend.com/emails') {
+    throw new Error('External fetch blocked by isolated email integration tests');
+  }
+  assert.equal(options.method, 'POST');
+  assert.equal(options.headers?.Authorization, 'Bearer re_test_mock_key');
+  const message = JSON.parse(options.body);
+  assert.ok(Array.isArray(message.to));
+  assert.ok(message.to.every(email => typeof email === 'string' &&
+    email.includes('@') && email.endsWith('.test')),
+    'Test email recipients must use the non-deliverable .test domain');
+  simulatedResendRequests++;
+  return {
+    ok: false,
+    status: 401,
+    statusText: 'Unauthorized (LOCAL MOCK)',
+    json: async () => ({
+      message: 'Simulated 401 from local test mock; no network request',
+      name: 'validation_error',
+      statusCode: 401
+    })
+  };
+};
 
 assertTestDatabaseConfigured();
 
@@ -46,7 +78,7 @@ describe('RELEASE BLOCKERS: TRANSACTIONAL EMAIL OUTBOX & PAYMENT INTEGRITY', () 
   const testPassword = 'Password123!Secure';
   const customerEmailA = 'customer.a@milvanta.test';
   const customerEmailB = 'customer.b@milvanta.test';
-  const adminEmail = 'projects@milvanta.in';
+  const adminEmail = 'admin@milvanta.test';
 
   const validAddress = {
     name: 'Customer A',
@@ -134,9 +166,24 @@ describe('RELEASE BLOCKERS: TRANSACTIONAL EMAIL OUTBOX & PAYMENT INTEGRITY', () 
   });
 
   after(async () => {
+    globalThis.fetch = originalFetchForIsolatedSuite;
     if (setup && setup.cleanup) {
       await setup.cleanup();
     }
+  });
+
+  it('0. Invalid Resend credential is simulated locally without network access', async () => {
+    const initial = simulatedResendRequests;
+    const response = await emailModule.sendEmail({
+      to: 'probe@milvanta.test',
+      subject: 'Mock-only authorization failure',
+      html: '<p>Not sent</p>',
+      text: 'Not sent'
+    });
+    assert.equal(response.success, false);
+    assert.equal(response.status, 401);
+    assert.equal(response.provider, 'resend');
+    assert.equal(simulatedResendRequests, initial + 1);
   });
 
   // Helper to install mock for sendEmail

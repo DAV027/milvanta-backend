@@ -3,13 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { classifySubscriptionGatewayError } from '../src/razorpaySubscriptionErrors.js';
+import { renderCustomerOrderEmail } from '../src/emailTemplateRenderers.js';
 
 const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 function emailHelpers() {
   const start = email.indexOf('export function publicEmailImageUrl(');
-  const end = email.indexOf('/**\n * Format currency helper', start);
+  // Anchor the helper range to the next exported renderer wrapper rather than
+  // a mutable comment heading, so currency validation changes remain testable.
+  const end = email.indexOf('/**\n * Generate Customer Order Confirmation Email HTML', start);
   assert.ok(start >= 0 && end > start, 'email helpers must be present');
   const script = email.slice(start, end).replaceAll('export function', 'function') +
     '\n;globalThis.helpers = { publicEmailImageUrl, validOrderReceiptFinancials };';
@@ -54,20 +57,8 @@ test('order products carry images from product catalog and emails use HTTPS URLs
 });
 
 test('customer confirmation renders ₹1,549 subtotal, ₹50 delivery and ₹1,599 paid', () => {
-  const start = email.indexOf('export function buildCustomerOrderEmail(');
-  const end = email.indexOf('/**\n * Generate Admin Order Notification Email HTML', start);
-  assert.ok(start >= 0 && end > start);
-  const { publicEmailImageUrl } = emailHelpers();
-  const context = vm.createContext({
-    publicEmailImageUrl,
-    escapeHtml: value => String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;'),
-    formatInr: (value, isPaise = false) => {
-      const number = isPaise ? Math.round(Number(value) / 100) : Number(value);
-      return '₹' + number.toLocaleString('en-IN');
-    }
-  });
-  vm.runInContext(email.slice(start, end).replace('export function', 'function') + '\n;globalThis.build = buildCustomerOrderEmail;', context);
-  const html = context.build({
+  // Exercise the real branded renderer, not a string-evaluated copy of its implementation.
+  const html = renderCustomerOrderEmail({
     order:validOrder,
     customer:{name:'Customer'},
     address:{name:'Customer',city:'Hyderabad',pincode:'500081'},
@@ -97,7 +88,7 @@ test('Razorpay 401 is diagnostic, actionable and never leaks provider response t
 
 test('actual outbox function enqueues correct customer and admin amounts; missing values fail closed', async () => {
   const helperStart = email.indexOf('export function publicEmailImageUrl(');
-  const helperEnd = email.indexOf('/**\n * Format currency helper', helperStart);
+  const helperEnd = email.indexOf('/**\n * Generate Customer Order Confirmation Email HTML', helperStart);
   const outboxStart = email.indexOf('export async function enqueueOrderPaidOutbox(');
   const outboxEnd = email.indexOf('/**\n * Enqueue transactional email outbox records for a confirmed milk subscription', outboxStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart && outboxStart >= 0 && outboxEnd > outboxStart);
