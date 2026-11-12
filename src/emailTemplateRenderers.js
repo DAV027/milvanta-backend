@@ -24,7 +24,8 @@ function words(...values) {
     String(value).trim() !== '') ?? '';
 }
 function nonnegativeInteger(value) {
-  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'number' &&
+    (typeof value !== 'string' || !/^\d+$/.test(value))) return null;
   const number = Number(value);
   return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
@@ -49,6 +50,12 @@ function photoUrl(value) {
     return parsed.protocol === 'https:' && !parsed.username && !parsed.password
       ? parsed.href : '';
   } catch { return ''; }
+}
+function validIsoDay(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + 'T00:00:00.000Z');
+  return Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0,10) === value;
 }
 function fmtDate(value) {
   if (!value) return '';
@@ -146,7 +153,12 @@ function orderRows(items, isAdmin) {
     const totalExplicit = nonnegativeInteger(item?.lineTotalPaise);
     const computed = quantity !== null && unitPrice !== null &&
       Number.isSafeInteger(quantity * unitPrice) ? quantity * unitPrice : null;
-    const linePrice = inrPaise(totalExplicit ?? computed) || 'Not available';
+    // Source line totals can be historical snapshot values. If an independent
+    // unit-price × quantity check disagrees, don't present a misleading item
+    // amount as if the breakdown were reconciled.
+    const lineAmount = totalExplicit !== null && computed !== null &&
+      totalExplicit !== computed ? null : (totalExplicit ?? computed);
+    const linePrice = inrPaise(lineAmount) || 'Amount requires review';
     const image = photoUrl(words(item?.imageUrl,item?.image,''));
     const label = name + (size ? '<div style="font-size:12px;color:' + BRAND.muted + ';">' + size + '</div>' : '');
     return '<tr><td style="padding:13px 4px;border-bottom:1px solid:' + BRAND.line + ';">' +
@@ -241,8 +253,7 @@ function subscriptionDetails({subscription={},customer={},address={},paymentId='
   // The first eligible date, if known, is not equivalent to a booked delivery.
   const eligible = words(subscription.firstEligibleDeliveryDate,
     subscription.notes?.firstEligibleDeliveryDate,'');
-  const safeEligible = typeof eligible === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(eligible)
-    ? eligible : '';
+  const safeEligible = validIsoDay(eligible) ? eligible : '';
   const status = isMandate ? 'Mandate registration; plan charge not confirmed' :
     'Subscription recorded; check payment and delivery eligibility in your profile';
   const rows = [
