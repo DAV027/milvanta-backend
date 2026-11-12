@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { classifySubscriptionGatewayError } from '../src/razorpaySubscriptionErrors.js';
-import { buildCustomerOrderEmail } from '../src/email.js';
+import { renderCustomerOrderEmail } from '../src/emailTemplateRenderers.js';
 
 const server = fs.readFileSync(new URL('../src/server.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const email = fs.readFileSync(new URL('../src/email.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -56,7 +56,7 @@ test('order products carry images from product catalog and emails use HTTPS URLs
 
 test('customer confirmation renders ₹1,549 subtotal, ₹50 delivery and ₹1,599 paid', () => {
   // Exercise the real branded renderer, not a string-evaluated copy of its implementation.
-  const html = buildCustomerOrderEmail({
+  const html = renderCustomerOrderEmail({
     order:validOrder,
     customer:{name:'Customer'},
     address:{name:'Customer',city:'Hyderabad',pincode:'500081'},
