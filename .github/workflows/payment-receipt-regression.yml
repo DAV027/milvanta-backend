@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'src/email.js'
+      - 'src/emailTemplateRenderers.js'
+      - 'tests/branded-email-templates.test.js'
+      - 'scripts/preview-email-templates.mjs'
       - 'src/server.js'
       - 'src/services/deliveryEngine.js'
       - 'src/services/deliveryCronPolicy.js'
@@ -45,6 +48,9 @@ jobs:
       - name: Check JavaScript syntax
         run: |
           node --check src/email.js
+          node --check src/emailTemplateRenderers.js
+          node --check scripts/preview-email-templates.mjs
+          node --check tests/branded-email-templates.test.js
           node --check src/server.js
           node --check src/services/deliveryEngine.js
           node --check src/services/deliveryCronPolicy.js
@@ -63,7 +69,7 @@ jobs:
           node --check tests/delivery-cron-cloudflare-worker.test.js
           node --check tests/razorpay-webhook-contract-audit.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
+        run: node --test tests/branded-email-templates.test.js tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest
