@@ -1,5 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {
   renderCustomerOrderEmail as buildCustomerOrderEmail,
   renderAdminOrderEmail as buildAdminOrderEmail,
@@ -126,4 +131,52 @@ test('welcome and reset templates provide clear accessible calls to action',()=>
   assert.match(reset,/123456/);
   assert.match(reset,/10 minutes/);
   assert.match(reset,/Account security/);
+});
+
+
+test('synthetic preview generator creates all six email files and never sends messages',()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'milvanta-email-preview-'));
+  try {
+    const script=fileURLToPath(new URL('../scripts/preview-email-templates.mjs',import.meta.url));
+    const run=spawnSync(process.execPath,[script],{cwd:temp,encoding:'utf8',
+      timeout:15000,env:{PATH:process.env.PATH || '',HOME:temp}});
+    assert.equal(run.status,0,run.stderr || run.stdout);
+    const directory=path.join(temp,'email-previews');
+    const files=fs.readdirSync(directory).sort();
+    assert.deepEqual(files,[
+      'admin-order.html','admin-subscription.html','customer-order.html',
+      'customer-subscription.html','index.html','password-reset.html','welcome.html'
+    ]);
+    const gallery=fs.readFileSync(path.join(directory,'index.html'),'utf8');
+    assert.match(gallery,/Local synthetic previews only/);
+    for(const name of files.filter(file=>file!=='index.html')){
+      const html=fs.readFileSync(path.join(directory,name),'utf8');
+      assert.match(html,/<!doctype html>/i);
+      assert.match(html,/MILVANTA/);
+      assert.doesNotMatch(html,/<script\b|undefined|NaN|Infinity/);
+    }
+    const subscription=fs.readFileSync(path.join(directory,'customer-subscription.html'),'utf8');
+    assert.match(subscription,/Pending delivery scheduling/);
+    assert.doesNotMatch(subscription,/Tomorrow, 6:00 AM/);
+  } finally {
+    fs.rmSync(temp,{recursive:true,force:true});
+  }
+});
+
+test('prices preserve paise precision and never invent an amount for incomplete source rows',()=>{
+  const receipt=buildCustomerOrderEmail({
+    order:{order_number:'MV-PAISE',payment_status:'paid',order_status:'confirmed',
+      subtotal_paise:10575,delivery_charge_paise:0,total_paise:10575},
+    customer,address,items:[{name:'Milk',quantity:1,unitPricePaise:10575,lineTotalPaise:10575}]
+  });
+  assert.match(receipt,/₹105\.75/);
+  assert.match(receipt,/FREE/);
+  assert.doesNotMatch(receipt,/₹106\b/);
+
+  const missing=buildCustomerSubscriptionEmail({
+    subscription:{productName:'Milk',costPerDay:null,totalAmount:null},
+    customer,address
+  });
+  assert.doesNotMatch(missing,/Reference daily rate[\s\S]{0,130}₹0\b/);
+  assert.doesNotMatch(missing,/Plan amount[\s\S]{0,130}₹0\b/);
 });
