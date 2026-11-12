@@ -6,6 +6,7 @@ on:
       - 'src/email.js'
       - 'src/emailTemplateRenderers.js'
       - 'tests/branded-email-templates.test.js'
+      - 'tests/email-receipt-amount-validation.test.js'
       - 'scripts/preview-email-templates.mjs'
       - 'src/server.js'
       - 'src/services/deliveryEngine.js'
@@ -51,6 +52,7 @@ jobs:
           node --check src/emailTemplateRenderers.js
           node --check scripts/preview-email-templates.mjs
           node --check tests/branded-email-templates.test.js
+          node --check tests/email-receipt-amount-validation.test.js
           node --check src/server.js
           node --check src/services/deliveryEngine.js
           node --check src/services/deliveryCronPolicy.js
@@ -217,5 +219,6 @@ jobs:
         run: |
           node --test --test-concurrency=1 \
             tests/branded-email-templates.test.js \
+            tests/email-receipt-amount-validation.test.js \
             tests/email-outbox-payment-blockers.test.js \
             tests/complete-e2e-email-otp-payments.test.js
