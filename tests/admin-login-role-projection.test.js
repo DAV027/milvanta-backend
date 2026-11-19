@@ -19,14 +19,17 @@ after(async () => {
   await cleanupDisposableTestSchema(fixture.pool, fixture.schemaName);
 });
 
+let seededPhoneSuffix = 100;
 async function seedCustomer(email, isAdmin) {
+  // A distinct synthetic number is required for each fixture; customers.phone is UNIQUE.
+  const fakePhone = '98765' + String(++seededPhoneSuffix).padStart(5, '0');
   const password = 'TestPassword#8354';
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = (await scrypt(password, Buffer.from(salt, 'hex'), 64)).toString('hex');
   const { rows: [customer] } = await fixture.pool.query(
     'INSERT INTO customers (full_name, phone, email, password_salt, password_hash, is_admin) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, is_admin',
     [isAdmin ? 'Admin Login Fixture' : 'Customer Login Fixture',
-      isAdmin ? '9876500011' : '9876500012', email, salt, hash, isAdmin]
+      fakePhone, email, salt, hash, isAdmin]
   );
   return { customer, password };
 }
