@@ -477,7 +477,7 @@ function setAuthToken(token) {
 // App State
 const state = {
   selectedCategory: 'Fresh Milk',
-  viewMode: 'carousel',
+  viewMode: 'grid',
   dietaryFilter: 'all',
   sortBy: 'featured',
   searchTerm: '',
@@ -1108,6 +1108,22 @@ async function loadCatalog() {
       };
     });
 
+    // Check live daily milk capacity to reflect accurate stock / sold-out states
+    try {
+      const capRes = await apiRequest('/api/v1/milk-capacity/available');
+      if (capRes && capRes.success) {
+        liveProducts.forEach((p) => {
+          const type = (p.name || '').toLowerCase().includes('buffalo') ? 'buffalo' : 'cow';
+          const cap = capRes[type];
+          if (cap) {
+            p.isAvailable = Boolean(cap.isAvailable);
+            p.remainingLitres = Number(cap.remainingLitres) || 0;
+            p.isConfirmed = Boolean(cap.isConfirmed);
+          }
+        });
+      }
+    } catch {}
+
     // Never restore products absent from the live catalog or deactivated by admin.
     state.catalogConnected = true;
     products = liveProducts;
@@ -1127,6 +1143,20 @@ async function loadCatalog() {
   } catch (error) {
     state.catalogConnected = false;
     console.warn('Backend catalog offline; using rich local artisanal catalog:', error.message);
+    try {
+      const capRes = await apiRequest('/api/v1/milk-capacity/available');
+      if (capRes && capRes.success) {
+        products.forEach((p) => {
+          const type = (p.name || '').toLowerCase().includes('buffalo') ? 'buffalo' : 'cow';
+          const cap = capRes[type];
+          if (cap) {
+            p.isAvailable = Boolean(cap.isAvailable);
+            p.remainingLitres = Number(cap.remainingLitres) || 0;
+            p.isConfirmed = Boolean(cap.isConfirmed);
+          }
+        });
+      }
+    } catch {}
     renderCategories();
     renderCatalog();
     renderCart();
@@ -1643,8 +1673,13 @@ function renderCatalog() {
     `).join('');
 
     const isMilkProduct = p.category === 'Fresh Milk' || (p.name && p.name.toLowerCase().includes('milk'));
-    const displayBadge = isMilkProduct ? 'Subscription Available' : p.badge;
-    const badgeClass = isMilkProduct ? 'product-card-badge sub-badge' : 'product-card-badge';
+    const isOutOfStock = p.isAvailable === false || (p.remainingLitres !== undefined && p.remainingLitres <= 0);
+    const displayBadge = isOutOfStock
+      ? 'Sold Out for Tomorrow'
+      : (isMilkProduct ? 'Subscription Available' : p.badge);
+    const badgeClass = isOutOfStock
+      ? 'product-card-badge is-out-of-stock'
+      : (isMilkProduct ? 'product-card-badge sub-badge' : 'product-card-badge');
 
     card.innerHTML = `
       <div class="product-image">
@@ -1659,17 +1694,23 @@ function renderCatalog() {
             <span class="card-price-val">${pricePrefix}₹${Number(p.price).toFixed(0)}</span>
             ${unitLabel}
           </div>
+          ${isOutOfStock ? '' : `
           <button type="button" class="card-round-cart-btn" data-card-cart="${p.id}" aria-label="Add ${escapeHtml(p.name)} to cart" title="Add to cart">
             <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
           </button>
+          `}
         </div>
         <div class="card-feature-pills">
           ${featuresHtml}
         </div>
         ${isMilkProduct ? `
         <div class="card-milk-choices" style="display: flex; gap: 8px; margin-top: 12px;">
-          <button type="button" class="btn-milk-choice btn-milk-buy-once" data-milk-action="onetime" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #0a3d66; background: #ffffff; color: #0a3d66; cursor: pointer; transition: all 0.2s ease;">Buy Once</button>
-          <button type="button" class="btn-milk-choice btn-milk-sub" data-milk-action="subscription" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: none; background: #0a3d66; color: #ffffff; cursor: pointer; transition: all 0.2s ease;">Daily Subscription</button>
+          ${isOutOfStock ? `
+            <button type="button" disabled style="flex: 1; padding: 9px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #cbd5e1; background: #f1f5f9; color: #94a3b8; cursor: not-allowed;">Capacity Full / Unavailable</button>
+          ` : `
+            <button type="button" class="btn-milk-choice btn-milk-buy-once" data-milk-action="onetime" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #0a3d66; background: #ffffff; color: #0a3d66; cursor: pointer; transition: all 0.2s ease;">Buy Once</button>
+            <button type="button" class="btn-milk-choice btn-milk-sub" data-milk-action="subscription" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: none; background: #0a3d66; color: #ffffff; cursor: pointer; transition: all 0.2s ease;">Daily Subscription</button>
+          `}
         </div>
         ` : ''}
       </div>

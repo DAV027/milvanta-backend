@@ -48,7 +48,7 @@
           <div class="header-search-container">
             <label class="search-box" aria-label="Search products">
               <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input id="searchInput" type="search" placeholder="Search fresh milk, ghee, pickles, brownies..." autocomplete="off" />
+              <input id="searchInput" type="search" placeholder="Search pure fresh cow or buffalo milk..." autocomplete="off" />
               <button id="clearSearch" class="clear-search" type="button" aria-label="Clear search">×</button>
             </label>
           </div>
@@ -122,54 +122,21 @@
       <main id="home">
         <p class="store-notice hidden" id="storeNotice" role="status" aria-live="polite"></p>
 
-        <!-- Category Showcase Strip -->
-        <section class="category-strip" aria-label="Product categories">
-          <div class="category-heading">
-            <div>
-              <p class="eyebrow">HANDPICKED COLLECTIONS</p>
-              <h2>Shop by category</h2>
-            </div>
-          </div>
-          <div id="categoryRow" class="category-row">
-            <!-- Dynamically populated or enhanced via JS -->
-          </div>
-        </section>
-
-        <!-- Main Product Catalog Section -->
+        <!-- Main Product Catalog Section: Pure Fresh Milk (Cow & Buffalo) -->
         <section class="featured-section" id="products">
           <div class="section-header">
             <div>
-              <p class="eyebrow" id="sectionEyebrow">OUR PRODUCTS</p>
+              <p class="eyebrow" id="sectionEyebrow">FARM FRESH DAILY</p>
               <h2 id="sectionTitle">Pure Fresh Milk</h2>
               <p class="section-subtitle" id="sectionSubtitle">100% pure whole milk chilled under 4°C and delivered fresh every morning before 7:00 AM.</p>
             </div>
-
-            <!-- E-Commerce Filter & Sort Controls -->
-            <div class="catalog-controls">
-              <button class="diet-filter-btn active" type="button" data-diet="all">All</button>
-              <button class="diet-filter-btn" type="button" data-diet="veg">🟢 Veg Only</button>
-              <button class="diet-filter-btn" type="button" data-diet="non-veg">🔴 Non-Veg</button>
-              <select class="sort-select" id="sortSelect" aria-label="Sort products">
-                <option value="featured">Featured</option>
-                <option value="price-asc">Price: Low to High</option>
-                <option value="price-desc">Price: High to Low</option>
-              </select>
-              <button class="view-all" id="viewAllBtn" type="button">View All <span aria-hidden="true">→</span></button>
-            </div>
           </div>
 
-          <div class="product-carousel-wrapper" id="carouselWrapper">
-            <button class="arrow-button prev" id="prevBtn" type="button" aria-label="Previous product">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
-            </button>
-            <div id="productCarousel" class="product-carousel" aria-live="polite">
-              <!-- Dynamically populated by script.js -->
+          <div class="product-grid-wrapper" id="carouselWrapper">
+            <div id="productCarousel" class="milk-products-grid" aria-live="polite">
+              <!-- Dynamically populated by script.js with Cow Milk & Buffalo Milk -->
             </div>
-            <button class="arrow-button next" id="nextBtn" type="button" aria-label="Next product">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
-            </button>
           </div>
-          <div class="carousel-dots" id="carouselDots" aria-label="Choose featured product"></div>
         </section>
 
         <!-- Hero Section (Positioned between Featured Products and Why Milvanta) -->

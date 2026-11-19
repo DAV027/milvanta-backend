@@ -8,7 +8,7 @@
 
 import { parseMilkVolumeInLitres } from '../server.js';
 import { parseLitresFromSize } from '../pricing.js';
-import { previewDailyDeliveries, getTomorrowDeliveryDateYMD } from './deliveryEngine.js';
+import { getTomorrowDeliveryDateYMD } from './deliveryEngine.js';
 
 /**
  * Determine milk type from product name or metadata
@@ -24,6 +24,38 @@ export function identifyMilkType(productOrName) {
   if (name.includes('buffalo')) return 'buffalo';
   if (name.includes('cow') || name.includes('fresh milk') || name.includes('milk')) return 'cow';
   return null;
+}
+
+/**
+ * Calculate total milk litres for an order line or cart item
+ * @param {object} item 
+ * @returns {{ isMilk: boolean, milkType: 'cow'|'buffalo'|null, litres: number }}
+ */
+export function extractSubscriptionDailyLitres(quantityStr, quantityNum) {
+  const num = Number(quantityNum);
+  const fromSize = parseLitresFromSize(String(quantityStr || ''));
+
+  if (num > 0) {
+    if (fromSize > 0 && Math.abs(num - fromSize) < 0.001) {
+      return fromSize;
+    }
+    if (num === 1 && fromSize > 0) {
+      return fromSize;
+    }
+    if (fromSize <= 0) {
+      return num;
+    }
+    // If num is an integer multiplier of fromSize (e.g. 2 x 1 Litre)
+    if (fromSize > 0 && num > 1 && Math.abs(fromSize - 1.0) < 0.001) {
+      return num;
+    }
+  }
+
+  if (fromSize > 0) {
+    return fromSize;
+  }
+
+  return parseMilkVolumeInLitres(String(quantityStr || ''), 1);
 }
 
 /**
@@ -71,15 +103,24 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
     ? String(targetDate).trim()
     : getTomorrowDeliveryDateYMD();
 
-  // 1. Fetch default capacity
+  // 1. Fetch default capacity and confirmation flags
   const defaultsRes = await poolOrClient.query(
-    'SELECT milk_type, daily_litres FROM milk_capacity_defaults'
+    'SELECT milk_type, daily_litres, is_confirmed FROM milk_capacity_defaults'
   );
   let cowDefault = 100.0;
   let buffaloDefault = 80.0;
+  let cowDefaultConfirmed = false;
+  let buffaloDefaultConfirmed = false;
+
   for (const row of defaultsRes.rows) {
-    if (row.milk_type === 'cow') cowDefault = Number(row.daily_litres);
-    if (row.milk_type === 'buffalo') buffaloDefault = Number(row.daily_litres);
+    if (row.milk_type === 'cow') {
+      cowDefault = Number(row.daily_litres);
+      cowDefaultConfirmed = Boolean(row.is_confirmed);
+    }
+    if (row.milk_type === 'buffalo') {
+      buffaloDefault = Number(row.daily_litres);
+      buffaloDefaultConfirmed = Boolean(row.is_confirmed);
+    }
   }
 
   // 2. Fetch date-specific overrides
@@ -107,39 +148,134 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
     }
   }
 
+  // An explicit date override by the owner verifies capacity for that date
+  const cowIsConfirmed = cowHasOverride || cowDefaultConfirmed;
+  const buffaloIsConfirmed = buffaloHasOverride || buffaloDefaultConfirmed;
+
   // 3. Calculate committed subscription litres
+  // DEDUPLICATION: Avoid double counting when both generated delivery orders AND active subscriptions exist.
   let cowSubLitres = 0;
   let buffaloSubLitres = 0;
   let totalSubDrops = 0;
 
+  // A. First count already generated delivery orders for target date
   const pregenOrders = await poolOrClient.query(
-    `SELECT product_name, quantity, quantity_num
+    `SELECT subscription_id, product_name, quantity, quantity_num
      FROM subscription_delivery_orders
      WHERE delivery_date = $1 AND status NOT IN ('cancelled', 'failed')`,
     [dateStr]
   );
 
-  if (pregenOrders.rows.length > 0) {
-    totalSubDrops = pregenOrders.rows.length;
-    for (const ord of pregenOrders.rows) {
-      const parsed = parseMilkVolumeInLitres(ord.quantity, Number(ord.quantity_num) || 1, { returnObject: true });
-      const vol = parsed.litres;
-      const type = identifyMilkType(ord.product_name) || 'cow';
-      if (type === 'buffalo') {
-        buffaloSubLitres += vol;
-      } else {
-        cowSubLitres += vol;
-      }
+  const generatedSubIds = new Set();
+  for (const ord of pregenOrders.rows) {
+    if (ord.subscription_id) {
+      generatedSubIds.add(String(ord.subscription_id));
     }
-  } else {
-    // Subscriptions not pre-generated into subscription_delivery_orders yet;
-    // calculate from eligible active subscriptions using preview engine
-    const preview = await previewDailyDeliveries(poolOrClient, dateStr);
-    totalSubDrops = preview.eligibleCount || 0;
-    for (const sub of preview.eligibleSubscriptions || []) {
-      const parsed = parseMilkVolumeInLitres(sub.quantity, Number(sub.quantityNum) || 1, { returnObject: true });
-      const vol = parsed.litres;
-      const type = identifyMilkType(sub.productName) || 'cow';
+    totalSubDrops++;
+    const vol = extractSubscriptionDailyLitres(ord.quantity, ord.quantity_num);
+    const type = identifyMilkType(ord.product_name) || 'cow';
+    if (type === 'buffalo') {
+      buffaloSubLitres += vol;
+    } else {
+      cowSubLitres += vol;
+    }
+  }
+
+  // B. Next count active subscriptions eligible for targetDate that HAVE NOT been generated yet
+  const activeSubs = await poolOrClient.query(
+    `SELECT cs.id, cs.product_name, cs.quantity, cs.quantity_num, cs.notes, cs.created_at
+     FROM customer_subscriptions cs
+     WHERE cs.status = 'active'`
+  );
+
+  for (const sub of activeSubs.rows) {
+    // If a delivery order was already generated for this subscription on this date, skip (already counted above)
+    if (generatedSubIds.has(String(sub.id))) {
+      continue;
+    }
+
+    const subNotes = typeof sub.notes === 'string'
+      ? JSON.parse(sub.notes || '{}')
+      : (sub.notes || {});
+
+    // Determine start date
+    const subStartDate = subNotes.startDate || subNotes.start_date ||
+      (subNotes.start_at && Number.isFinite(Number(subNotes.start_at))
+        ? new Date(Number(subNotes.start_at) * 1000).toISOString().slice(0, 10)
+        : null) ||
+      (sub.created_at ? new Date(sub.created_at).toISOString().slice(0, 10) : null);
+
+    if (subStartDate && dateStr < subStartDate) {
+      continue;
+    }
+
+    // Determine end date / paid-through date
+    const paidThrough = subNotes.paidThroughDate || subNotes.current_period_end || subNotes.endDate;
+    if (paidThrough && dateStr > paidThrough) {
+      continue;
+    }
+
+    // Check pause periods
+    const { rows: pauses } = await poolOrClient.query(
+      `SELECT id FROM subscription_delivery_pauses
+       WHERE subscription_id = $1
+         AND pause_start_date <= $2
+         AND (pause_end_date IS NULL OR pause_end_date >= $2)
+         AND resumed_at IS NULL`,
+      [sub.id, dateStr]
+    );
+    if (pauses.length > 0) {
+      continue;
+    }
+
+    // Check skipped dates
+    const { rows: skips } = await poolOrClient.query(
+      `SELECT id FROM subscription_skipped_dates
+       WHERE subscription_id = $1 AND skip_date = $2`,
+      [sub.id, dateStr]
+    );
+    if (skips.length > 0) {
+      continue;
+    }
+
+    // Eligible ungenerated subscription delivery
+    totalSubDrops++;
+    const vol = extractSubscriptionDailyLitres(sub.quantity, sub.quantity_num);
+    const type = identifyMilkType(sub.product_name) || 'cow';
+    if (type === 'buffalo') {
+      buffaloSubLitres += vol;
+    } else {
+      cowSubLitres += vol;
+    }
+  }
+
+  // C. Count recent pending_authorization subscriptions holding capacity (15-minute checkout reservation window)
+  const pendingSubs = await poolOrClient.query(
+    `SELECT id, product_name, quantity, quantity_num, notes, created_at
+     FROM customer_subscriptions
+     WHERE status = 'pending_authorization'
+       AND created_at > (NOW() - INTERVAL '15 minutes')`
+  );
+
+  for (const pending of pendingSubs.rows) {
+    const notes = typeof pending.notes === 'string'
+      ? JSON.parse(pending.notes || '{}')
+      : (pending.notes || {});
+
+    const pStart = notes.startDate || (pending.created_at ? new Date(pending.created_at).toISOString().slice(0, 10) : dateStr);
+    const pDays = Number(notes.days) || (Number(notes.months) || 1) * 30;
+
+    // Check if targetDate falls within pending subscription window
+    const [sy, sm, sd] = pStart.split('-').map(Number);
+    const startDt = new Date(Date.UTC(sy, sm - 1, sd));
+    const endDt = new Date(Date.UTC(sy, sm - 1, sd + pDays - 1));
+    const startYMD = startDt.toISOString().slice(0, 10);
+    const endYMD = endDt.toISOString().slice(0, 10);
+
+    if (dateStr >= startYMD && dateStr <= endYMD) {
+      totalSubDrops++;
+      const vol = extractSubscriptionDailyLitres(pending.quantity, pending.quantity_num);
+      const type = identifyMilkType(pending.product_name) || 'cow';
       if (type === 'buffalo') {
         buffaloSubLitres += vol;
       } else {
@@ -192,6 +328,7 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
 
   return {
     date: dateStr,
+    isConfirmed: cowIsConfirmed && buffaloIsConfirmed,
     cow: {
       availableLitres: Number(cowAvailable.toFixed(2)),
       total: Number(cowAvailable.toFixed(2)),
@@ -203,6 +340,7 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
       committedSubscription: Number(cowSubLitres.toFixed(2)),
       remainingLitres: cowRemaining,
       remaining: cowRemaining,
+      isConfirmed: cowIsConfirmed,
       isOverCapacity: cowTotalCommitted > cowAvailable,
       hasOverride: cowHasOverride,
       source: cowHasOverride ? 'override' : 'default',
@@ -219,6 +357,7 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
       committedSubscription: Number(buffaloSubLitres.toFixed(2)),
       remainingLitres: buffaloRemaining,
       remaining: buffaloRemaining,
+      isConfirmed: buffaloIsConfirmed,
       isOverCapacity: buffaloTotalCommitted > buffaloAvailable,
       hasOverride: buffaloHasOverride,
       source: buffaloHasOverride ? 'override' : 'default',
@@ -230,6 +369,7 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
       oneTimeLitres: Number((cowOneTimeLitres + buffaloOneTimeLitres).toFixed(2)),
       totalCommittedLitres: Number((cowTotalCommitted + buffaloTotalCommitted).toFixed(2)),
       remainingLitres: Number((cowRemaining + buffaloRemaining).toFixed(2)),
+      isConfirmed: cowIsConfirmed && buffaloIsConfirmed,
       isOverCapacity: (cowTotalCommitted + buffaloTotalCommitted) > (cowAvailable + buffaloAvailable),
       totalDeliveries: totalSubDrops + totalOneTimeDrops,
       subscriptionDrops: totalSubDrops,
@@ -290,6 +430,27 @@ export async function reserveMilkCapacityForOrder(client, { deliveryDate, items 
   // Calculate current real capacity under lock
   const capacity = await getMilkCapacity(client, dateStr);
 
+  // Check unconfirmed supply state
+  if (cowLitresNeeded > 0 && !capacity.cow.isConfirmed) {
+    const err = new Error(
+      `Daily Cow Milk capacity for ${dateStr} has not been verified/confirmed by farm operations. Commitments are paused until verified.`
+    );
+    err.code = 'UNCONFIRMED_CAPACITY';
+    err.milkType = 'cow';
+    err.deliveryDate = dateStr;
+    throw err;
+  }
+
+  if (buffaloLitresNeeded > 0 && !capacity.buffalo.isConfirmed) {
+    const err = new Error(
+      `Daily Buffalo Milk capacity for ${dateStr} has not been verified/confirmed by farm operations. Commitments are paused until verified.`
+    );
+    err.code = 'UNCONFIRMED_CAPACITY';
+    err.milkType = 'buffalo';
+    err.deliveryDate = dateStr;
+    throw err;
+  }
+
   if (cowLitresNeeded > 0 && cowLitresNeeded > capacity.cow.remainingLitres) {
     const err = new Error(
       `Daily Cow Milk capacity exceeded for ${dateStr}. Available: ${capacity.cow.remainingLitres}L, requested: ${cowLitresNeeded}L.`
@@ -324,40 +485,69 @@ export async function reserveMilkCapacityForOrder(client, { deliveryDate, items 
 
 /**
  * Concurrency-safe capacity check for subscription creation or activation.
+ * Checks and commits subscription volume for EVERY eligible delivery date within the plan period.
  * 
  * @param {object} client - pg client inside an active BEGIN transaction
  * @param {object} options
  * @param {string} options.startDate - YYYY-MM-DD
- * @param {'cow'|'buffalo'} options.milkType
- * @param {number} options.litresPerDay
+ * @param {number} [options.durationDays=30] - Total consecutive delivery days in subscription plan
+ * @param {'cow'|'buffalo'} [options.milkType='cow']
+ * @param {number} [options.litresPerDay=1]
  */
-export async function checkSubscriptionCapacity(client, { startDate, milkType = 'cow', litresPerDay = 1 }) {
+export async function checkSubscriptionCapacity(client, { startDate, durationDays = 30, milkType = 'cow', litresPerDay = 1 }) {
   const dateStr = (startDate && /^\d{4}-\d{2}-\d{2}$/.test(String(startDate).trim()))
     ? String(startDate).trim()
     : getTomorrowDeliveryDateYMD();
 
   const type = milkType === 'buffalo' ? 'buffalo' : 'cow';
+  const duration = Math.max(1, Math.min(365, Number(durationDays) || 30));
 
-  // Acquire advisory lock
-  await client.query(
-    'SELECT pg_advisory_xact_lock(hashtext($1))',
-    [`milk_cap_${dateStr}_${type}`]
-  );
-
-  const capacity = await getMilkCapacity(client, dateStr);
-  const remaining = capacity[type].remainingLitres;
-
-  if (litresPerDay > remaining) {
-    const err = new Error(
-      `Daily ${type === 'buffalo' ? 'Buffalo' : 'Cow'} Milk subscription capacity reached for starting date ${dateStr}. Available: ${remaining}L, required: ${litresPerDay}L/day.`
-    );
-    err.code = 'INSUFFICIENT_CAPACITY';
-    err.milkType = type;
-    err.requested = litresPerDay;
-    err.remaining = remaining;
-    err.startDate = dateStr;
-    throw err;
+  // Build the list of all delivery dates in chronological order
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dates = [];
+  for (let i = 0; i < duration; i++) {
+    const dt = new Date(Date.UTC(y, m - 1, d + i));
+    dates.push(dt.toISOString().slice(0, 10));
   }
 
-  return { ok: true, milkType: type, date: dateStr, remaining };
+  // Acquire transactional advisory locks in strictly ascending chronological order
+  // (strictly ordered locking eliminates the possibility of deadlocks between concurrent checkouts)
+  for (const dt of dates) {
+    await client.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      [`milk_cap_${dt}_${type}`]
+    );
+  }
+
+  // Verify capacity for each date within the continuous plan
+  for (const dt of dates) {
+    const capacity = await getMilkCapacity(client, dt);
+
+    if (!capacity[type].isConfirmed) {
+      const err = new Error(
+        `Daily ${type === 'buffalo' ? 'Buffalo' : 'Cow'} Milk supply capacity for ${dt} has not been confirmed by farm operations. Commitments are paused until verified.`
+      );
+      err.code = 'UNCONFIRMED_CAPACITY';
+      err.milkType = type;
+      err.exhaustedDate = dt;
+      err.startDate = dateStr;
+      throw err;
+    }
+
+    const remaining = capacity[type].remainingLitres;
+    if (litresPerDay > remaining) {
+      const err = new Error(
+        `Daily ${type === 'buffalo' ? 'Buffalo' : 'Cow'} Milk subscription capacity reached for delivery date ${dt}. Available: ${remaining}L, required: ${litresPerDay}L/day.`
+      );
+      err.code = 'INSUFFICIENT_CAPACITY';
+      err.milkType = type;
+      err.requested = litresPerDay;
+      err.remaining = remaining;
+      err.exhaustedDate = dt;
+      err.startDate = dateStr;
+      throw err;
+    }
+  }
+
+  return { ok: true, milkType: type, startDate: dateStr, durationDays: duration, litresPerDay };
 }

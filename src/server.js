@@ -1677,25 +1677,27 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
       });
     }
 
-    // Check daily milk subscription capacity on starting date
+    // Check daily milk subscription capacity across entire plan duration
     try {
       const subMilkType = identifyMilkType(product.name) || 'cow';
       const litresPerDay = parseLitresFromSize(normalizedSize);
       const subStartDate = offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD();
       await checkSubscriptionCapacity(checkoutClient, {
         startDate: subStartDate,
+        durationDays: totalDays,
         milkType: subMilkType,
         litresPerDay
       });
     } catch (capErr) {
       await checkoutClient.query('ROLLBACK');
       checkoutTransactionOpen = false;
-      if (capErr.code === 'INSUFFICIENT_CAPACITY') {
+      if (capErr.code === 'INSUFFICIENT_CAPACITY' || capErr.code === 'UNCONFIRMED_CAPACITY') {
         return reply.code(409).send({
-          error: 'insufficient_capacity',
+          error: capErr.code === 'UNCONFIRMED_CAPACITY' ? 'unconfirmed_capacity' : 'insufficient_capacity',
           milkType: capErr.milkType,
           requested: capErr.requested,
           remaining: capErr.remaining,
+          exhaustedDate: capErr.exhaustedDate,
           message: capErr.message
         });
       }
@@ -3672,9 +3674,9 @@ app.post('/api/v1/orders', {
       });
     } catch (capErr) {
       await client.query('ROLLBACK');
-      if (capErr.code === 'INSUFFICIENT_CAPACITY') {
+      if (capErr.code === 'INSUFFICIENT_CAPACITY' || capErr.code === 'UNCONFIRMED_CAPACITY') {
         return reply.code(409).send({
-          error: 'insufficient_capacity',
+          error: capErr.code === 'UNCONFIRMED_CAPACITY' ? 'unconfirmed_capacity' : 'insufficient_capacity',
           milkType: capErr.milkType,
           requested: capErr.requested,
           remaining: capErr.remaining,
@@ -5269,27 +5271,39 @@ app.get('/api/v1/admin/milk-capacity', { preHandler: app.requireAdmin }, async (
 app.post('/api/v1/admin/milk-capacity/defaults', { preHandler: app.requireAdmin }, async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { cowLitres, buffaloLitres } = request.body || {};
+  const adminId = request.customer?.id || null;
 
   if (cowLitres != null) {
     const cowVal = Math.max(0, Number(cowLitres) || 0);
     await pool.query(
-      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, updated_at)
-       VALUES ('cow', $1, NOW())
-       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, updated_at = NOW()`,
-      [cowVal]
+      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, is_confirmed, confirmed_at, confirmed_by, updated_at)
+       VALUES ('cow', $1, TRUE, NOW(), $2, NOW())
+       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = EXCLUDED.confirmed_by, updated_at = NOW()`,
+      [cowVal, adminId]
     );
   }
   if (buffaloLitres != null) {
     const bufVal = Math.max(0, Number(buffaloLitres) || 0);
     await pool.query(
-      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, updated_at)
-       VALUES ('buffalo', $1, NOW())
-       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, updated_at = NOW()`,
-      [bufVal]
+      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, is_confirmed, confirmed_at, confirmed_by, updated_at)
+       VALUES ('buffalo', $1, TRUE, NOW(), $2, NOW())
+       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = EXCLUDED.confirmed_by, updated_at = NOW()`,
+      [bufVal, adminId]
     );
   }
   const updated = await getMilkCapacity(pool);
   return reply.send({ success: true, capacity: updated });
+});
+
+app.post('/api/v1/admin/milk-capacity/confirm', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const adminId = request.customer?.id || null;
+  await pool.query(
+    `UPDATE milk_capacity_defaults SET is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = $1`,
+    [adminId]
+  );
+  const updated = await getMilkCapacity(pool);
+  return reply.send({ success: true, capacity: updated, message: 'Milk capacity baseline confirmed.' });
 });
 
 app.post('/api/v1/admin/milk-capacity/overrides', { preHandler: app.requireAdmin }, async (request, reply) => {
@@ -5354,21 +5368,26 @@ app.get('/api/v1/milk-capacity/available', async (request, reply) => {
   if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
   const { date } = request.query || {};
   const cap = await getMilkCapacity(pool, date);
+  const cowConfirmed = Boolean(cap.cow.isConfirmed);
+  const buffaloConfirmed = Boolean(cap.buffalo.isConfirmed);
+
   return reply.send({
     success: true,
     date: cap.date,
     capacity: cap,
     cow: {
       availableLitres: cap.cow.availableLitres,
-      remainingLitres: cap.cow.remainingLitres,
-      isAvailable: cap.cow.remainingLitres > 0
+      remainingLitres: cowConfirmed ? cap.cow.remainingLitres : 0,
+      isAvailable: cowConfirmed && cap.cow.remainingLitres > 0,
+      isConfirmed: cowConfirmed
     },
     buffalo: {
       availableLitres: cap.buffalo.availableLitres,
-      remainingLitres: cap.buffalo.remainingLitres,
-      isAvailable: cap.buffalo.remainingLitres > 0
+      remainingLitres: buffaloConfirmed ? cap.buffalo.remainingLitres : 0,
+      isAvailable: buffaloConfirmed && cap.buffalo.remainingLitres > 0,
+      isConfirmed: buffaloConfirmed
     },
-    totalRemainingLitres: cap.total.remainingLitres
+    totalRemainingLitres: (cowConfirmed ? cap.cow.remainingLitres : 0) + (buffaloConfirmed ? cap.buffalo.remainingLitres : 0)
   });
 });
 

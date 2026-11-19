@@ -1622,6 +1622,11 @@
       .auth-card {
         padding: 28px 20px 24px;
       }
+
+      .milk-capacity-card {
+        padding: 14px 14px 16px !important;
+        margin-bottom: 14px !important;
+      }
     }
 
     @media (max-width: 480px) {
@@ -1635,6 +1640,11 @@
 
       .modal-content {
         padding: 16px;
+      }
+
+      .milk-capacity-card {
+        padding: 12px 10px 14px !important;
+        margin-bottom: 12px !important;
       }
     }
   </style>
@@ -2522,7 +2532,7 @@
         </div>
 
         <!-- Quick Milk Capacity Adjustment Form -->
-        <div class="card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <div class="card milk-capacity-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
             <div>
               <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #0f172a;">⚡ Daily Milk Capacity Management</h3>
@@ -2543,9 +2553,10 @@
               <label for="inputCapacityNotes" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Adjustment Reason / Notes</label>
               <input type="text" id="inputCapacityNotes" class="filter-input" style="width: 100%;" placeholder="e.g. Festival morning extra supply" />
             </div>
-            <div style="display: flex; gap: 8px;">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               <button type="button" class="btn-primary-ops" id="btnSaveCapacityOverride" style="flex: 1; white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;">Save for Date</button>
               <button type="button" class="btn-export" id="btnSaveCapacityDefaults" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;" title="Save as permanent baseline default">Set as Default</button>
+              <button type="button" class="btn-export" id="btnConfirmSupply" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;" title="Confirm baseline farm capacity to open sales">Confirm Baseline</button>
             </div>
           </div>
           <div id="capacityFeedbackMsg" style="margin-top: 10px; font-size: 0.825rem; font-weight: 600; display: none;"></div>
@@ -4736,9 +4747,20 @@
             const badge = document.getElementById('capSourceBadge');
             if (badge) {
               const isOverride = cap.cow?.source === 'override' || cap.buffalo?.source === 'override';
-              badge.textContent = isOverride ? 'Date-Specific Override' : 'Baseline Default';
-              badge.style.background = isOverride ? '#fef3c7' : '#e0f2fe';
-              badge.style.color = isOverride ? '#92400e' : '#0369a1';
+              const isConfirmed = cap.cow?.isConfirmed && cap.buffalo?.isConfirmed;
+              if (isOverride) {
+                badge.textContent = 'Date-Specific Override';
+                badge.style.background = '#fef3c7';
+                badge.style.color = '#92400e';
+              } else if (isConfirmed) {
+                badge.textContent = '✓ Confirmed Farm Supply';
+                badge.style.background = '#dcfce7';
+                badge.style.color = '#15803d';
+              } else {
+                badge.textContent = '⚠️ Unconfirmed Baseline (Set as Default to Confirm)';
+                badge.style.background = '#fee2e2';
+                badge.style.color = '#b91c1c';
+              }
             }
           }
 
@@ -5212,7 +5234,7 @@
             document.getElementById('accountDropdownEmail').textContent = adminUser.email || email;
 
             showDashboard();
-            switchTab('overview');
+            switchTab('deliveries');
             refreshManager.start();
           } catch (err) {
             if (loginEpoch !== adminAuthEpoch) return;
@@ -5799,13 +5821,31 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ cowLitres: cowVal, buffaloLitres: bufVal })
               });
-              showCapFeedback('Baseline default capacities updated!', false);
+              showCapFeedback('Baseline default capacities updated and confirmed!', false);
               await loadDemand();
             } catch (err) {
               showCapFeedback('Error saving defaults: ' + err.message, true);
             } finally {
               btnSaveCapDefaults.disabled = false;
               btnSaveCapDefaults.textContent = 'Set as Default';
+            }
+          });
+        }
+
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.addEventListener('click', async () => {
+            try {
+              btnConfirm.disabled = true;
+              btnConfirm.textContent = 'Confirming...';
+              await apiRequest('/api/v1/admin/milk-capacity/confirm', { method: 'POST' });
+              showCapFeedback('Farm supply capacity baseline confirmed! Sales enabled.', false);
+              await loadDemand();
+            } catch (err) {
+              showCapFeedback('Error confirming capacity: ' + err.message, true);
+            } finally {
+              btnConfirm.disabled = false;
+              btnConfirm.textContent = 'Confirm Baseline';
             }
           });
         }
@@ -6096,7 +6136,7 @@
           document.getElementById('accountDropdownEmail').textContent = adminUser.email || '';
 
           showDashboard();
-          switchTab('overview');
+          switchTab('deliveries');
           refreshManager.start();
         } catch {
           if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;

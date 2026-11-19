@@ -1255,6 +1255,82 @@ button, input, select {
 }
 
 /* ============================================================
+   STARTUP MILK-ONLY 2-CARD RESPONSIVE GRID
+   ============================================================ */
+.product-grid-wrapper {
+  position: relative;
+  width: 100%;
+  overflow: visible;
+  padding: 24px 0 36px;
+  margin: 0 auto;
+}
+
+.milk-products-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(300px, 440px));
+  justify-content: center;
+  gap: 32px;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  align-items: stretch;
+  transform: none !important;
+}
+
+.milk-products-grid .product-card {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  transform: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  border-radius: 20px !important;
+  background: #ffffff !important;
+  display: flex !important;
+  flex-direction: column !important;
+  position: relative !important;
+  left: auto !important;
+  top: auto !important;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease !important;
+}
+
+.milk-products-grid .product-card:hover {
+  transform: translateY(-4px) !important;
+  box-shadow: 0 14px 32px rgba(10, 61, 102, 0.12) !important;
+  border-color: rgba(10, 61, 102, 0.25) !important;
+}
+
+.milk-products-grid .product-card .card-body {
+  padding: 18px 20px 22px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.milk-products-grid .product-card .product-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.milk-products-grid .product-card .card-feature-pills {
+  display: flex !important;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .milk-products-grid {
+    grid-template-columns: 1fr !important;
+    gap: 20px !important;
+    max-width: 440px !important;
+  }
+}
+
+/* ============================================================
    3D-STYLE HORIZONTAL PRODUCT SLIDER
    ============================================================ */
 .product-carousel-wrapper {
@@ -3574,21 +3650,22 @@ body.cart-open .cart-scrim {
   transform: scale(0.95);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .whatsapp-sticky-widget {
-    bottom: 20px;
-    right: 18px;
+    bottom: 84px !important;
+    right: 16px !important;
+    z-index: 800 !important;
   }
   .whatsapp-sticky-bubble {
-    width: 52px;
-    height: 52px;
+    width: 48px !important;
+    height: 48px !important;
   }
   .whatsapp-sticky-svg {
-    width: 30px;
-    height: 30px;
+    width: 26px !important;
+    height: 26px !important;
   }
   .whatsapp-sticky-tooltip {
-    display: none;
+    display: none !important;
   }
 }
 

@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
  */
 
 import { queueNotification } from './notificationService.js';
+import { getMilkCapacity, identifyMilkType } from './milkCapacityService.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -666,6 +667,27 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
 
     // Calculate next delivery date
     const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+
+    // Verify daily capacity before resuming to prevent overselling on next delivery date
+    const datePart = nextDelivery ? nextDelivery.split(',')[0].trim() : null;
+    const targetDateYMD = (datePart && /^\d{4}-\d{2}-\d{2}$/.test(datePart))
+      ? datePart
+      : (datePart === 'Tomorrow' ? formatDateYMD(new Date(istNow.getTime() + 86400000)) : null);
+
+    if (targetDateYMD) {
+      const milkType = identifyMilkType(sub.product_name) || 'cow';
+      const cap = await getMilkCapacity(client, targetDateYMD);
+      const subLitres = Number(sub.quantity_num) || 1;
+      if (cap[milkType].isConfirmed && cap[milkType].remainingLitres < subLitres) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'insufficient_capacity_to_resume',
+          statusCode: 409,
+          message: `Cannot resume subscription: capacity on next delivery date (${targetDateYMD}) is full (${cap[milkType].remainingLitres}L remaining, requires ${subLitres}L).`
+        };
+      }
+    }
 
     // Update status to active
     await client.query(
