@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Milvanta | Farm Fresh Milk, Artisan Bakery & Heritage Pickles</title>
-    <meta name="description" content="Pure fresh cow and buffalo milk, available for one-time orders or flexible daily subscriptions." />
+    <title>Milvanta | Farm Fresh Milk Daily Delivery</title>
+    <meta name="description" content="100% pure raw farm fresh cow and buffalo milk delivered to your doorstep every morning before 7:00 AM across Hyderabad." />
     <meta name="theme-color" content="#0a3d66" />
-    <meta property="og:title" content="Milvanta | Pure Goodness from Farms to Your Family" />
-    <meta property="og:description" content="Explore Milvanta's collection of pure dairy, guilt-free bakery treats, and slow-cured heritage pickles." />
+    <meta property="og:title" content="Milvanta | Farm Fresh Milk Daily Delivery" />
+    <meta property="og:description" content="Explore Milvanta's pure farm fresh cow and buffalo milk with easy one-time delivery and daily subscriptions." />
     <meta property="og:type" content="website" />
     <link rel="icon" href="assets/milvanta-mark.jpg" type="image/jpeg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -132,11 +132,18 @@
             </div>
           </div>
 
-          <div class="product-grid-wrapper" id="carouselWrapper">
-            <div id="productCarousel" class="milk-products-grid" aria-live="polite">
+          <div class="product-carousel-wrapper" id="carouselWrapper">
+            <button class="arrow-button prev" id="prevBtn" type="button" aria-label="Previous product">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
+            </button>
+            <div id="productCarousel" class="product-carousel" aria-live="polite">
               <!-- Dynamically populated by script.js with Cow Milk & Buffalo Milk -->
             </div>
+            <button class="arrow-button next" id="nextBtn" type="button" aria-label="Next product">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg>
+            </button>
           </div>
+          <div class="carousel-dots" id="carouselDots" aria-label="Choose featured product"></div>
         </section>
 
         <!-- Hero Section (Positioned between Featured Products and Why Milvanta) -->
@@ -150,15 +157,15 @@
               <div class="benefit-row">
                 <div class="benefit-item">
                   <div class="benefit-icon" aria-hidden="true">01</div>
-                  <span>Pure Fresh Milk &amp; Dairy</span>
+                  <span>100% Raw Fresh Milk</span>
                 </div>
                 <div class="benefit-item">
                   <div class="benefit-icon" aria-hidden="true">02</div>
-                  <span>Millet &amp; Whole Grain Bakes</span>
+                  <span>Chilled Under 4°C</span>
                 </div>
                 <div class="benefit-item">
                   <div class="benefit-icon" aria-hidden="true">03</div>
-                  <span>Heritage Cold-Pressed Pickles</span>
+                  <span>Delivered by 7:00 AM</span>
                 </div>
               </div>
 
@@ -170,7 +177,7 @@
 
             <!-- Hero Featured Dairy Showcase -->
             <div class="hero-card-showcase" role="region" aria-label="Milvanta farm fresh dairy collection">
-              <img src="assets/milvanta-dairy-showcase.jpg" alt="Milvanta Farm Fresh Milk, Curd and Pure Desi Ghee" class="hero-showcase-img" fetchpriority="high" />
+              <img src="assets/milvanta-dairy-showcase.jpg" alt="Milvanta Farm Fresh Pure Milk" class="hero-showcase-img" fetchpriority="high" />
             </div>
           </div>
         </section>
@@ -189,14 +196,14 @@
               <p>Every single batch of fresh milk undergoes testing for adulterants, detergents, starch, and synthetic hormones. You receive pure, single-origin whole milk with uncompromised natural fats and cream.</p>
             </div>
             <div class="story-card">
-              <div class="story-icon" aria-hidden="true">🌾</div>
-              <h4>Nutrient-Dense Mindful Bakes</h4>
-              <p>We reject white bleached maida and cheap refined palm oils. Our brownies and cakes use organic raagi, whole wheat flour containing 9g protein per 200g, and pure Godavari cocoa.</p>
+              <div class="story-icon" aria-hidden="true">❄️</div>
+              <h4>Unbroken 4°C Cold Chain</h4>
+              <p>Chilled within 60 minutes of milking and maintained under 4°C throughout transport, preserving essential nutrients, natural sweetness, and rich native cream.</p>
             </div>
             <div class="story-card">
-              <div class="story-icon" aria-hidden="true">🏺</div>
-              <h4>Generational Heritage Pickling</h4>
-              <p>No synthetic vinegars or chemical preservatives. Our pickles are marinated in traditional stone vessels, slow-cured under natural sunlight, and seasoned with cold-pressed oils.</p>
+              <div class="story-icon" aria-hidden="true">🌅</div>
+              <h4>Delivered Fresh Before 7:00 AM</h4>
+              <p>Direct farm-to-doorstep dispatch every morning ensures your family enjoys fresh, wholesome cow and buffalo milk for morning tea, coffee, and daily nutrition.</p>
             </div>
           </div>
         </section>
@@ -231,7 +238,7 @@
             <a class="footer-brand" href="#home" aria-label="Milvanta home">
               <img class="footer-full-logo" src="assets/milvanta-full-logo.png" alt="Milvanta" width="140" height="60" loading="lazy" />
             </a>
-            <p>Connecting ethical local farms to everyday family tables with pure dairy, honest bakes, and heritage pickles.</p>
+            <p>Connecting ethical local dairy farms to everyday family tables with 100% pure, farm-fresh milk every morning.</p>
             <div class="fssai-badge-box">FSSAI Lic No: 23626448000158</div>
           </div>
 
@@ -921,7 +928,7 @@
         <button type="button" class="modal-close" id="pincodeClose" aria-label="Close delivery checker">×</button>
         <p class="modal-kicker">DISPATCH HUB · HAFEEZPET, HYDERABAD</p>
         <h2 id="pincodeTitle">Check Delivery Pincode</h2>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">Milvanta delivers fresh pure milk, artisan bakes &amp; heritage pickles directly from our hub in <strong>Hafeezpet, Hyderabad</strong>.</p>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">Milvanta delivers 100% pure farm-fresh milk directly from our hub in <strong>Hafeezpet, Hyderabad</strong>.</p>
         
         <!-- Distance Delivery Rates Card -->
         <div class="hub-delivery-rates" style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; font-size: 0.78rem;">

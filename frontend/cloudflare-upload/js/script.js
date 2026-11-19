@@ -477,14 +477,14 @@ function setAuthToken(token) {
 // App State
 const state = {
   selectedCategory: 'Fresh Milk',
-  viewMode: 'grid',
+  viewMode: 'carousel',
   dietaryFilter: 'all',
   sortBy: 'featured',
   searchTerm: '',
   cart: readCart(),
   activeProductId: null,
   modalQty: 1,
-  carouselIndex: 1,
+  carouselIndex: 0,
   returnFocus: null,
   selectedVariant: null,
   catalogConnected: false,

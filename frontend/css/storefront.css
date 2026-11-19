@@ -1255,78 +1255,67 @@ button, input, select {
 }
 
 /* ============================================================
-   STARTUP MILK-ONLY 2-CARD RESPONSIVE GRID
+   STARTUP MILK-ONLY CAROUSEL PRODUCT CARD ACTIONS
    ============================================================ */
-.product-grid-wrapper {
-  position: relative;
-  width: 100%;
-  overflow: visible;
-  padding: 24px 0 36px;
-  margin: 0 auto;
-}
-
-.milk-products-grid {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(300px, 440px));
-  justify-content: center;
-  gap: 32px;
-  width: 100%;
-  max-width: 960px;
-  margin: 0 auto;
-  align-items: stretch;
-  transform: none !important;
-}
-
-.milk-products-grid .product-card {
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: 100% !important;
-  transform: none !important;
-  opacity: 1 !important;
-  filter: none !important;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06) !important;
-  border: 1px solid rgba(0, 0, 0, 0.08) !important;
-  border-radius: 20px !important;
-  background: #ffffff !important;
-  display: flex !important;
-  flex-direction: column !important;
-  position: relative !important;
-  left: auto !important;
-  top: auto !important;
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease !important;
-}
-
-.milk-products-grid .product-card:hover {
-  transform: translateY(-4px) !important;
-  box-shadow: 0 14px 32px rgba(10, 61, 102, 0.12) !important;
-  border-color: rgba(10, 61, 102, 0.25) !important;
-}
-
-.milk-products-grid .product-card .card-body {
-  padding: 18px 20px 22px;
+.card-milk-choices {
   display: flex;
-  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn-milk-choice {
   flex: 1;
-}
-
-.milk-products-grid .product-card .product-name {
-  font-size: 1.25rem;
+  padding: 8px 10px;
+  font-size: 0.80rem;
   font-weight: 700;
-  margin-bottom: 6px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+  white-space: nowrap;
 }
 
-.milk-products-grid .product-card .card-feature-pills {
-  display: flex !important;
-  gap: 6px;
-  margin-top: 10px;
-  flex-wrap: wrap;
+.btn-milk-buy-once {
+  border: 1.5px solid #0a3d66;
+  background: #ffffff;
+  color: #0a3d66;
 }
 
-@media (max-width: 768px) {
-  .milk-products-grid {
-    grid-template-columns: 1fr !important;
-    gap: 20px !important;
-    max-width: 440px !important;
+.btn-milk-buy-once:hover {
+  background: #edf4fa;
+  border-color: #082d4d;
+}
+
+.btn-milk-sub {
+  border: 1.5px solid #0a3d66;
+  background: #0a3d66;
+  color: #ffffff;
+}
+
+.btn-milk-sub:hover {
+  background: #082d4d;
+  border-color: #082d4d;
+  box-shadow: 0 2px 8px rgba(10, 61, 102, 0.35);
+}
+
+.product-card-badge.is-out-of-stock {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+  font-weight: 700;
+  box-shadow: 0 2px 6px rgba(153, 27, 27, 0.15);
+}
+
+/* Accessibility: Respect user reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .product-carousel,
+  .product-card,
+  .product-card.is-center,
+  .product-card.is-adjacent,
+  .product-card.is-far,
+  .product-card.is-edge {
+    transition: none !important;
+    animation: none !important;
   }
 }
 
@@ -1348,7 +1337,7 @@ button, input, select {
   align-items: center;
   position: relative;
   width: max-content;
-  min-height: 480px;
+  min-height: 510px;
   transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
   gap: 24px;
@@ -4357,7 +4346,7 @@ body.cart-open .cart-scrim {
   }
 
   .product-carousel {
-    min-height: 420px;
+    min-height: 450px;
     gap: 14px;
   }
 
@@ -4379,6 +4368,32 @@ body.cart-open .cart-scrim {
 
   .arrow-button.next {
     right: 4px;
+  }
+
+  .card-milk-choices {
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .btn-milk-choice {
+    font-size: 0.72rem;
+    padding: 7px 4px;
+    letter-spacing: -0.01em;
+  }
+
+  .whatsapp-sticky-widget {
+    bottom: 24px !important;
+    right: 12px !important;
+  }
+
+  .whatsapp-sticky-bubble {
+    width: 42px !important;
+    height: 42px !important;
+  }
+
+  .whatsapp-sticky-svg {
+    width: 22px !important;
+    height: 22px !important;
   }
 
   .card-body {
