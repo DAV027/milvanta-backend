@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { getWhatsAppReadiness, getWhatsAppOutboxSummary } from '../src/services/whatsappAdminOverview.js';
 
 const base = {
@@ -82,4 +83,8 @@ test('both admin artifacts include the same safe WhatsApp panel', () => {
   assert.match(primary,/\/api\/v1\/admin\/whatsapp\/overview/);
   assert.match(primary,/textContent/);
   assert.doesNotMatch(primary,/id="whatsappSendButton"/);
+  const scripts = [...primary.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length > 0, 'expected admin dashboard inline scripts');
+  for(const match of scripts) assert.doesNotThrow(() => new vm.Script(match[1]));
+
 });
