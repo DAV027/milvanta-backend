@@ -9,6 +9,10 @@ on:
       - 'tests/email-receipt-amount-validation.test.js'
       - 'scripts/preview-email-templates.mjs'
       - 'src/server.js'
+      - 'frontend/admin.html'
+      - 'frontend/cloudflare-upload/admin.html'
+      - 'tests/admin-login-dashboard-client.test.js'
+      - 'tests/admin-login-role-projection.test.js'
       - 'src/services/deliveryEngine.js'
       - 'src/services/deliveryCronPolicy.js'
       - 'tests/delivery-cron-policy.test.js'
@@ -54,6 +58,8 @@ jobs:
           node --check tests/branded-email-templates.test.js
           node --check tests/email-receipt-amount-validation.test.js
           node --check src/server.js
+          node --check tests/admin-login-dashboard-client.test.js
+          node --check tests/admin-login-role-projection.test.js
           node --check src/services/deliveryEngine.js
           node --check src/services/deliveryCronPolicy.js
           node --check tests/delivery-cron-policy.test.js
@@ -71,7 +77,7 @@ jobs:
           node --check tests/delivery-cron-cloudflare-worker.test.js
           node --check tests/razorpay-webhook-contract-audit.test.js
       - name: Test email outbox, Razorpay error handling and safe diagnostics (no credentials or database)
-        run: node --test tests/branded-email-templates.test.js tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js
+        run: node --test tests/branded-email-templates.test.js tests/order-email-subscription-gateway-regression.test.js tests/razorpay-readonly-diagnostic.test.js tests/razorpay-subscription-400-diagnostics.test.js tests/razorpay-existing-test-plan-diagnostic.test.js tests/razorpay-subscription-test-probe.test.js tests/razorpay-webhook-contract-audit.test.js tests/delivery-cron-policy.test.js tests/delivery-cron-cloudflare-worker.test.js tests/admin-login-dashboard-client.test.js
 
   isolated-postgres-payment-flow:
     runs-on: ubuntu-latest
@@ -222,3 +228,44 @@ jobs:
             tests/email-receipt-amount-validation.test.js \
             tests/email-outbox-payment-blockers.test.js \
             tests/complete-e2e-email-otp-payments.test.js
+
+  # Focused admin sign-in and role handling, with disposable PostgreSQL only.
+  admin-login-database-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: milvanta_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d milvanta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/milvanta_test
+      DATABASE_SSL: 'false'
+    steps:
+      - name: Checkout review source
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Locked dependencies
+        run: npm ci
+      - name: Guard disposable local-only database
+        run: |
+          node --input-type=module -e "import {testDbConfig,assertTestDatabaseConfigured} from './tests/helpers/testDbGuard.js'; assertTestDatabaseConfigured(); if(process.env.NODE_ENV !== 'test'||testDbConfig.dbName !== 'milvanta_test'||!['127.0.0.1','localhost'].includes(testDbConfig.hostname))process.exit(1)"
+      - name: Test administrator role, login, session revocation and client race protection
+        run: |
+          node --test --test-concurrency=1 \
+            tests/admin-login-role-projection.test.js \
+            tests/admin-login-dashboard-client.test.js

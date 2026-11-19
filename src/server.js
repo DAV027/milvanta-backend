@@ -657,6 +657,38 @@ app.post('/api/v1/auth/login', {
   return { user: publicUser(user), customer: publicUser(user), token };
 });
 
+// Dedicated operator login: verify the administrator role BEFORE issuing a
+// session, so a storefront account cannot create a needless admin-login token.
+app.post('/api/v1/admin/auth/login', {
+  ...authLimit,
+  schema: {
+    body: {
+      type: 'object',
+      required: ['email', 'password'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 },
+        password: { type: 'string', minLength: 1, maxLength: 128 }
+      }
+    }
+  }
+}, async (request, reply) => {
+  reply.header('Cache-Control', 'no-store, private');
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const email = request.body.email.trim().toLowerCase();
+  const { rows } = await pool.query(
+    'SELECT id, full_name, email, phone, COALESCE(is_admin, FALSE) AS is_admin, password_salt, password_hash FROM customers WHERE LOWER(email) = $1',
+    [email]
+  );
+  const user = rows[0];
+  const hash = user ? `${user.password_salt}:${user.password_hash}` : DUMMY_HASH;
+  const valid = await verifyPassword(request.body.password, hash);
+  if (!user || !valid) return reply.code(401).send({ error: 'invalid_email_or_password' });
+  if (!user.is_admin) return reply.code(403).send({ error: 'forbidden_admin_required' });
+  const token = await issueToken(user);
+  return reply.send({ user: publicUser(user), customer: publicUser(user), token });
+});
+
 app.get('/api/v1/auth/me', { preHandler: app.authenticate }, async (request) => ({
   user: publicUser(request.customer),
   customer: publicUser(request.customer),

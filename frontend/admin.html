@@ -16,17 +16,42 @@
   <style>
     :root {
       --admin-navy: #0a3d66;
-      --admin-navy-dark: #072b49;
-      --admin-green: #1f7a4d;
+      --admin-navy-dark: #072540;
+      --admin-navy-deep: #031525;
+      --admin-navy-light: #0e528a;
+      --admin-navy-subtle: #f0f7fc;
+      --admin-green: #10b981;
+      --admin-green-dark: #047857;
+      --admin-green-subtle: #ecfdf5;
       --admin-bg: #f8fafc;
       --admin-card-bg: #ffffff;
       --admin-border: #e2e8f0;
+      --admin-border-subtle: #f1f5f9;
       --admin-text-main: #0f172a;
+      --admin-text-secondary: #334155;
       --admin-text-muted: #64748b;
       --admin-amber: #d97706;
-      --admin-red: #dc2626;
-      --admin-purple: #7c3aed;
+      --admin-amber-subtle: #fffbeb;
+      --admin-red: #ef4444;
+      --admin-red-subtle: #fef2f2;
       --admin-blue: #2563eb;
+      --admin-blue-subtle: #eff6ff;
+      --admin-indigo: #4f46e5;
+      --admin-indigo-subtle: #eef2ff;
+
+      --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.07), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+      --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+      --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.07), 0 0 0 1px rgba(15, 23, 42, 0.04);
+      --shadow-card-hover: 0 8px 20px -3px rgba(15, 23, 42, 0.09), 0 0 0 1px rgba(15, 23, 42, 0.08);
+
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --radius-xl: 16px;
+      --radius-pill: 9999px;
     }
 
     * {
@@ -36,65 +61,68 @@
     body {
       background-color: var(--admin-bg);
       color: var(--admin-text-main);
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       margin: 0;
       padding: 0;
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
     /* Top Sticky Navbar */
     .admin-navbar {
-      background: var(--admin-navy-dark);
+      background: #061e33;
       color: #ffffff;
-      padding: 10px 16px;
+      padding: 0 20px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       position: sticky;
       top: 0;
       z-index: 100;
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
-      height: 56px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      height: 58px;
     }
 
     .admin-navbar-left {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
 
     .btn-sidebar-toggle {
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
       color: #ffffff;
       width: 36px;
       height: 36px;
-      border-radius: 6px;
+      border-radius: var(--radius-md);
       cursor: pointer;
       display: none;
       align-items: center;
       justify-content: center;
-      font-size: 1.2rem;
+      font-size: 1.15rem;
       padding: 0;
-      transition: background 0.2s;
+      transition: all 0.15s ease;
     }
 
     .btn-sidebar-toggle:hover {
-      background: rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.16);
     }
 
     .admin-brand {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       text-decoration: none;
       color: #ffffff;
     }
 
     .admin-brand img.logo {
-      height: 30px;
+      height: 32px;
       width: auto;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
     }
 
     .admin-brand .brand-wordmark {
@@ -103,29 +131,30 @@
     }
 
     .admin-badge-portal {
-      background: rgba(255, 255, 255, 0.15);
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.09);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       color: #e2e8f0;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 0.7rem;
-      font-weight: 600;
-      letter-spacing: 0.05em;
+      padding: 3px 9px;
+      border-radius: var(--radius-sm);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
     .admin-controls {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
 
     .sync-status {
-      font-size: 0.75rem;
-      color: #cbd5e1;
+      font-size: 0.78rem;
+      color: #94a3b8;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 7px;
+      padding: 4px 8px;
     }
 
     .live-dot {
@@ -133,30 +162,30 @@
       height: 8px;
       border-radius: 50%;
       background: #10b981;
-      box-shadow: 0 0 6px #10b981;
+      box-shadow: 0 0 8px #10b981;
       display: inline-block;
       transition: all 0.2s;
     }
 
     .live-dot.dot-syncing {
       background: #38bdf8;
-      box-shadow: 0 0 6px #38bdf8;
+      box-shadow: 0 0 8px #38bdf8;
       animation: pulseSync 1s infinite alternate;
     }
 
     .live-dot.dot-paused {
-      background: #94a3b8;
+      background: #64748b;
       box-shadow: none;
     }
 
     .live-dot.dot-error {
       background: #ef4444;
-      box-shadow: 0 0 6px #ef4444;
+      box-shadow: 0 0 8px #ef4444;
     }
 
     .live-dot.dot-expired {
       background: #f59e0b;
-      box-shadow: 0 0 6px #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
     }
 
     @keyframes pulseSync {
@@ -165,40 +194,45 @@
     }
 
     .refresh-pill {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      padding: 5px 12px;
-      border-radius: 20px;
-      font-size: 0.8rem;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      font-size: 0.78rem;
+      font-weight: 500;
       color: #e2e8f0;
       cursor: pointer;
-      transition: all 0.2s;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     .refresh-pill:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.16);
+      border-color: rgba(255, 255, 255, 0.28);
+      color: #ffffff;
     }
 
     .btn-nav-action {
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      color: #ffffff;
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 0.8rem;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      color: #e2e8f0;
+      padding: 6px 13px;
+      border-radius: var(--radius-pill);
+      font-size: 0.78rem;
+      font-weight: 500;
       text-decoration: none;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.2s;
       display: inline-flex;
       align-items: center;
       gap: 4px;
     }
 
     .btn-nav-action:hover {
-      background: rgba(255, 255, 255, 0.2);
+      background: rgba(255, 255, 255, 0.16);
+      color: #ffffff;
     }
 
     /* Account Menu Dropdown */
@@ -207,45 +241,52 @@
     }
 
     .btn-account-toggle {
-      background: rgba(31, 122, 77, 0.4);
-      border: 1px solid #1f7a4d;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
       color: #86efac;
-      padding: 5px 10px;
-      border-radius: 6px;
-      font-size: 0.75rem;
+      padding: 5px 12px;
+      border-radius: var(--radius-pill);
+      font-size: 0.78rem;
       font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
-      gap: 6px;
-      transition: background 0.2s;
+      gap: 7px;
+      transition: all 0.2s;
     }
 
     .btn-account-toggle:hover {
-      background: rgba(31, 122, 77, 0.6);
+      background: rgba(16, 185, 129, 0.2);
+      border-color: rgba(16, 185, 129, 0.5);
     }
 
     .account-dropdown {
       position: absolute;
       right: 0;
-      top: calc(100% + 8px);
-      width: 220px;
+      top: calc(100% + 10px);
+      width: 230px;
       background: #ffffff;
       border: 1px solid var(--admin-border);
-      border-radius: 8px;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
       padding: 8px 0;
       z-index: 200;
       color: var(--admin-text-main);
+      animation: menuFadeIn 0.15s ease-out;
+    }
+
+    @keyframes menuFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
     .account-dropdown-header {
-      padding: 8px 14px 10px;
+      padding: 10px 16px 12px;
     }
 
     .account-dropdown-name {
       font-weight: 700;
-      font-size: 0.85rem;
+      font-size: 0.875rem;
       color: var(--admin-navy);
     }
 
@@ -255,6 +296,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      margin-top: 2px;
     }
 
     .account-dropdown-divider {
@@ -266,9 +308,9 @@
     .account-dropdown-item {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
       width: 100%;
-      padding: 8px 14px;
+      padding: 9px 16px;
       background: transparent;
       border: none;
       text-align: left;
@@ -297,20 +339,21 @@
     /* Layout: Sidebar + Main Content */
     .admin-layout-wrapper {
       display: flex;
-      min-height: calc(100vh - 56px);
+      min-height: calc(100vh - 58px);
       width: 100%;
+      background: var(--admin-bg);
     }
 
     .admin-sidebar {
-      width: 240px;
+      width: 250px;
       background: #ffffff;
       border-right: 1px solid var(--admin-border);
-      padding: 16px 8px;
+      padding: 16px 10px;
       display: flex;
       flex-direction: column;
       gap: 4px;
       flex-shrink: 0;
-      transition: width 0.2s ease, transform 0.25s ease;
+      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
       position: relative;
     }
 
@@ -330,7 +373,7 @@
       cursor: pointer;
       color: var(--admin-text-muted);
       padding: 4px 8px;
-      border-radius: 4px;
+      border-radius: var(--radius-sm);
       line-height: 1;
     }
 
@@ -344,38 +387,39 @@
       align-items: center;
       justify-content: space-between;
       width: 100%;
-      padding: 10px 14px;
+      padding: 10px 12px;
       border: none;
       background: transparent;
       color: #475569;
-      font-size: 0.875rem;
-      font-weight: 600;
-      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 500;
+      border-radius: var(--radius-md);
       cursor: pointer;
       text-align: left;
-      transition: all 0.15s ease;
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
       position: relative;
     }
 
     .nav-item-btn:hover {
-      background: #f1f5f9;
-      color: var(--admin-navy);
+      background: #f8fafc;
+      color: #0f172a;
     }
 
     .nav-item-btn.active {
-      background: #e0f2fe;
+      background: #eef5fa;
       color: var(--admin-navy);
-      font-weight: 700;
+      font-weight: 600;
+      box-shadow: inset 0 0 0 1px rgba(10, 61, 102, 0.1);
     }
 
     .nav-item-btn.active::before {
       content: '';
       position: absolute;
       left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 4px;
-      border-radius: 0 4px 4px 0;
+      top: 8px;
+      bottom: 8px;
+      width: 3.5px;
+      border-radius: 0 3px 3px 0;
       background: var(--admin-navy);
     }
 
@@ -386,10 +430,22 @@
     }
 
     .nav-item-icon {
-      font-size: 1.1rem;
-      width: 22px;
-      text-align: center;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      color: #64748b;
       flex-shrink: 0;
+      transition: color 0.15s;
+    }
+
+    .nav-item-btn:hover .nav-item-icon {
+      color: #334155;
+    }
+
+    .nav-item-btn.active .nav-item-icon {
+      color: var(--admin-navy);
     }
 
     .nav-badge {
@@ -397,8 +453,10 @@
       color: #475569;
       font-size: 0.7rem;
       padding: 2px 7px;
-      border-radius: 12px;
+      border-radius: var(--radius-pill);
       font-weight: 600;
+      min-width: 20px;
+      text-align: center;
     }
 
     .nav-badge.badge-alert {
@@ -409,7 +467,7 @@
 
     .sidebar-footer {
       margin-top: auto;
-      padding-top: 12px;
+      padding-top: 14px;
       border-top: 1px solid var(--admin-border);
       display: flex;
       flex-direction: column;
@@ -420,7 +478,7 @@
       background: transparent;
       border: 1px solid var(--admin-border);
       color: var(--admin-text-muted);
-      border-radius: 6px;
+      border-radius: var(--radius-md);
       padding: 8px 12px;
       font-size: 0.8rem;
       font-weight: 600;
@@ -432,14 +490,14 @@
     }
 
     .btn-collapse-sidebar:hover {
-      background: #f1f5f9;
+      background: #f8fafc;
       color: var(--admin-navy);
     }
 
     /* Desktop Sidebar Collapsed State */
     .admin-sidebar-collapsed .admin-sidebar {
-      width: 64px;
-      padding: 16px 4px;
+      width: 68px;
+      padding: 16px 6px;
     }
 
     .admin-sidebar-collapsed .nav-item-btn {
@@ -467,7 +525,7 @@
       position: fixed;
       inset: 0;
       background: rgba(15, 23, 42, 0.6);
-      backdrop-filter: blur(2px);
+      backdrop-filter: blur(4px);
       z-index: 998;
       transition: opacity 0.25s ease;
     }
@@ -478,16 +536,34 @@
 
     .admin-main-content {
       flex: 1;
-      padding: 24px;
+      padding: 24px 28px;
       max-width: 1440px;
       min-width: 0;
       overflow-x: hidden;
     }
 
+    /* Status Banner on Overview */
+    .overview-status-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 11px 16px;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-md);
+      background: #ffffff;
+      color: #334155;
+      font-size: 0.825rem;
+      font-weight: 500;
+      box-shadow: var(--shadow-xs);
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
     /* KPI Grid */
     .kpi-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
       gap: 16px;
       margin-bottom: 24px;
     }
@@ -495,56 +571,127 @@
     .kpi-card {
       background: var(--admin-card-bg);
       border: 1px solid var(--admin-border);
-      border-radius: 10px;
-      padding: 16px 18px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      border-radius: var(--radius-lg);
+      padding: 18px 20px;
+      box-shadow: var(--shadow-card);
       position: relative;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .kpi-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-card-hover);
+    }
+
+    .kpi-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8px;
     }
 
     .kpi-label {
-      font-size: 0.75rem;
+      font-size: 0.725rem;
       font-weight: 700;
       color: var(--admin-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      margin-bottom: 6px;
+      letter-spacing: 0.05em;
     }
 
+    .kpi-chip {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--radius-md);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .kpi-chip-blue { background: #eff6ff; color: #2563eb; }
+    .kpi-chip-amber { background: #fffbeb; color: #d97706; }
+    .kpi-chip-red { background: #fef2f2; color: #dc2626; }
+    .kpi-chip-green { background: #ecfdf5; color: #059669; }
+    .kpi-chip-navy { background: #f0f7fc; color: #0a3d66; }
+    .kpi-chip-purple { background: #f5f3ff; color: #7c3aed; }
+
     .kpi-value {
-      font-size: 1.75rem;
+      font-size: 1.85rem;
       font-weight: 700;
       color: var(--admin-text-main);
-      line-height: 1.1;
-      margin-bottom: 6px;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
     }
 
     .kpi-sub {
       font-size: 0.775rem;
       color: var(--admin-text-muted);
+      font-weight: 500;
     }
 
     /* Financial Card */
     .financial-card {
       background: var(--admin-card-bg);
       border: 1px solid var(--admin-border);
-      border-radius: 10px;
-      padding: 20px;
+      border-radius: var(--radius-lg);
+      padding: 22px;
       margin-bottom: 24px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      box-shadow: var(--shadow-card);
+    }
+
+    .financial-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--admin-border-subtle);
+    }
+
+    .financial-title {
+      font-weight: 700;
+      font-size: 1.05rem;
+      color: var(--admin-navy);
+      letter-spacing: -0.01em;
+    }
+
+    .financial-subtitle {
+      font-size: 0.78rem;
+      color: var(--admin-text-muted);
+      margin-top: 2px;
+    }
+
+    .financial-badge {
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 4px 9px;
+      border-radius: var(--radius-pill);
+      background: #f0f7fc;
+      color: var(--admin-navy);
+      border: 1px solid #cce3f5;
     }
 
     .financial-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
       gap: 14px;
-      margin-top: 14px;
     }
 
     .fin-item {
-      padding: 12px 14px;
+      padding: 14px 16px;
       background: #f8fafc;
       border: 1px solid var(--admin-border);
-      border-radius: 8px;
+      border-radius: 10px;
+      transition: all 0.2s ease;
+    }
+
+    .fin-item:hover {
+      background: #ffffff;
+      box-shadow: var(--shadow-xs);
+      border-color: #cbd5e1;
     }
 
     .fin-item-label {
@@ -552,14 +699,42 @@
       font-weight: 600;
       color: var(--admin-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.03em;
-      margin-bottom: 4px;
+      letter-spacing: 0.04em;
+      margin-bottom: 6px;
     }
 
     .fin-item-value {
-      font-size: 1.3rem;
+      font-size: 1.4rem;
       font-weight: 700;
       color: var(--admin-text-main);
+      letter-spacing: -0.02em;
+    }
+
+    .fin-item-sub {
+      font-size: 0.72rem;
+      color: var(--admin-text-muted);
+      margin-top: 4px;
+    }
+
+    .fin-item-contract {
+      background: #fafaf9;
+      border-color: #e7e5e4;
+    }
+
+    .fin-item-refund {
+      background: #fff5f5;
+      border-color: #fed7d7;
+    }
+
+    .fin-item-net {
+      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+      border: 1.5px solid #86efac;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.12);
+    }
+
+    .fin-item-net .fin-item-value {
+      color: #15803d;
+      font-size: 1.55rem;
     }
 
     /* Filter & Actions Bar */
@@ -570,9 +745,10 @@
       align-items: center;
       background: var(--admin-card-bg);
       border: 1px solid var(--admin-border);
-      border-radius: 8px;
-      padding: 12px 16px;
+      border-radius: var(--radius-lg);
+      padding: 10px 16px;
       margin-bottom: 20px;
+      box-shadow: var(--shadow-card);
     }
 
     .filter-group {
@@ -582,57 +758,66 @@
     }
 
     .filter-input {
-      padding: 6px 12px;
+      padding: 7px 12px;
       border: 1px solid var(--admin-border);
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       font-size: 0.825rem;
       color: var(--admin-text-main);
       outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
 
     .filter-input:focus {
       border-color: var(--admin-navy);
+      box-shadow: 0 0 0 3px rgba(10, 61, 102, 0.12);
     }
 
     .filter-select {
-      padding: 6px 12px;
+      padding: 7px 12px;
       border: 1px solid var(--admin-border);
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       font-size: 0.825rem;
       color: var(--admin-text-main);
       background: #ffffff;
       outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .filter-select:focus {
+      border-color: var(--admin-navy);
     }
 
     .btn-filter-preset {
-      padding: 5px 12px;
+      padding: 6px 14px;
       border: 1px solid var(--admin-border);
       background: #ffffff;
-      border-radius: 6px;
+      border-radius: var(--radius-pill);
       font-size: 0.8rem;
       font-weight: 600;
       color: #475569;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: all 0.15s ease;
     }
 
     .btn-filter-preset:hover {
-      background: #f1f5f9;
+      background: #f8fafc;
       color: var(--admin-navy);
+      border-color: #cbd5e1;
     }
 
     .btn-filter-preset.active {
       background: var(--admin-navy);
       color: #ffffff;
       border-color: var(--admin-navy);
+      box-shadow: 0 2px 6px rgba(10, 61, 102, 0.2);
     }
 
     .btn-primary-ops {
       background: var(--admin-navy);
       color: #ffffff;
       border: none;
-      padding: 7px 16px;
-      border-radius: 6px;
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
       font-size: 0.825rem;
       font-weight: 600;
       cursor: pointer;
@@ -640,6 +825,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      box-shadow: 0 2px 4px rgba(10, 61, 102, 0.2);
     }
 
     .btn-primary-ops:hover {
@@ -650,8 +836,8 @@
       background: #ffffff;
       border: 1px solid var(--admin-border);
       color: var(--admin-navy);
-      padding: 6px 14px;
-      border-radius: 6px;
+      padding: 7px 14px;
+      border-radius: var(--radius-sm);
       font-size: 0.825rem;
       font-weight: 600;
       cursor: pointer;
@@ -667,10 +853,12 @@
       background: #ffffff;
       border: 1px solid var(--admin-border);
       color: var(--admin-text-muted);
-      padding: 6px 12px;
-      border-radius: 6px;
+      padding: 7px 12px;
+      border-radius: var(--radius-sm);
       font-size: 0.8rem;
+      font-weight: 500;
       cursor: pointer;
+      transition: all 0.15s;
     }
 
     .btn-reset:hover {
@@ -682,10 +870,11 @@
     .table-responsive {
       background: var(--admin-card-bg);
       border: 1px solid var(--admin-border);
-      border-radius: 10px;
+      border-radius: var(--radius-lg);
       overflow-x: auto;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      box-shadow: var(--shadow-card);
       margin-bottom: 16px;
+      -webkit-overflow-scrolling: touch;
     }
 
     .data-table {
@@ -701,15 +890,15 @@
       font-size: 0.725rem;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-      padding: 12px 14px;
+      letter-spacing: 0.05em;
+      padding: 12px 16px;
       border-bottom: 1px solid var(--admin-border);
       white-space: nowrap;
     }
 
     .data-table td {
-      padding: 12px 14px;
-      border-bottom: 1px solid var(--admin-border);
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--admin-border-subtle);
       color: var(--admin-text-main);
       vertical-align: middle;
     }
@@ -719,20 +908,20 @@
     }
 
     .data-table tbody tr:hover {
-      background: #fbfcfe;
+      background: #f8fafc;
     }
 
     /* Badges */
     .status-badge {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 8px;
-      border-radius: 12px;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: var(--radius-pill);
       font-size: 0.725rem;
-      font-weight: 700;
+      font-weight: 600;
       text-transform: uppercase;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.04em;
     }
 
     .badge-active,
@@ -741,7 +930,7 @@
     .badge-confirmed,
     .badge-processed {
       background: #ecfdf5;
-      color: #059669;
+      color: #047857;
       border: 1px solid #a7f3d0;
     }
 
@@ -750,7 +939,7 @@
     .badge-processing,
     .badge-out_for_delivery {
       background: #eff6ff;
-      color: #0284c7;
+      color: #0369a1;
       border: 1px solid #bae6fd;
     }
 
@@ -758,7 +947,7 @@
     .badge-packing,
     .badge-packed {
       background: #fffbeb;
-      color: #d97706;
+      color: #b45309;
       border: 1px solid #fde68a;
     }
 
@@ -767,7 +956,7 @@
     .badge-failed,
     .badge-expired {
       background: #fef2f2;
-      color: #dc2626;
+      color: #b91c1c;
       border: 1px solid #fecaca;
     }
 
@@ -776,16 +965,19 @@
       background: #ffffff;
       border: 1px solid var(--admin-border);
       color: var(--admin-navy);
-      padding: 4px 8px;
-      border-radius: 4px;
+      padding: 5px 10px;
+      border-radius: var(--radius-sm);
       font-size: 0.75rem;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
     }
 
     .btn-row-action:hover {
-      background: #f1f5f9;
+      background: #f0f7fc;
       border-color: var(--admin-navy);
     }
 
@@ -813,7 +1005,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 0;
+      padding: 10px 0;
       font-size: 0.8rem;
       color: var(--admin-text-muted);
     }
@@ -821,7 +1013,7 @@
     /* Alerts and Warning Banners */
     .alert-banner {
       padding: 12px 16px;
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       margin-bottom: 16px;
       display: flex;
       align-items: center;
@@ -858,8 +1050,9 @@
     .del-stat-box {
       background: #ffffff;
       border: 1px solid var(--admin-border);
-      border-radius: 8px;
-      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      box-shadow: var(--shadow-card);
     }
 
     .del-stat-label {
@@ -867,11 +1060,11 @@
       font-weight: 700;
       color: var(--admin-text-muted);
       text-transform: uppercase;
-      letter-spacing: 0.03em;
+      letter-spacing: 0.04em;
     }
 
     .del-stat-val {
-      font-size: 1.25rem;
+      font-size: 1.3rem;
       font-weight: 700;
       color: var(--admin-text-main);
       margin-top: 2px;
@@ -881,8 +1074,8 @@
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.6);
-      backdrop-filter: blur(4px);
+      background: rgba(15, 23, 42, 0.65);
+      backdrop-filter: blur(6px);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -892,13 +1085,13 @@
 
     .modal-content {
       background: #ffffff;
-      border-radius: 12px;
+      border-radius: var(--radius-xl);
       max-width: 600px;
       width: 100%;
       max-height: 90vh;
       overflow-y: auto;
-      padding: 24px;
-      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+      padding: 26px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(226, 232, 240, 0.8);
       position: relative;
     }
 
@@ -906,8 +1099,8 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
       border-bottom: 1px solid var(--admin-border);
     }
 
@@ -916,6 +1109,7 @@
       font-size: 1.15rem;
       color: var(--admin-navy);
       font-weight: 700;
+      letter-spacing: -0.01em;
     }
 
     .btn-close-modal {
@@ -924,75 +1118,301 @@
       font-size: 1.5rem;
       cursor: pointer;
       color: var(--admin-text-muted);
-      padding: 0;
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
       line-height: 1;
+      transition: all 0.15s;
     }
 
     .btn-close-modal:hover {
+      background: #f1f5f9;
       color: var(--admin-text-main);
     }
 
     /* Auth Gate Screen */
     .auth-gate-wrapper {
-      min-height: calc(100vh - 56px);
+      min-height: calc(100vh - 58px);
       display: flex;
       justify-content: center;
       align-items: center;
-      padding: 20px;
+      padding: 24px 16px;
+      background: radial-gradient(ellipse at 50% 20%, #0d4a7d 0%, #072540 55%, #031422 100%);
+      position: relative;
     }
 
     .auth-card {
       background: #ffffff;
-      border: 1px solid var(--admin-border);
-      border-radius: 12px;
-      padding: 32px;
-      max-width: 420px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 18px;
+      padding: 38px 32px 34px;
+      max-width: 440px;
       width: 100%;
-      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.08);
       text-align: center;
+      position: relative;
+      z-index: 10;
+      animation: authCardIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes authCardIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .auth-brand-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 68px;
+      height: 68px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #f0f7fc 0%, #e0f0fa 100%);
+      border: 1.5px solid #cce3f5;
+      box-shadow: 0 8px 16px -4px rgba(10, 61, 102, 0.15);
+      margin-bottom: 14px;
+    }
+
+    .auth-brand-badge img {
+      width: 52px;
+      height: 52px;
+      object-fit: contain;
+    }
+
+    .auth-card-title {
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      font-size: 1.85rem;
+      font-weight: 700;
+      color: #072540;
+      margin: 0 0 4px;
+      letter-spacing: -0.01em;
+    }
+
+    .auth-card-subtitle {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin: 0 0 14px;
+      font-weight: 500;
+    }
+
+    .auth-security-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius-pill);
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 20px;
+    }
+
+    .auth-security-icon {
+      color: #0a3d66;
+      flex-shrink: 0;
     }
 
     .auth-form {
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 16px;
       text-align: left;
-      margin-top: 20px;
     }
 
-    .auth-form label {
+    .form-group {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .form-group label {
       font-size: 0.8rem;
       font-weight: 600;
       color: #334155;
+      margin-bottom: 6px;
+      display: block;
     }
 
-    .auth-form input {
-      padding: 10px 14px;
-      border: 1px solid var(--admin-border);
-      border-radius: 6px;
-      font-size: 0.9rem;
+    .input-control-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      width: 100%;
+    }
+
+    .input-field-icon {
+      position: absolute;
+      left: 14px;
+      color: #94a3b8;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .form-input {
+      padding: 11px 14px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: var(--radius-md);
+      font-size: 0.925rem;
+      color: #0f172a;
+      width: 100%;
+      background: #ffffff;
+      transition: all 0.2s ease;
       outline: none;
+      font-family: inherit;
     }
 
-    .auth-form input:focus {
+    .form-input:focus {
       border-color: var(--admin-navy);
+      box-shadow: 0 0 0 3px rgba(10, 61, 102, 0.15);
+    }
+
+    .form-input.with-icon {
+      padding-left: 40px;
+    }
+
+    .form-input.has-trailing-btn {
+      padding-right: 42px;
+    }
+
+    .btn-toggle-password {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: transparent;
+      border: none;
+      padding: 6px;
+      cursor: pointer;
+      color: #94a3b8;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .btn-toggle-password:hover {
+      color: #334155;
+      background: #f1f5f9;
     }
 
     .btn-auth-submit {
-      background: var(--admin-navy);
+      background: linear-gradient(180deg, #0a3d66 0%, #072540 100%);
       color: #ffffff;
-      border: none;
-      padding: 12px;
-      border-radius: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      border-radius: var(--radius-md);
+      padding: 13px;
       font-size: 0.95rem;
-      font-weight: 700;
+      font-weight: 600;
       cursor: pointer;
-      margin-top: 6px;
-      transition: background 0.2s;
+      margin-top: 4px;
+      box-shadow: 0 4px 12px rgba(10, 61, 102, 0.25);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      width: 100%;
     }
 
     .btn-auth-submit:hover {
-      background: var(--admin-navy-dark);
+      background: linear-gradient(180deg, #0d4a7a 0%, #093457 100%);
+      box-shadow: 0 6px 16px rgba(10, 61, 102, 0.35);
+      transform: translateY(-1px);
+    }
+
+    .btn-auth-submit:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 4px rgba(10, 61, 102, 0.2);
+    }
+
+    .btn-auth-submit:disabled {
+      opacity: 0.75;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-auth-submit[aria-busy="true"]::before {
+      content: "";
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-right: 8px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: authSpin 0.75s linear infinite;
+      vertical-align: -2px;
+    }
+
+    @keyframes authSpin {
+      to { transform: rotate(360deg); }
+    }
+
+    .auth-error-banner {
+      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #991b1b;
+      font-size: 0.85rem;
+      font-weight: 500;
+      line-height: 1.4;
+      text-align: left;
+    }
+
+    .access-denied-wrapper {
+      margin-top: 16px;
+      text-align: left;
+    }
+
+    .access-denied-card {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      color: #991b1b;
+      line-height: 1.45;
+    }
+
+    .access-denied-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 8px;
+      color: #991b1b;
+    }
+
+    .access-denied-desc {
+      font-size: 0.825rem;
+      margin: 0 0 10px;
+      color: #7f1d1d;
+    }
+
+    .access-denied-hint {
+      font-size: 0.78rem;
+      color: #991b1b;
+      opacity: 0.9;
+    }
+
+    .btn-switch-account {
+      width: 100%;
+      margin-top: 14px;
+      padding: 11px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      border-radius: var(--radius-md);
+      background: #ffffff;
+      border: 1.5px solid #cbd5e1;
+      color: #334155;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-switch-account:hover {
+      background: #f8fafc;
+      border-color: var(--admin-navy);
+      color: var(--admin-navy);
     }
 
     /* Calendar Grid for Subscriptions */
@@ -1005,7 +1425,7 @@
 
     .cal-cell {
       border: 1px solid var(--admin-border);
-      border-radius: 6px;
+      border-radius: var(--radius-sm);
       padding: 8px 4px;
       text-align: center;
       font-size: 0.75rem;
@@ -1062,7 +1482,7 @@
       }
 
       .admin-navbar {
-        padding: 8px 12px;
+        padding: 0 12px;
       }
 
       .admin-navbar .admin-badge-portal,
@@ -1071,7 +1491,7 @@
       }
 
       .admin-brand img.logo {
-        height: 26px;
+        height: 28px;
       }
 
       .admin-brand .brand-wordmark {
@@ -1135,6 +1555,11 @@
       .kpi-priority-6 { order: 7; }
       .kpi-priority-7 { order: 8; }
       .kpi-priority-8 { order: 9; }
+      .kpi-priority-9 { order: 10; }
+
+      .financial-grid {
+        grid-template-columns: 1fr;
+      }
 
       /* Mobile Table Card Transformation */
       .table-responsive {
@@ -1193,11 +1618,15 @@
       .data-table td:empty {
         display: none;
       }
+
+      .auth-card {
+        padding: 28px 20px 24px;
+      }
     }
 
     @media (max-width: 480px) {
       .admin-navbar {
-        padding: 6px 10px;
+        padding: 0 10px;
       }
 
       .sync-status {
@@ -1230,7 +1659,8 @@
         <span id="lastSyncLabel">Synced: Just now</span>
       </div>
       <button class="refresh-pill" id="btnManualRefresh" title="Refresh all dashboard data">
-        <span>🔄</span> <span id="refreshTimerLabel">Auto-refresh (30s)</span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="refresh-icon"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+        <span id="refreshTimerLabel">Auto-refresh (30s)</span>
       </button>
       <a href="index.html" class="btn-nav-action desktop-only" target="_blank" title="Open Storefront in new tab">Storefront ↗</a>
 
@@ -1268,36 +1698,77 @@
   <!-- AUTH GATE SCREEN (Login or Denied) -->
   <div class="auth-gate-wrapper" id="authGate">
     <div class="auth-card">
-      <img src="assets/milvanta-mark.png" alt="Milvanta" width="56" height="56" />
-      <h2 style="font-family: 'Cormorant Garamond', serif; font-size: 1.8rem; margin: 12px 0 4px; color: var(--admin-navy);">Milvanta Operations Portal</h2>
-      <p style="font-size: 0.85rem; color: var(--admin-text-muted); margin: 0 0 16px;">Secure Operator Authentication</p>
+      <div class="auth-brand-badge">
+        <img src="assets/milvanta-mark.png" alt="Milvanta" width="52" height="52" />
+      </div>
+      <h2 class="auth-card-title">Milvanta Operations Portal</h2>
+      <p class="auth-card-subtitle">Authorised Administrator Gateway</p>
+
+      <div class="auth-security-pill" title="Role-gated administrator access for authorized operators only">
+        <svg class="auth-security-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+        </svg>
+        <span>Role-Enforced Administrator Portal · Dedicated Operator Access</span>
+      </div>
 
       <!-- Standard Admin Login Form -->
       <form id="adminLoginForm" class="auth-form">
-        <div>
+        <div class="form-group">
           <label for="adminEmail">Operator Email</label>
-          <input type="email" id="adminEmail" placeholder="admin@milvanta.in" required autocomplete="email" />
+          <div class="input-control-wrap">
+            <span class="input-field-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+            </span>
+            <input type="email" id="adminEmail" class="form-input with-icon" placeholder="admin@milvanta.in" required autocomplete="email" />
+          </div>
         </div>
-        <div>
+        <div class="form-group">
           <label for="adminPassword">Password</label>
-          <input type="password" id="adminPassword" placeholder="••••••••••••" required autocomplete="current-password" />
+          <div class="input-control-wrap">
+            <span class="input-field-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+            </span>
+            <input type="password" id="adminPassword" class="form-input with-icon has-trailing-btn" placeholder="••••••••••••" required autocomplete="current-password" />
+            <button type="button" class="btn-toggle-password" id="btnTogglePassword" aria-label="Toggle password visibility" tabindex="-1">
+              <svg class="eye-icon eye-show" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              <svg class="eye-icon eye-hide hidden" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
+              </svg>
+            </button>
+          </div>
         </div>
-        <div id="loginErrorMsg" style="display: none; color: #dc2626; font-size: 0.825rem; font-weight: 600; padding: 6px 10px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;"></div>
+        <div id="loginErrorMsg" class="auth-error-banner" style="display: none;"></div>
         <button type="submit" class="btn-auth-submit" id="btnSubmitLogin">Sign In to Dashboard</button>
       </form>
 
       <!-- Access Denied Screen (Customer Account without is_admin) -->
-      <div id="accessDeniedBox" class="hidden" style="margin-top: 16px;">
-        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; color: #991b1b; text-align: left;">
-          <div style="font-weight: 700; font-size: 1rem; margin-bottom: 6px;">🚫 Administrator Access Required</div>
-          <p style="font-size: 0.825rem; margin: 0 0 10px; line-height: 1.4;">
-            Your account (<strong id="deniedUserEmail">current user</strong>) is signed in as a customer, but does not have administrator authorization (<code style="background: #fee2e2; padding: 2px 4px; border-radius: 4px;">is_admin = TRUE</code>).
+      <div id="accessDeniedBox" class="access-denied-wrapper hidden">
+        <div class="access-denied-card">
+          <div class="access-denied-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
+            </svg>
+            <span>Administrator Access Required</span>
+          </div>
+          <p class="access-denied-desc">
+            This account (<strong id="deniedUserEmail">current user</strong>) does not have administrator privileges. Customer and admin access are strictly separated.
           </p>
-          <p style="font-size: 0.8rem; margin: 0; color: #7f1d1d;">
-            To promote this account, run <code style="background: #fee2e2; padding: 2px 4px; border-radius: 4px;">node scripts/promote-admin.js &lt;email&gt;</code> with operator approval.
-          </p>
+          <div class="access-denied-hint">
+            If you should have administrator access, contact the Milvanta account owner. Never share your password or an administrator token.
+          </div>
         </div>
-        <button type="button" class="btn-reset" id="btnSwitchAccount" style="width: 100%; margin-top: 14px; padding: 10px;">Sign in with different account</button>
+        <button type="button" class="btn-reset btn-switch-account" id="btnSwitchAccount">Sign in with different account</button>
       </div>
     </div>
   </div>
@@ -1314,14 +1785,28 @@
 
       <button type="button" class="nav-item-btn active" id="navBtnOverview">
         <div class="nav-item-left">
-          <span class="nav-item-icon">📊</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"></rect>
+              <rect x="14" y="3" width="7" height="7"></rect>
+              <rect x="14" y="14" width="7" height="7"></rect>
+              <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+          </span>
           <span class="nav-item-text">Overview</span>
         </div>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnDeliveries">
         <div class="nav-item-left">
-          <span class="nav-item-icon">🚚</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="3" width="15" height="13"></rect>
+              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+              <circle cx="5.5" cy="18.5" r="2.5"></circle>
+              <circle cx="18.5" cy="18.5" r="2.5"></circle>
+            </svg>
+          </span>
           <span class="nav-item-text">Daily Deliveries</span>
         </div>
         <span class="nav-badge" id="navCountDeliveries">0</span>
@@ -1329,7 +1814,14 @@
 
       <button type="button" class="nav-item-btn" id="navBtnSubscriptions">
         <div class="nav-item-left">
-          <span class="nav-item-icon">🥛</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+          </span>
           <span class="nav-item-text">Milk Subscriptions</span>
         </div>
         <span class="nav-badge" id="navCountSubs">0</span>
@@ -1337,7 +1829,13 @@
 
       <button type="button" class="nav-item-btn" id="navBtnOrders">
         <div class="nav-item-left">
-          <span class="nav-item-icon">📦</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <path d="M16 10a4 4 0 0 1-8 0"></path>
+            </svg>
+          </span>
           <span class="nav-item-text">Customer Orders</span>
         </div>
         <span class="nav-badge" id="navCountOrders">0</span>
@@ -1345,7 +1843,12 @@
 
       <button type="button" class="nav-item-btn" id="navBtnRefunds">
         <div class="nav-item-left">
-          <span class="nav-item-icon">💸</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+          </span>
           <span class="nav-item-text">Refund Requests</span>
         </div>
         <span class="nav-badge badge-alert" id="navCountRefunds">0</span>
@@ -1353,21 +1856,42 @@
 
       <button type="button" class="nav-item-btn" id="navBtnCustomers">
         <div class="nav-item-left">
-          <span class="nav-item-icon">👥</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+          </span>
           <span class="nav-item-text">Customers</span>
         </div>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnDemand">
         <div class="nav-item-left">
-          <span class="nav-item-icon">📈</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+          </span>
           <span class="nav-item-text">Inventory &amp; Demand</span>
         </div>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnReports">
         <div class="nav-item-left">
-          <span class="nav-item-icon">📑</span>
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </span>
           <span class="nav-item-text">Reports</span>
         </div>
       </button>
@@ -1386,6 +1910,7 @@
 
       <!-- SECTION 1: OVERVIEW DASHBOARD -->
       <section id="overviewSection">
+        <div id="overviewDataStatus" role="status" aria-live="polite" class="overview-status-banner">Dashboard values are placeholders until verified backend metrics load.</div>
         <div class="filter-bar">
           <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Target Date:</span>
           <button type="button" class="btn-filter-preset active" id="btnDateToday">Today</button>
@@ -1401,36 +1926,78 @@
         <div class="kpi-grid">
           <!-- Priority 1: Tomorrow's Deliveries / Scheduled -->
           <div class="kpi-card kpi-priority-1">
-            <div class="kpi-label">Scheduled Deliveries</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Scheduled Deliveries</span>
+              <span class="kpi-chip kpi-chip-blue" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="1" y="3" width="15" height="13"></rect>
+                  <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+                  <circle cx="5.5" cy="18.5" r="2.5"></circle>
+                  <circle cx="18.5" cy="18.5" r="2.5"></circle>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiScheduledDeliveries">0</div>
             <div class="kpi-sub">Target date orders</div>
           </div>
 
           <!-- Priority 2: Pending Dispatch -->
           <div class="kpi-card kpi-priority-2">
-            <div class="kpi-label">Pending Dispatch</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Pending Dispatch</span>
+              <span class="kpi-chip kpi-chip-amber" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiPendingDispatch" style="color: var(--admin-amber);">0</div>
             <div class="kpi-sub">Scheduled or out for delivery</div>
           </div>
 
           <!-- Priority 3: Failed Deliveries -->
           <div class="kpi-card kpi-priority-3">
-            <div class="kpi-label">Failed Deliveries</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Failed Deliveries</span>
+              <span class="kpi-chip kpi-chip-red" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                  <line x1="12" y1="9" x2="12" y2="13"></line>
+                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiDeliveryFailures" style="color: var(--admin-red);">0</div>
             <div class="kpi-sub">Requires driver resolution</div>
           </div>
 
           <!-- Priority 4: Pending Refund Requests -->
           <div class="kpi-card kpi-priority-4">
-            <div class="kpi-label">Pending Refund Requests</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Pending Refund Requests</span>
+              <span class="kpi-chip kpi-chip-red" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="1 4 1 10 7 10"></polyline>
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiPendingRefunds" style="color: var(--admin-red);">0</div>
             <div class="kpi-sub">Awaiting operator review</div>
           </div>
 
           <!-- Milk Demand Quick Snapshot (Mobile Priority: Directly below top 4) -->
-          <div class="kpi-card kpi-priority-demand" style="border-left: 4px solid var(--admin-navy);">
-            <div class="kpi-label">Tomorrow's Milk Demand</div>
-            <div class="kpi-value" style="font-size: 1.4rem; color: var(--admin-navy);">
+          <div class="kpi-card kpi-priority-demand" style="border-left: 4px solid var(--admin-navy); background: linear-gradient(135deg, #ffffff 0%, #f8fbfe 100%);">
+            <div class="kpi-card-top">
+              <span class="kpi-label" id="quickDemandHeading">Today's Milk Demand</span>
+              <span class="kpi-chip kpi-chip-navy" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M8 2h8v2H8zM7 4h10v3a5 5 0 0 1-1 3v8a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-8a5 5 0 0 1-1-3V4z"></path>
+                </svg>
+              </span>
+            </div>
+            <div class="kpi-value" style="font-size: 1.45rem; color: var(--admin-navy);">
               <span id="quickCowLitres">0</span>L <span style="font-size: 0.85rem; font-weight: 500; color: #64748b;">Cow</span> · 
               <span id="quickBuffaloLitres">0</span>L <span style="font-size: 0.85rem; font-weight: 500; color: #64748b;">Buffalo</span>
             </div>
@@ -1439,35 +2006,80 @@
 
           <!-- Priority 5: Deliveries Completed -->
           <div class="kpi-card kpi-priority-5">
-            <div class="kpi-label">Deliveries Completed</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Deliveries Completed</span>
+              <span class="kpi-chip kpi-chip-green" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiDeliveriesCompleted" style="color: var(--admin-green);">0</div>
             <div class="kpi-sub">Confirmed delivered to doorstep</div>
           </div>
 
           <!-- Priority 6: Active Milk Subscriptions -->
           <div class="kpi-card kpi-priority-6">
-            <div class="kpi-label">Active Milk Subscriptions</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Active Milk Subscriptions</span>
+              <span class="kpi-chip kpi-chip-blue" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                  <line x1="16" y1="2" x2="16" y2="6"></line>
+                  <line x1="8" y1="2" x2="8" y2="6"></line>
+                  <line x1="3" y1="10" x2="21" y2="10"></line>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiActiveSubs">0</div>
             <div class="kpi-sub"><span id="kpiPendingSubs">0</span> pending payment · <span id="kpiPausedSubs">0</span> paused</div>
           </div>
 
           <!-- Total Orders -->
           <div class="kpi-card kpi-priority-7">
-            <div class="kpi-label">Total Storefront Orders</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Total Storefront Orders</span>
+              <span class="kpi-chip kpi-chip-purple" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                  <line x1="3" y1="6" x2="21" y2="6"></line>
+                  <path d="M16 10a4 4 0 0 1-8 0"></path>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiTotalOrders">0</div>
             <div class="kpi-sub"><span id="kpiActiveOrders">0</span> active · <span id="kpiDeliveredOrders">0</span> delivered</div>
           </div>
 
           <!-- Priority 8: Total Paid Revenue -->
           <div class="kpi-card kpi-priority-8">
-            <div class="kpi-label">Total Paid Revenue</div>
+            <div class="kpi-card-top">
+              <span class="kpi-label">Total Collected Revenue</span>
+              <span class="kpi-chip kpi-chip-green" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="1" x2="12" y2="23"></line>
+                  <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiTotalRevenue" style="color: var(--admin-green);">₹0</div>
-            <div class="kpi-sub">Combined verified cashflow</div>
+            <div class="kpi-sub">Verified captured payments (Orders + Subscriptions)</div>
           </div>
 
           <!-- Registered Customers -->
-          <div class="kpi-card">
-            <div class="kpi-label">Registered Customers</div>
+          <div class="kpi-card kpi-priority-9">
+            <div class="kpi-card-top">
+              <span class="kpi-label">Registered Customers</span>
+              <span class="kpi-chip kpi-chip-navy" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="9" cy="7" r="4"></circle>
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+              </span>
+            </div>
             <div class="kpi-value" id="kpiTotalCustomers">0</div>
             <div class="kpi-sub">PostgreSQL customer records</div>
           </div>
@@ -1475,28 +2087,38 @@
 
         <!-- Financial Breakdown Card -->
         <div class="financial-card">
-          <div style="font-weight: 700; font-size: 1rem; color: var(--admin-navy);">Reconciled Financial Operations</div>
+          <div class="financial-header">
+            <div>
+              <div class="financial-title">Reconciled Financial Operations</div>
+              <div class="financial-subtitle">PostgreSQL ledger reconciliation &amp; verified cashflow metrics</div>
+            </div>
+            <div class="financial-badge">Audit Reconciled</div>
+          </div>
           <div class="financial-grid">
             <div class="fin-item">
               <div class="fin-item-label">Storefront Paid Revenue</div>
               <div class="fin-item-value" id="kpiOrderRevenue">₹0</div>
+              <div class="fin-item-sub">One-time product orders (captured)</div>
             </div>
             <div class="fin-item">
-              <div class="fin-item-label" id="kpiSubRevenueLabel">Collected Subscription Revenue</div>
+              <div class="fin-item-label" id="kpiSubRevenueLabel">Collected Subscription Payments</div>
               <div class="fin-item-value" id="kpiSubRevenue">₹0</div>
-              <div style="font-size: 0.7rem; color: #64748b; margin-top: 2px;" id="kpiSubRevenueSub">Verified captured charges</div>
+              <div class="fin-item-sub" id="kpiSubRevenueSub">Verified captured subscription charges</div>
             </div>
-            <div class="fin-item">
+            <div class="fin-item fin-item-contract">
               <div class="fin-item-label" id="kpiContractValueLabel">Active Subscription Contract Value (not collected revenue)</div>
               <div class="fin-item-value" id="kpiContractValue" style="color: #64748b;">₹0</div>
+              <div class="fin-item-sub">Contracted total term value of live recurring plans (projected run-rate)</div>
             </div>
-            <div class="fin-item">
-              <div class="fin-item-label">Refunded Amount</div>
+            <div class="fin-item fin-item-refund">
+              <div class="fin-item-label">Processed Refunds</div>
               <div class="fin-item-value" id="kpiRefundedAmount" style="color: var(--admin-red);">₹0</div>
+              <div class="fin-item-sub">Approved &amp; gateway reversed refunds</div>
             </div>
-            <div class="fin-item" style="background: #f0fdf4; border-color: #bbf7d0;">
-              <div class="fin-item-label" style="color: #166534;">Net Collected Revenue</div>
+            <div class="fin-item fin-item-net">
+              <div class="fin-item-label" style="color: #166534;">Net Cashflow (Collected - Refunds)</div>
               <div class="fin-item-value" id="kpiNetRevenue" style="color: #15803d;">₹0</div>
+              <div class="fin-item-sub" style="color: #15803d; font-weight: 500;">Actual bankable net receipts (Collected - Refunds)</div>
             </div>
           </div>
         </div>
@@ -2439,6 +3061,8 @@
       } catch (_) {}
       let adminLoginInFlight = false;
       let adminLoginController = null;
+      // Discard late login and auth-check responses after logout or a new login.
+      let adminAuthEpoch = 0;
       const ADMIN_LOGIN_TIMEOUT_MS = 60000;
 
       function revokeAdminSessionBestEffort(token) {
@@ -2527,6 +3151,15 @@
           if (k === 'className') element.className = v;
           else if (k === 'textContent') element.textContent = v;
           else if (k === 'style' && typeof v === 'object') Object.assign(element.style, v);
+          else if (k === 'addEventListener') {
+            // Bind actual click handlers instead of serializing a callback
+            // array into a nonfunctional HTML attribute.
+            if (!Array.isArray(v) || v.length !== 2 ||
+                typeof v[0] !== 'string' || typeof v[1] !== 'function') {
+              throw new TypeError('Invalid admin DOM event handler');
+            }
+            element.addEventListener(v[0], v[1]);
+          }
           else if (k.startsWith('data-')) element.setAttribute(k, v);
           else element.setAttribute(k, v);
         }
@@ -2704,8 +3337,9 @@
           if (this.activeController) {
             this.activeController.abort();
           }
-          this.activeController = new AbortController();
-          const signal = this.activeController.signal;
+          const controller = new AbortController();
+          this.activeController = controller;
+          const signal = controller.signal;
 
           this.syncing = true;
           this.state = 'syncing';
@@ -2713,7 +3347,7 @@
 
           try {
             if (activeTab === 'overview') {
-              await loadOverview(signal);
+              if (await loadOverview(signal) === false) throw new Error('overview_load_failed');
             } else if (activeTab === 'reports') {
               if (forced) {
                 await loadReports(signal);
@@ -2722,11 +3356,13 @@
               await loadActiveTabData(signal);
             }
 
+            // A replaced, aborted or signed-out refresh must not report success.
+            if (signal.aborted || this.activeController !== controller) return;
             this.lastSuccessTime = formatISTTimeOnly();
             this.state = 'idle';
             this.secondsLeft = 30;
           } catch (err) {
-            if (err.name === 'AbortError') return;
+            if (signal.aborted || this.activeController !== controller || err.name === 'AbortError') return;
             if (err.message && (err.message.includes('Session expired') || err.message.includes('Access denied'))) {
               this.onAuthExpired();
               return;
@@ -2734,19 +3370,30 @@
             console.error('Auto-refresh cycle error:', err);
             this.state = 'error';
           } finally {
-            this.syncing = false;
-            this.activeController = null;
-            this.updateUI();
+            // Old concurrent refreshes may finish later; preserve the newest.
+            if (this.activeController === controller) {
+              this.syncing = false;
+              this.activeController = null;
+              this.updateUI();
+            }
           }
         }
       };
 
       // API Request helper
       async function apiRequest(endpoint, options = {}) {
+        const requestToken = currentToken;
+        const requestEpoch = adminAuthEpoch;
+        if (!requestToken) throw new Error('Admin sign-in required');
+        const assertCurrentAdmin = () => {
+          if (requestEpoch !== adminAuthEpoch || requestToken !== currentToken) {
+            const stale = new Error('Aborted stale administrator request');
+            stale.name = 'AbortError';
+            throw stale;
+          }
+        };
         const headers = { ...options.headers };
-        if (currentToken) {
-          headers['Authorization'] = 'Bearer ' + currentToken;
-        }
+        headers['Authorization'] = 'Bearer ' + requestToken;
         if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
           headers['Content-Type'] = 'application/json';
           options.body = JSON.stringify(options.body);
@@ -2759,6 +3406,7 @@
         let res;
         try {
           res = await fetch(API_BASE + endpoint, fetchOptions);
+          assertCurrentAdmin();
         } catch (fetchErr) {
           if (fetchErr.name === 'AbortError') throw fetchErr;
           refreshManager.state = 'error';
@@ -2768,27 +3416,29 @@
 
         if (res.status === 401 || res.status === 403) {
           const errData = await res.json().catch(() => ({}));
+          assertCurrentAdmin();
           refreshManager.onAuthExpired();
-          if (res.status === 403 && errData.error === 'forbidden_admin_required') {
-            showAccessDenied(errData.customer?.email || 'Current Account');
-            throw new Error('Access denied: administrator privileges required.');
-          }
+          ++adminAuthEpoch;
           sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
+          if (res.status === 403 && errData.error === 'forbidden_admin_required') {
+            showAccessDenied('Current Account');
+            throw new Error('Access denied: administrator privileges required.');
+          }
           showLogin('Your admin session has expired. Please sign in again.');
           throw new Error('Session expired. Please sign in again.');
         }
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
+          assertCurrentAdmin();
           throw new Error(err.message || err.error || ('HTTP ' + res.status));
         }
 
         const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('text/csv')) {
-          return res.text();
-        }
-        return res.json();
+        const result = contentType.includes('text/csv') ? await res.text() : await res.json();
+        assertCurrentAdmin();
+        return result;
       }
 
       // UI View state switches
@@ -2890,6 +3540,8 @@
       async function loadOverview(signal) {
         const dateParam = overviewState.date ? ('?date=' + overviewState.date) : '';
         const alertsContainer = document.getElementById('overviewAlertsContainer');
+        const dataStatus = document.getElementById('overviewDataStatus');
+        dataStatus.textContent = 'Refreshing verified operations metrics…';
 
         try {
           const stats = await apiRequest('/api/v1/admin/stats' + dateParam, { signal });
@@ -2933,11 +3585,28 @@
 
           // Quick milk demand snapshot on overview
           try {
-            const demandRes = await apiRequest('/api/v1/admin/demand-forecast?date=' + (overviewState.date || getTomorrowYMD()), { signal });
+            const targetDemandDate = overviewState.date || getTomorrowYMD();
+            const demandHeading = document.getElementById('quickDemandHeading');
+            if (demandHeading) {
+              if (targetDemandDate === getTodayYMD()) {
+                demandHeading.textContent = "Today's Milk Demand";
+              } else if (targetDemandDate === getTomorrowYMD()) {
+                demandHeading.textContent = "Tomorrow's Milk Demand";
+              } else if (targetDemandDate === getYesterdayYMD()) {
+                demandHeading.textContent = "Yesterday's Milk Demand";
+              } else {
+                demandHeading.textContent = 'Milk Demand (' + targetDemandDate + ')';
+              }
+            }
+            const demandRes = await apiRequest('/api/v1/admin/demand-forecast?date=' + targetDemandDate, { signal });
             document.getElementById('quickCowLitres').textContent = (demandRes.cowMilkLitres || 0).toFixed(1);
             document.getElementById('quickBuffaloLitres').textContent = (demandRes.buffaloMilkLitres || 0).toFixed(1);
             document.getElementById('quickTotalLitres').textContent = (demandRes.totalLitres || 0).toFixed(1);
-          } catch (_) {}
+          } catch (_) {
+            document.getElementById('quickCowLitres').textContent = '—';
+            document.getElementById('quickBuffaloLitres').textContent = '—';
+            document.getElementById('quickTotalLitres').textContent = '—';
+          }
 
           // Alerts rendering
           empty(alertsContainer);
@@ -2950,13 +3619,17 @@
               alertsContainer.appendChild(banner);
             });
           }
+          dataStatus.textContent = 'Metrics verified from Milvanta backend at ' + formatISTTimeOnly();
+          return true;
         } catch (err) {
           if (err.name === 'AbortError') return;
+          dataStatus.textContent = 'Metrics unavailable. Displayed values may be stale; do not use them for financial or delivery decisions.';
           empty(alertsContainer);
           alertsContainer.appendChild(el('div', { className: 'alert-banner alert-danger' }, [
             el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
             el('span', { textContent: 'Failed to load operations metrics: ' + err.message })
           ]));
+          return false;
         }
       }
 
@@ -4314,6 +4987,7 @@
           refreshManager.stop();
           // Show the signed-out screen immediately, without waiting for Render.
           const tokenToRevoke = currentToken;
+          ++adminAuthEpoch;
           if (adminLoginController) adminLoginController.abort();
           sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
@@ -4327,10 +5001,44 @@
         document.getElementById('btnAccountSwitch').addEventListener('click', handleLogout);
         document.getElementById('btnSwitchAccount').addEventListener('click', handleLogout);
 
+        // Toggle password visibility
+        const btnTogglePassword = document.getElementById('btnTogglePassword');
+        if (btnTogglePassword) {
+          btnTogglePassword.addEventListener('click', () => {
+            const passInput = document.getElementById('adminPassword');
+            if (!passInput) return;
+            const isPassword = passInput.type === 'password';
+            passInput.type = isPassword ? 'text' : 'password';
+            btnTogglePassword.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
+            const eyeShow = btnTogglePassword.querySelector('.eye-show');
+            const eyeHide = btnTogglePassword.querySelector('.eye-hide');
+            if (eyeShow && eyeHide) {
+              if (isPassword) {
+                eyeShow.classList.add('hidden');
+                eyeHide.classList.remove('hidden');
+              } else {
+                eyeShow.classList.remove('hidden');
+                eyeHide.classList.add('hidden');
+              }
+            }
+          });
+        }
+
+
+
         // One in-flight sign-in per tab prevents repeated clicks from exhausting the login rate limit.
         document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           if (adminLoginInFlight) return;
+          const loginEpoch = ++adminAuthEpoch;
+          // Replace any unverified prior admin session before starting another login.
+          // Keep independent storefront sessions untouched.
+          const priorAdminToken = currentToken;
+          if (priorAdminToken) {
+            currentToken = '';
+            sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+            revokeAdminSessionBestEffort(priorAdminToken);
+          }
           const email = document.getElementById('adminEmail').value.trim();
           const password = document.getElementById('adminPassword').value;
           const loginErrorMsg = document.getElementById('loginErrorMsg');
@@ -4351,13 +5059,24 @@
           }, 5000);
 
           try {
-            const res = await fetch(API_BASE + '/api/v1/auth/login', {
+            const res = await fetch(API_BASE + '/api/v1/admin/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ email, password }),
               signal: controller.signal
             });
             const data = await res.json().catch(() => ({}));
+            // A logout/account switch must win even if the network response
+            // arrived at the same time as the AbortController cancellation.
+            if (loginEpoch !== adminAuthEpoch) {
+              if (data.token) revokeAdminSessionBestEffort(data.token);
+              return;
+            }
+            if (res.status === 403 && data.error === 'forbidden_admin_required') {
+              document.getElementById('adminPassword').value = '';
+              showAccessDenied(email);
+              return;
+            }
             if (res.status === 429) {
               const retryHeader = Number(res.headers.get('retry-after'));
               const retrySeconds = Number.isFinite(retryHeader) && retryHeader > 0 ? Math.ceil(retryHeader) : 60;
@@ -4372,6 +5091,8 @@
               throw new Error('The server did not return a valid session. Please try again.');
             }
             if (!data.customer?.is_admin && !data.user?.is_admin) {
+              revokeAdminSessionBestEffort(data.token);
+              document.getElementById('adminPassword').value = '';
               showAccessDenied(email);
               return;
             }
@@ -4389,6 +5110,7 @@
             switchTab('overview');
             refreshManager.start();
           } catch (err) {
+            if (loginEpoch !== adminAuthEpoch) return;
             if (err.name === 'AbortError') {
               loginErrorMsg.textContent = 'Connection timed out or sign-in was cancelled. Check connectivity and try again.';
             } else {
@@ -5118,50 +5840,77 @@
         });
       }
 
-      function downloadExportFile(endpoint, filename) {
-        fetch(API_BASE + endpoint, {
-          headers: { 'Authorization': 'Bearer ' + currentToken }
-        })
-          .then(res => {
-            if (!res.ok) throw new Error('Export download failed: HTTP ' + res.status);
-            return res.blob();
-          })
-          .then(blob => {
-            const blobUrl = URL.createObjectURL(blob);
+      async function downloadExportFile(endpoint, filename) {
+        // Export responses can be large: a logout or account switch in the
+        // meantime must not download data belonging to the previous operator.
+        const token = currentToken;
+        const epoch = adminAuthEpoch;
+        if (!token) return;
+        const ensureSameOperator = () => {
+          if (token !== currentToken || epoch !== adminAuthEpoch) {
+            const stale = new Error('Cancelled export after administrator session changed.');
+            stale.name = 'AbortError';
+            throw stale;
+          }
+        };
+        try {
+          const res = await fetch(API_BASE + endpoint, {
+            headers: { 'Authorization': 'Bearer ' + token },
+            cache: 'no-store'
+          });
+          ensureSameOperator();
+          if (!res.ok) throw new Error('Export download failed: HTTP ' + res.status);
+          const blob = await res.blob();
+          ensureSameOperator();
+          const blobUrl = URL.createObjectURL(blob);
+          try {
             const a = document.createElement('a');
             a.href = blobUrl;
             a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+          } finally {
             URL.revokeObjectURL(blobUrl);
-          })
-          .catch(err => alert(err.message));
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') alert(err.message || 'Export unavailable');
+        }
       }
 
       // Check auth and bootstrap
       async function checkAuthAndInit() {
-        if (!currentToken) {
+        const checkingToken = currentToken;
+        const checkingEpoch = adminAuthEpoch;
+        if (!checkingToken) {
           showLogin();
           return;
         }
 
         try {
           const meRes = await fetch(API_BASE + '/api/v1/auth/me', {
-            headers: { 'Authorization': 'Bearer ' + currentToken }
+            headers: { 'Authorization': 'Bearer ' + checkingToken },
+            cache: 'no-store'
           });
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
           if (meRes.status === 401) {
+            ++adminAuthEpoch;
             sessionStorage.removeItem(ADMIN_TOKEN_KEY);
             currentToken = '';
             showLogin('Your admin session has expired. Please sign in again.');
             return;
           }
           if (!meRes.ok) {
-            showLogin();
+            showLogin('Unable to verify your session right now. Please sign in again.');
             return;
           }
           const me = await meRes.json();
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
           if (!me.customer?.is_admin && !me.user?.is_admin) {
+            ++adminAuthEpoch;
+            sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+            currentToken = '';
+            revokeAdminSessionBestEffort(checkingToken);
             showAccessDenied(me.customer?.email || me.user?.email || 'Logged In Account');
             return;
           }
@@ -5175,7 +5924,8 @@
           switchTab('overview');
           refreshManager.start();
         } catch {
-          showLogin();
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
+          showLogin('Unable to connect to the server. Please sign in again.');
         }
       }
 
