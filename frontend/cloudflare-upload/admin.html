@@ -1386,6 +1386,7 @@
 
       <!-- SECTION 1: OVERVIEW DASHBOARD -->
       <section id="overviewSection">
+        <div id="overviewDataStatus" role="status" aria-live="polite" style="margin-bottom:10px;padding:10px 14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#334155;font-size:0.82rem;">Dashboard values are placeholders until verified backend metrics load.</div>
         <div class="filter-bar">
           <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Target Date:</span>
           <button type="button" class="btn-filter-preset active" id="btnDateToday">Today</button>
@@ -2439,6 +2440,8 @@
       } catch (_) {}
       let adminLoginInFlight = false;
       let adminLoginController = null;
+      // Discard late login and auth-check responses after logout or a new login.
+      let adminAuthEpoch = 0;
       const ADMIN_LOGIN_TIMEOUT_MS = 60000;
 
       function revokeAdminSessionBestEffort(token) {
@@ -2713,7 +2716,7 @@
 
           try {
             if (activeTab === 'overview') {
-              await loadOverview(signal);
+              if (await loadOverview(signal) === false) throw new Error('overview_load_failed');
             } else if (activeTab === 'reports') {
               if (forced) {
                 await loadReports(signal);
@@ -2769,12 +2772,13 @@
         if (res.status === 401 || res.status === 403) {
           const errData = await res.json().catch(() => ({}));
           refreshManager.onAuthExpired();
-          if (res.status === 403 && errData.error === 'forbidden_admin_required') {
-            showAccessDenied(errData.customer?.email || 'Current Account');
-            throw new Error('Access denied: administrator privileges required.');
-          }
+          ++adminAuthEpoch;
           sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
+          if (res.status === 403 && errData.error === 'forbidden_admin_required') {
+            showAccessDenied('Current Account');
+            throw new Error('Access denied: administrator privileges required.');
+          }
           showLogin('Your admin session has expired. Please sign in again.');
           throw new Error('Session expired. Please sign in again.');
         }
@@ -2890,6 +2894,8 @@
       async function loadOverview(signal) {
         const dateParam = overviewState.date ? ('?date=' + overviewState.date) : '';
         const alertsContainer = document.getElementById('overviewAlertsContainer');
+        const dataStatus = document.getElementById('overviewDataStatus');
+        dataStatus.textContent = 'Refreshing verified operations metrics…';
 
         try {
           const stats = await apiRequest('/api/v1/admin/stats' + dateParam, { signal });
@@ -2937,7 +2943,11 @@
             document.getElementById('quickCowLitres').textContent = (demandRes.cowMilkLitres || 0).toFixed(1);
             document.getElementById('quickBuffaloLitres').textContent = (demandRes.buffaloMilkLitres || 0).toFixed(1);
             document.getElementById('quickTotalLitres').textContent = (demandRes.totalLitres || 0).toFixed(1);
-          } catch (_) {}
+          } catch (_) {
+            document.getElementById('quickCowLitres').textContent = '—';
+            document.getElementById('quickBuffaloLitres').textContent = '—';
+            document.getElementById('quickTotalLitres').textContent = '—';
+          }
 
           // Alerts rendering
           empty(alertsContainer);
@@ -2950,13 +2960,17 @@
               alertsContainer.appendChild(banner);
             });
           }
+          dataStatus.textContent = 'Metrics verified from Milvanta backend at ' + formatISTTimeOnly();
+          return true;
         } catch (err) {
           if (err.name === 'AbortError') return;
+          dataStatus.textContent = 'Metrics unavailable. Displayed values may be stale; do not use them for financial or delivery decisions.';
           empty(alertsContainer);
           alertsContainer.appendChild(el('div', { className: 'alert-banner alert-danger' }, [
             el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
             el('span', { textContent: 'Failed to load operations metrics: ' + err.message })
           ]));
+          return false;
         }
       }
 
@@ -4314,6 +4328,7 @@
           refreshManager.stop();
           // Show the signed-out screen immediately, without waiting for Render.
           const tokenToRevoke = currentToken;
+          ++adminAuthEpoch;
           if (adminLoginController) adminLoginController.abort();
           sessionStorage.removeItem(ADMIN_TOKEN_KEY);
           currentToken = '';
@@ -4331,6 +4346,7 @@
         document.getElementById('adminLoginForm').addEventListener('submit', async (e) => {
           e.preventDefault();
           if (adminLoginInFlight) return;
+          const loginEpoch = ++adminAuthEpoch;
           const email = document.getElementById('adminEmail').value.trim();
           const password = document.getElementById('adminPassword').value;
           const loginErrorMsg = document.getElementById('loginErrorMsg');
@@ -4351,13 +4367,24 @@
           }, 5000);
 
           try {
-            const res = await fetch(API_BASE + '/api/v1/auth/login', {
+            const res = await fetch(API_BASE + '/api/v1/admin/auth/login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ email, password }),
               signal: controller.signal
             });
             const data = await res.json().catch(() => ({}));
+            // A logout/account switch must win even if the network response
+            // arrived at the same time as the AbortController cancellation.
+            if (loginEpoch !== adminAuthEpoch) {
+              if (data.token) revokeAdminSessionBestEffort(data.token);
+              return;
+            }
+            if (res.status === 403 && data.error === 'forbidden_admin_required') {
+              document.getElementById('adminPassword').value = '';
+              showAccessDenied(email);
+              return;
+            }
             if (res.status === 429) {
               const retryHeader = Number(res.headers.get('retry-after'));
               const retrySeconds = Number.isFinite(retryHeader) && retryHeader > 0 ? Math.ceil(retryHeader) : 60;
@@ -4372,6 +4399,8 @@
               throw new Error('The server did not return a valid session. Please try again.');
             }
             if (!data.customer?.is_admin && !data.user?.is_admin) {
+              revokeAdminSessionBestEffort(data.token);
+              document.getElementById('adminPassword').value = '';
               showAccessDenied(email);
               return;
             }
@@ -4389,6 +4418,7 @@
             switchTab('overview');
             refreshManager.start();
           } catch (err) {
+            if (loginEpoch !== adminAuthEpoch) return;
             if (err.name === 'AbortError') {
               loginErrorMsg.textContent = 'Connection timed out or sign-in was cancelled. Check connectivity and try again.';
             } else {
@@ -5141,27 +5171,36 @@
 
       // Check auth and bootstrap
       async function checkAuthAndInit() {
-        if (!currentToken) {
+        const checkingToken = currentToken;
+        const checkingEpoch = adminAuthEpoch;
+        if (!checkingToken) {
           showLogin();
           return;
         }
 
         try {
           const meRes = await fetch(API_BASE + '/api/v1/auth/me', {
-            headers: { 'Authorization': 'Bearer ' + currentToken }
+            headers: { 'Authorization': 'Bearer ' + checkingToken },
+            cache: 'no-store'
           });
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
           if (meRes.status === 401) {
+            ++adminAuthEpoch;
             sessionStorage.removeItem(ADMIN_TOKEN_KEY);
             currentToken = '';
             showLogin('Your admin session has expired. Please sign in again.');
             return;
           }
           if (!meRes.ok) {
-            showLogin();
+            showLogin('Unable to verify your session right now. Please sign in again.');
             return;
           }
           const me = await meRes.json();
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
           if (!me.customer?.is_admin && !me.user?.is_admin) {
+            ++adminAuthEpoch;
+            sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+            currentToken = '';
             showAccessDenied(me.customer?.email || me.user?.email || 'Logged In Account');
             return;
           }
@@ -5175,7 +5214,8 @@
           switchTab('overview');
           refreshManager.start();
         } catch {
-          showLogin();
+          if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;
+          showLogin('Unable to connect to the server. Please sign in again.');
         }
       }
 
