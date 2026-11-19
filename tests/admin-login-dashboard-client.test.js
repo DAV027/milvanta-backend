@@ -191,6 +191,7 @@ test('overlapping forced dashboard refresh cannot let earlier request clear newe
   const ui = {
     currentToken: 'admin-token',
     activeTab: 'overview',
+    AbortController,
     formatISTTimeOnly: () => '12:00 IST',
     document: { getElementById(id) {
       if (!elements.has(id)) elements.set(id,{textContent:'',className:''});
