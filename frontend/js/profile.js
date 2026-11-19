@@ -2725,7 +2725,7 @@ function formatIstDateTime(isoStr) {
 
           recalculateOrderRefundTotal();
 
-          $('.refund-item-check').forEach((cb) => {
+          $$('.refund-item-check').forEach((cb) => {
             cb.addEventListener('change', () => {
               const row = cb.closest('.refund-item-row');
               if (row) row.classList.toggle('selected', cb.checked);
@@ -2744,7 +2744,7 @@ function formatIstDateTime(isoStr) {
 
     function recalculateOrderRefundTotal() {
       if (!activeOrderRefundEligibility) return;
-      const checks = $('.refund-item-check');
+      const checks = $$('.refund-item-check');
       let sumPaise = 0;
       checks.forEach((cb) => {
         if (cb.checked) {
@@ -2762,7 +2762,7 @@ function formatIstDateTime(isoStr) {
     }
 
     $('#btnSelectAllRefundItems')?.addEventListener('click', () => {
-      $('.refund-item-check').forEach((cb) => {
+      $$('.refund-item-check').forEach((cb) => {
         cb.checked = true;
         cb.closest('.refund-item-row')?.classList.add('selected');
       });
@@ -2783,7 +2783,7 @@ function formatIstDateTime(isoStr) {
       const notes = $('#orderRefundNotesInput')?.value || '';
 
       const selectedItems = [];
-      $('.refund-item-check').forEach((cb) => {
+      $$('.refund-item-check').forEach((cb) => {
         if (cb.checked) {
           const idx = Number(cb.dataset.itemIdx);
           const item = activeOrderRefundEligibility.items?.[idx];
