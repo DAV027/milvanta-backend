@@ -477,7 +477,7 @@ function setAuthToken(token) {
 // App State
 const state = {
   selectedCategory: 'Fresh Milk',
-  viewMode: 'carousel',
+  viewMode: 'grid',
   dietaryFilter: 'all',
   sortBy: 'featured',
   searchTerm: '',
@@ -1333,7 +1333,7 @@ const CATEGORY_META = {
   }
 };
 
-// 3 Feature Pills per Product (Matching Reference Image)
+// 3 Feature Pills per Product (Pure Fresh Milk Quality Highlights)
 function getProductFeatures(p) {
   if (p.features && p.features.length) return p.features;
   const name = String(p.name || '').toLowerCase();
@@ -1341,16 +1341,16 @@ function getProductFeatures(p) {
   // Fresh Milk
   if (name.includes('buffalo milk')) {
     return [
-      { icon: '🥛', text: '7%+ Natural Fat' },
-      { icon: '🛡️', text: 'No Preservatives' },
-      { icon: '❄️', text: 'Chilled Under 4°C' }
+      { icon: '🥛', text: '7%+ Natural Fat & Malai' },
+      { icon: '❄️', text: 'Chilled Under 4°C' },
+      { icon: '☕', text: 'Ideal for Curd & Chai' }
     ];
   }
   if (name.includes('cow milk') || p.category === 'Fresh Milk') {
     return [
-      { icon: '🌱', text: 'Farm Fresh' },
-      { icon: '🛡️', text: 'No Preservatives' },
-      { icon: '🧪', text: 'Lab Tested' }
+      { icon: '🌿', text: '100% Raw & Unprocessed' },
+      { icon: '❄️', text: 'Chilled Under 4°C' },
+      { icon: '🧪', text: '18-Point Lab Tested' }
     ];
   }
 
@@ -1573,7 +1573,7 @@ function hasRecipe(idOrProduct) {
   return Boolean(getRecipeForProduct(idOrProduct));
 }
 
-// Render 3D Interactive Carousel or All-Products Grid View
+// Render Premium Two-Product Pure Fresh Milk Showcase
 function renderCatalog() {
   const container = $('#productCarousel');
   const dotsContainer = $('#carouselDots');
@@ -1588,43 +1588,31 @@ function renderCatalog() {
   const titleElem = $('#sectionTitle');
   const subtitleElem = $('#sectionSubtitle');
 
-  // Toggle View All button text and state
+  // Toggle View All button text and state if present
   if (viewAllBtn) {
-    if (state.viewMode === 'grid') {
-      viewAllBtn.innerHTML = 'View As Carousel <span aria-hidden="true">⟲</span>';
-      viewAllBtn.classList.add('is-active');
-    } else {
-      viewAllBtn.innerHTML = 'View All <span aria-hidden="true">→</span>';
-      viewAllBtn.classList.remove('is-active');
-    }
+    viewAllBtn.style.display = 'none';
   }
 
-  // Toggle grid container layout vs carousel layout
-  if (state.viewMode === 'grid') {
-    if (wrapper) wrapper.classList.add('is-grid-view');
-    container.classList.add('is-grid-view');
-    container.style.transform = 'none';
-    if (prevBtn) prevBtn.style.display = 'none';
-    if (nextBtn) nextBtn.style.display = 'none';
-    if (dotsContainer) dotsContainer.style.display = 'none';
-  } else {
-    if (wrapper) wrapper.classList.remove('is-grid-view');
-    container.classList.remove('is-grid-view');
-    if (prevBtn) prevBtn.style.display = '';
-    if (nextBtn) nextBtn.style.display = '';
-    if (dotsContainer) dotsContainer.style.display = '';
+  // Ensure container operates in static showcase grid mode
+  if (wrapper) {
+    wrapper.classList.remove('is-grid-view');
+    wrapper.classList.add('milk-showcase-container');
   }
+  container.classList.remove('is-grid-view');
+  container.classList.add('milk-showcase-grid');
+  container.style.transform = 'none';
+
+  if (prevBtn) prevBtn.style.display = 'none';
+  if (nextBtn) nextBtn.style.display = 'none';
+  if (dotsContainer) dotsContainer.style.display = 'none';
 
   if (state.searchTerm) {
     if (titleElem) titleElem.textContent = `Search results for "${state.searchTerm}"`;
     if (subtitleElem) subtitleElem.textContent = `Showing products matching "${state.searchTerm}"`;
-  } else if (state.viewMode === 'grid' && state.selectedCategory === 'All') {
-    if (titleElem) titleElem.textContent = 'All Products';
-    if (subtitleElem) subtitleElem.textContent = 'Explore our full artisanal collection of pure dairy, wholesome bakery, and authentic pickles.';
   } else {
     const meta = CATEGORY_META[state.selectedCategory] || {
-      title: state.selectedCategory,
-      subtitle: 'Pure farm-fresh artisanal goods from Milvanta.'
+      title: 'Pure Fresh Milk',
+      subtitle: '100% pure whole milk chilled under 4°C and delivered fresh every morning before 7:00 AM.'
     };
     if (titleElem) titleElem.textContent = meta.title;
     if (subtitleElem) subtitleElem.textContent = meta.subtitle;
@@ -1637,16 +1625,12 @@ function renderCatalog() {
     container.innerHTML = `
       <div style="width: 100%; min-width: 320px; padding: 48px 20px; text-align: center; color: var(--text-muted); margin: 0 auto; grid-column: 1 / -1;">
         <h3 style="font-family: var(--serif); font-size: 1.6rem; color: var(--text); margin-bottom: 8px;">No items match your selection</h3>
-        <p style="font-size: 0.88rem;">Try clearing your search or choosing another category.</p>
-        <button class="card-add-btn" type="button" data-reset-filter style="margin-top: 14px;">View All Products</button>
+        <p style="font-size: 0.88rem;">Fresh morning milk is currently being prepared at the farm.</p>
+        <button class="card-add-btn" type="button" data-reset-filter style="margin-top: 14px;">View Available Milk</button>
       </div>`;
     if (dotsContainer) dotsContainer.innerHTML = '';
     return;
   }
-
-  // Clamp carousel index
-  if (state.carouselIndex >= list.length) state.carouselIndex = Math.max(0, list.length - 1);
-  if (state.carouselIndex < 0) state.carouselIndex = 0;
 
   list.forEach((p, index) => {
     const card = document.createElement('article');
@@ -1655,31 +1639,29 @@ function renderCatalog() {
     card.dataset.index = index;
     card.tabIndex = 0;
     card.setAttribute('role', 'group');
-    card.setAttribute('aria-label', `${p.name}, ₹${p.price}.`);
+    card.setAttribute('aria-label', `${p.name}, starting from ₹${p.price}.`);
 
     const dietClass = p.isVeg ? 'veg' : 'non-veg';
     const dietTitle = p.isVeg ? 'Vegetarian' : 'Non-Vegetarian';
     const features = getProductFeatures(p);
 
-    const pricePrefix = p.variants && p.variants.length > 1 ? '<span class="price-from" style="font-size:0.76rem;color:var(--text-muted);font-weight:600;margin-right:2px;">From </span>' : '';
-    const unitText = p.size ? p.size.replace(/pouch|bottle|jar|pack|tin/i, '').trim() : '';
-    const unitLabel = unitText ? `<span class="card-size-label">/ ${escapeHtml(unitText)}</span>` : '';
-
-    const featuresHtml = features.map(f => `
-      <span class="card-pill-tag">
-        <span class="pill-icon">${f.icon}</span>
-        <span>${escapeHtml(f.text)}</span>
-      </span>
-    `).join('');
-
+    const unitText = p.size ? p.size.replace(/pouch|bottle|jar|pack|tin/i, '').trim() : '500 ml';
     const isMilkProduct = p.category === 'Fresh Milk' || (p.name && p.name.toLowerCase().includes('milk'));
     const isOutOfStock = p.isAvailable === false || (p.remainingLitres !== undefined && p.remainingLitres <= 0);
+
     const displayBadge = isOutOfStock
       ? 'Sold Out for Tomorrow'
-      : (isMilkProduct ? 'Subscription Available' : p.badge);
+      : (isMilkProduct ? 'Daily Subscription' : p.badge);
     const badgeClass = isOutOfStock
       ? 'product-card-badge is-out-of-stock'
       : (isMilkProduct ? 'product-card-badge sub-badge' : 'product-card-badge');
+
+    const highlightsHtml = features.map(f => `
+      <li class="quality-item">
+        <span class="quality-icon" aria-hidden="true">${f.icon}</span>
+        <span class="quality-text">${escapeHtml(f.text)}</span>
+      </li>
+    `).join('');
 
     card.innerHTML = `
       <div class="product-image">
@@ -1688,31 +1670,37 @@ function renderCatalog() {
         <img src="${escapeHtml(p.image)}" alt="${escapeHtml(p.name)}" decoding="async" loading="lazy"${p.imagePosition ? ` style="object-position: ${p.imagePosition};"` : ''}>
       </div>
       <div class="card-body">
-        <h3 class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</h3>
+        <div class="card-header-block">
+          <span class="card-eyebrow">100% FARM FRESH · UNPROCESSED</span>
+          <h3 class="product-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</h3>
+        </div>
         <div class="card-price-row">
           <div class="card-price-left">
-            <span class="card-price-val">${pricePrefix}₹${Number(p.price).toFixed(0)}</span>
-            ${unitLabel}
+            <span class="price-from">From </span>
+            <span class="card-price-val">₹${Number(p.price).toFixed(0)}</span>
+            <span class="card-size-label">/ ${escapeHtml(unitText)}</span>
           </div>
-          ${isOutOfStock ? '' : `
-          <button type="button" class="card-round-cart-btn" data-card-cart="${p.id}" aria-label="Add ${escapeHtml(p.name)} to cart" title="Add to cart">
-            <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96 0 1.1.9 2 2 2h12v-2H7.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63h7.45c.75 0 1.41-.41 1.75-1.03l3.58-6.49c.08-.14.12-.31.12-.48 0-.55-.45-1-1-1H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2s.89 2 1.99 2 2-.9 2-2-.9-2-2-2z"/></svg>
-          </button>
-          `}
+          <span class="card-pack-pill">500 ml · 1 Litre</span>
         </div>
-        <div class="card-feature-pills">
-          ${featuresHtml}
+        <ul class="card-quality-list">
+          ${highlightsHtml}
+        </ul>
+        <div class="card-capacity-status ${isOutOfStock ? 'is-out' : 'is-available'}">
+          <span class="capacity-dot"></span>
+          <span class="capacity-text">
+            ${isOutOfStock 
+              ? 'Sold Out for Tomorrow · Daily capacity filled' 
+              : 'Available for Morning Delivery · Dispatched by 7 AM'}
+          </span>
         </div>
-        ${isMilkProduct ? `
-        <div class="card-milk-choices" style="display: flex; gap: 8px; margin-top: 12px;">
+        <div class="card-milk-choices">
           ${isOutOfStock ? `
-            <button type="button" disabled style="flex: 1; padding: 9px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #cbd5e1; background: #f1f5f9; color: #94a3b8; cursor: not-allowed;">Capacity Full / Unavailable</button>
+            <button type="button" class="btn-milk-choice btn-milk-disabled" disabled>Capacity Full for Tomorrow</button>
           ` : `
-            <button type="button" class="btn-milk-choice btn-milk-buy-once" data-milk-action="onetime" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #0a3d66; background: #ffffff; color: #0a3d66; cursor: pointer; transition: all 0.2s ease;">Buy Once</button>
-            <button type="button" class="btn-milk-choice btn-milk-sub" data-milk-action="subscription" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: none; background: #0a3d66; color: #ffffff; cursor: pointer; transition: all 0.2s ease;">Daily Subscription</button>
+            <button type="button" class="btn-milk-choice btn-milk-buy-once" data-milk-action="onetime" data-product-id="${p.id}" aria-label="Buy ${escapeHtml(p.name)} once">Buy Once</button>
+            <button type="button" class="btn-milk-choice btn-milk-sub" data-milk-action="subscription" data-product-id="${p.id}" aria-label="Daily subscription for ${escapeHtml(p.name)}">Daily Subscription</button>
           `}
         </div>
-        ` : ''}
       </div>
     `;
 
@@ -1721,11 +1709,6 @@ function renderCatalog() {
       choiceBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         const mode = choiceBtn.dataset.milkAction || 'onetime';
-        const idx = Number(card.dataset.index);
-        if (!isNaN(idx)) {
-          state.carouselIndex = idx;
-          updateCarouselPositions();
-        }
         openProductModal(p.id, mode);
       });
     });
@@ -1733,81 +1716,23 @@ function renderCatalog() {
     // Clicking anywhere on product card opens product detail modal
     card.addEventListener('click', (event) => {
       if (event.target.closest('.card-round-cart-btn') || event.target.closest('.btn-milk-choice')) return;
-      const idx = Number(card.dataset.index);
-      if (!isNaN(idx)) {
-        state.carouselIndex = idx;
-        updateCarouselPositions();
-      }
       openProductModal(p.id, 'onetime');
     });
 
     container.append(card);
   });
-
-  if (state.viewMode !== 'grid') {
-    requestAnimationFrame(() => {
-      updateCarouselPositions();
-    });
-  }
 }
 
-// Calculate 3D Slider Positions & Active State
+// Neutral placeholder for carousel position updates (replaced by static two-product showcase)
 function updateCarouselPositions() {
-  if (state.viewMode === 'grid') return;
   const container = $('#productCarousel');
-  const wrapper = $('#carouselWrapper');
-  if (!container || !wrapper) return;
-
-  const cards = container.querySelectorAll('.product-card');
-  if (!cards.length) return;
-
-  if (state.carouselIndex < 0) state.carouselIndex = 0;
-  if (state.carouselIndex >= cards.length) state.carouselIndex = cards.length - 1;
-
-  const currentIdx = state.carouselIndex;
-  const activeCard = cards[currentIdx];
-  if (!activeCard) return;
-
-  const wrapperWidth = wrapper.clientWidth;
-  const cardLeft = activeCard.offsetLeft;
-  const cardWidth = activeCard.offsetWidth;
-  const targetX = (wrapperWidth / 2) - (cardLeft + (cardWidth / 2));
-
-  container.style.transform = `translate3d(${Math.round(targetX)}px, 0, 0)`;
-
-  cards.forEach((card, i) => {
-    card.classList.remove('is-center', 'is-adjacent', 'is-far', 'is-edge');
-    const delta = Math.abs(i - currentIdx);
-    if (delta === 0) {
-      card.classList.add('is-center');
-      card.setAttribute('aria-current', 'true');
-    } else if (delta === 1) {
-      card.classList.add('is-adjacent');
-      card.removeAttribute('aria-current');
-    } else if (delta === 2) {
-      card.classList.add('is-far');
-      card.removeAttribute('aria-current');
-    } else {
-      card.classList.add('is-edge');
-      card.removeAttribute('aria-current');
-    }
-  });
-
-  renderCarouselDots(cards.length, currentIdx);
+  if (container) container.style.transform = 'none';
 }
 
-// Carousel Dots Navigation
+// Neutral placeholder for carousel dots (dots removed in two-product showcase)
 function renderCarouselDots(total, current) {
   const dotsContainer = $('#carouselDots');
-  if (!dotsContainer) return;
-  if (total <= 1) {
-    dotsContainer.innerHTML = '';
-    return;
-  }
-
-  dotsContainer.innerHTML = Array.from({ length: total }).map((_, i) => `
-    <button type="button" class="carousel-dot${i === current ? ' active' : ''}" data-dot-index="${i}" aria-label="Go to product ${i + 1} of ${total}"></button>
-  `).join('');
+  if (dotsContainer) dotsContainer.innerHTML = '';
 }
 
 // Product Detail Modal
@@ -3110,59 +3035,7 @@ document.addEventListener('DOMContentLoaded', () => {
     openRecipeModal(id);
   });
 
-  // Carousel Arrow Controls
-  $('#prevBtn')?.addEventListener('click', () => {
-    const list = visibleProducts();
-    if (list.length <= 1) return;
-    state.carouselIndex = (state.carouselIndex - 1 + list.length) % list.length;
-    updateCarouselPositions();
-  });
-
-  $('#nextBtn')?.addEventListener('click', () => {
-    const list = visibleProducts();
-    if (list.length <= 1) return;
-    state.carouselIndex = (state.carouselIndex + 1) % list.length;
-    updateCarouselPositions();
-  });
-
-  // Mobile Swipe Gestures on Carousel
-  let touchStartX = 0;
-  let touchStartY = 0;
-  let isTouching = false;
-  const carouselWrapper = $('#carouselWrapper');
-  if (carouselWrapper) {
-    carouselWrapper.addEventListener('touchstart', (e) => {
-      if (e.touches && e.touches[0]) {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
-        isTouching = true;
-      }
-    }, { passive: true });
-
-    carouselWrapper.addEventListener('touchend', (e) => {
-      if (!isTouching || !e.changedTouches || !e.changedTouches[0]) return;
-      isTouching = false;
-      const touchEndX = e.changedTouches[0].clientX;
-      const touchEndY = e.changedTouches[0].clientY;
-      const diffX = touchEndX - touchStartX;
-      const diffY = touchEndY - touchStartY;
-      if (Math.abs(diffX) > 35 && Math.abs(diffX) > Math.abs(diffY) * 1.2) {
-        const list = visibleProducts();
-        if (list.length > 1) {
-          if (diffX < 0) {
-            state.carouselIndex = (state.carouselIndex + 1) % list.length;
-          } else {
-            state.carouselIndex = (state.carouselIndex - 1 + list.length) % list.length;
-          }
-          updateCarouselPositions();
-        }
-      }
-    }, { passive: true });
-  }
-
-  window.addEventListener('resize', () => {
-    updateCarouselPositions();
-  });
+  // Carousel controls removed: two-product showcase is static and responsive
 
   // Close modals when clicking on background backdrop
   document.querySelectorAll('.modal-overlay').forEach((overlay) => {
