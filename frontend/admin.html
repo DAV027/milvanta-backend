@@ -1372,6 +1372,13 @@
         </div>
       </button>
 
+      <button type="button" class="nav-item-btn" id="navBtnWhatsApp">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">💬</span>
+          <span class="nav-item-text">WhatsApp Operations</span>
+        </div>
+      </button>
+
       <div class="sidebar-footer">
         <!-- Desktop Collapse Sidebar Button -->
         <button type="button" class="btn-collapse-sidebar" id="btnCollapseSidebarDesktop">
@@ -1982,6 +1989,32 @@
             <div class="kpi-value" id="repCustTotal">0</div>
             <div class="kpi-sub"><span id="repCustPhoneVerified">0</span> phone verified</div>
           </div>
+        </div>
+      </section>
+
+      <!-- READ-ONLY: WHATSAPP STATUS, NO CREDENTIALS OR MESSAGE ACTIONS -->
+      <section id="whatsappSection" class="hidden" aria-labelledby="whatsappTitle">
+        <div class="filter-bar" style="justify-content:space-between;">
+          <div>
+            <h2 id="whatsappTitle" style="margin:0;color:#0a3d66;">WhatsApp Operations</h2>
+            <p style="margin:6px 0 0;font-size:0.8rem;color:#64748b;">Read-only readiness and delivery queue monitor. This page cannot send messages or activate the API.</p>
+          </div>
+          <button type="button" class="btn-export" id="btnWhatsAppRefresh">Refresh Status</button>
+        </div>
+        <p id="whatsappStatusBanner" role="status" aria-live="polite" style="padding:14px;border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#334155;">Loading configuration status…</p>
+        <div class="kpi-grid">
+          <div class="kpi-card"><div class="kpi-label">Pending</div><div class="kpi-value" id="waPending">—</div><div class="kpi-sub">Not dispatched</div></div>
+          <div class="kpi-card"><div class="kpi-label">Accepted / Sent</div><div class="kpi-value" id="waAccepted">—</div><div class="kpi-sub">Not proof of delivery</div></div>
+          <div class="kpi-card"><div class="kpi-label">Delivered / Read</div><div class="kpi-value" id="waDelivered">—</div><div class="kpi-sub">Recorded callback status</div></div>
+          <div class="kpi-card"><div class="kpi-label">Failed / Uncertain</div><div class="kpi-value" id="waActionNeeded">—</div><div class="kpi-sub">Investigate; never auto-resend uncertain messages</div></div>
+        </div>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-top:18px;">
+          <h3 style="margin:0 0 12px;color:#0a3d66;">Local setup checks</h3>
+          <p style="font-size:0.8rem;color:#64748b;">Only whether credentials are configured is displayed. Actual Meta number registration, template approval, and real delivery are not checked here.</p>
+          <div id="whatsappChecksList" role="list" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;"></div>
+          <p id="whatsappTemplateSummary" style="font-size:0.85rem;color:#475569;margin-top:14px;"></p>
+          <p id="whatsappOutboxStatus" style="font-size:0.8rem;color:#64748b;"></p>
+          <p style="font-size:0.78rem;color:#64748b;">Configure credentials in Render environment settings; approve templates in Meta WhatsApp Manager. No secrets should be entered in this dashboard.</p>
         </div>
       </section>
 
@@ -2835,7 +2868,8 @@
         { id: 'refunds', navBtn: 'navBtnRefunds', section: 'refundsSection' },
         { id: 'customers', navBtn: 'navBtnCustomers', section: 'customersSection' },
         { id: 'demand', navBtn: 'navBtnDemand', section: 'demandSection' },
-        { id: 'reports', navBtn: 'navBtnReports', section: 'reportsSection' }
+        { id: 'reports', navBtn: 'navBtnReports', section: 'reportsSection' },
+        { id: 'whatsapp', navBtn: 'navBtnWhatsApp', section: 'whatsappSection' }
       ];
 
       function closeMobileSidebar() {
@@ -2884,6 +2918,7 @@
           else await loadDemand(signal);
         }
         else if (activeTab === 'reports') await loadReports(signal);
+        else if (activeTab === 'whatsapp') await loadWhatsAppOverview(signal);
       }
 
       // Overview loader
@@ -4230,8 +4265,59 @@
         }
       }
 
+      // Sensitive WhatsApp data never enters the admin DOM. Only Boolean
+      // config presence, local allowlist counts and aggregate queue numbers.
+      async function loadWhatsAppOverview(signal) {
+        const status = document.getElementById('whatsappStatusBanner');
+        status.textContent = 'Checking local configuration and notification queue…';
+        try {
+          const data = await apiRequest('/api/v1/admin/whatsapp/overview', { signal });
+          const count = data.outbox?.counts || {};
+          const total = (...keys) => keys.reduce((n, key) => n + (Number(count[key]) || 0), 0);
+          const print = (id, value) => { document.getElementById(id).textContent = String(value); };
+          print('waPending', data.outbox?.available ? total('pending', 'processing') : '—');
+          print('waAccepted', data.outbox?.available ? total('accepted', 'sent') : '—');
+          print('waDelivered', data.outbox?.available ? total('delivered', 'read') : '—');
+          print('waActionNeeded', data.outbox?.available ? total('failed', 'uncertain') : '—');
+          const active = data.enabled === true;
+          status.textContent = active
+            ? 'Sending flag ENABLED. Local configuration ' + (data.localConfigurationComplete ? 'looks complete' : 'is incomplete') + '; Meta delivery has NOT been verified by this panel.'
+            : 'WhatsApp sending DISABLED. Safe to finish onboarding without delivering customer messages.';
+          const list = document.getElementById('whatsappChecksList');
+          empty(list);
+          const labels = {
+            accessToken: 'Access token', phoneNumberId: 'Phone Number ID',
+            wabaId: 'WABA ID', appSecret: 'App secret',
+            verifyToken: 'Webhook verify token', otpHashSecret: 'OTP hash secret'
+          };
+          for (const [key, label] of Object.entries(labels)) {
+            const passed = data.checks?.[key] === true;
+            list.appendChild(el('div', {
+              role: 'listitem',
+              style: { padding: '11px 12px', border: '1px solid #e2e8f0', borderRadius: '7px', color: passed ? '#166534' : '#991b1b' },
+              textContent: (passed ? '✓ ' : '○ ') + label + ': ' + (passed ? 'Configured' : 'Missing / invalid')
+            }));
+          }
+          const templates = data.templates || {};
+          print('whatsappTemplateSummary',
+            'Locally allowlisted templates: ' + (templates.locallyAllowlisted ?? 0) +
+            ' / ' + (templates.totalExpected ?? 0) + '. Authentication: ' +
+            (templates.authenticationLocallyAllowlisted ? 'allowlisted' : 'not allowlisted') +
+            '. Meta approval has NOT been verified.');
+          print('whatsappOutboxStatus', data.outbox?.available
+            ? 'WhatsApp-only queue aggregates shown; historical SMS is excluded.'
+            : 'Queue unavailable: ' + (data.outbox?.reason || 'schema not ready') + '.');
+        } catch (err) {
+          if (err.name === 'AbortError') return;
+          status.textContent = 'Unable to read WhatsApp status: ' + (err.message || 'request failed');
+        }
+      }
+
       // Setup Event Listeners
       function setupListeners() {
+        document.getElementById('btnWhatsAppRefresh')?.addEventListener('click', () => {
+          if (currentToken && activeTab === 'whatsapp') void loadWhatsAppOverview();
+        });
         // Mobile sidebar toggle & backdrop
         const btnSidebarToggle = document.getElementById('btnSidebarToggle');
         const btnCloseMobileSidebar = document.getElementById('btnCloseMobileSidebar');

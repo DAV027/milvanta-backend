@@ -46,6 +46,7 @@ import {
   queuePaidSubscriptionActivation
 } from './services/notificationService.js';
 import { verifyWhatsAppWebhookSignature, handleWhatsAppWebhook, getWhatsAppPreferences, setWhatsAppPreferences } from './services/whatsappService.js';
+import { getWhatsAppReadiness, getWhatsAppOutboxSummary } from './services/whatsappAdminOverview.js';
 import {
   pauseSubscription,
   resumeSubscription,
@@ -947,6 +948,20 @@ app.post('/api/v1/webhooks/whatsapp', async(request,reply)=>{
   if(!pool) return reply.code(503).send({error:'database_not_configured'});
   await handleWhatsAppWebhook(pool,request.body);
   return {received:true};
+});
+
+// Operator-only status report. Reads local configuration and aggregate outbox state;
+ // it never calls Meta, sends messages, returns credentials, or changes settings.
+app.get('/api/v1/admin/whatsapp/overview', { preHandler: app.requireAdmin }, async (request, reply) => {
+  try {
+    return reply.header('Cache-Control', 'no-store').send({
+      ...getWhatsAppReadiness(),
+      outbox: await getWhatsAppOutboxSummary(pool)
+    });
+  } catch (error) {
+    request.log.error({ code: error.code || 'whatsapp_admin_overview_error' }, 'WhatsApp admin overview unavailable');
+    return reply.code(503).send({ error: 'whatsapp_admin_overview_unavailable' });
+  }
 });
 
 // ---------- WhatsApp Notification Preferences ----------
