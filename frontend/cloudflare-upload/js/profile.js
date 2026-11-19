@@ -772,7 +772,12 @@ function formatIstDateTime(isoStr) {
       recipientName,
       recipientPhone,
       address: addrStr,
-      paymentStatus: (row.payment_status || 'paid').toUpperCase(),
+      paymentStatus: (row.payment_status || row.paymentStatus || 'unknown').toUpperCase(),
+      // Only orders returned by the backend are eligible for a gateway refund.
+      isVerifiedStoreOrder: Boolean(row.order_number && row.payment_status === 'paid'),
+      refundStatus: typeof row.refund_status === 'string' ? row.refund_status : null,
+      refundRequestNumber: row.refund_request_number || null,
+      refundRequestedAmountPaise: Number(row.refund_requested_amount_paise) || 0,
       paymentMethod: row.paymentMethod || (isCustomOrder ? 'Paid Online via Razorpay (One-Time Upfront)' : isContinuousOrder ? 'Paid via Subscription Autopay (Razorpay Recurring)' : 'Paid Online via Razorpay'),
       courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
       trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
@@ -931,6 +936,19 @@ function formatIstDateTime(isoStr) {
               <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
             </div>
             <div class="order-actions-group">
+              ${!isSubOrder && order.refundStatus ? `
+                <span class="order-refund-status" role="status" style="display:inline-block;padding:7px 11px;border-radius:8px;background:#eff6ff;color:#1e40af;font-size:0.8rem;font-weight:600;">
+                  Refund: ${({
+                    pending:'Requested · awaiting review',
+                    approved:'Approved · awaiting payout confirmation',
+                    processing:'Being processed',
+                    processed:'Processed',
+                    rejected:'Request declined',
+                    failed:'Processing failed · contact support'
+                  })[order.refundStatus] || 'Under review'}
+                  ${order.refundRequestNumber ? ' · #' + escapeHtml(String(order.refundRequestNumber)) : ''}
+                </span>
+              ` : ''}
               ${isSubOrder ? `
                 <button type="button" class="btn-order-view-sub" data-go-sub-tab="true">
                   <span>📅 View Subscription &amp; Calendar →</span>
@@ -942,8 +960,8 @@ function formatIstDateTime(isoStr) {
                 <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
                   <span>+ Re-order</span>
                 </button>
-                ${(order.paymentStatus === 'paid' || order.status === 'paid' || order.status === 'delivered') ? `
-                  <button type="button" class="btn-order-refund" data-order-refund="${order.id}">
+                ${order.isVerifiedStoreOrder && (!order.refundStatus || order.refundStatus === 'rejected') ? `
+                  <button type="button" class="btn-order-refund" data-order-refund="${escapeHtml(String(order.id))}">
                     <span>↩ Request Refund</span>
                   </button>
                 ` : ''}
