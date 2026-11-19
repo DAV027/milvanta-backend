@@ -5181,25 +5181,42 @@
         });
       }
 
-      function downloadExportFile(endpoint, filename) {
-        fetch(API_BASE + endpoint, {
-          headers: { 'Authorization': 'Bearer ' + currentToken }
-        })
-          .then(res => {
-            if (!res.ok) throw new Error('Export download failed: HTTP ' + res.status);
-            return res.blob();
-          })
-          .then(blob => {
-            const blobUrl = URL.createObjectURL(blob);
+      async function downloadExportFile(endpoint, filename) {
+        // Export responses can be large: a logout or account switch in the
+        // meantime must not download data belonging to the previous operator.
+        const token = currentToken;
+        const epoch = adminAuthEpoch;
+        if (!token) return;
+        const ensureSameOperator = () => {
+          if (token !== currentToken || epoch !== adminAuthEpoch) {
+            const stale = new Error('Cancelled export after administrator session changed.');
+            stale.name = 'AbortError';
+            throw stale;
+          }
+        };
+        try {
+          const res = await fetch(API_BASE + endpoint, {
+            headers: { 'Authorization': 'Bearer ' + token },
+            cache: 'no-store'
+          });
+          ensureSameOperator();
+          if (!res.ok) throw new Error('Export download failed: HTTP ' + res.status);
+          const blob = await res.blob();
+          ensureSameOperator();
+          const blobUrl = URL.createObjectURL(blob);
+          try {
             const a = document.createElement('a');
             a.href = blobUrl;
             a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
+          } finally {
             URL.revokeObjectURL(blobUrl);
-          })
-          .catch(err => alert(err.message));
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') alert(err.message || 'Export unavailable');
+        }
       }
 
       // Check auth and bootstrap
