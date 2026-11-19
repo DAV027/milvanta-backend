@@ -31,6 +31,8 @@ function bootContext() {
   const events = [];
   const state = new Map();
   const ui = {
+    API_BASE: 'https://milvanta.test',
+    ADMIN_TOKEN_KEY: 'milvanta-admin-token',
     currentToken: 'admin-token-1',
     adminAuthEpoch: 0,
     events,
