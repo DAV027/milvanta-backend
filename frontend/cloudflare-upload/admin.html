@@ -4347,6 +4347,14 @@
           e.preventDefault();
           if (adminLoginInFlight) return;
           const loginEpoch = ++adminAuthEpoch;
+          // Replace any unverified prior admin session before starting another login.
+          // Keep independent storefront sessions untouched.
+          const priorAdminToken = currentToken;
+          if (priorAdminToken) {
+            currentToken = '';
+            sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+            revokeAdminSessionBestEffort(priorAdminToken);
+          }
           const email = document.getElementById('adminEmail').value.trim();
           const password = document.getElementById('adminPassword').value;
           const loginErrorMsg = document.getElementById('loginErrorMsg');
@@ -5201,6 +5209,7 @@
             ++adminAuthEpoch;
             sessionStorage.removeItem(ADMIN_TOKEN_KEY);
             currentToken = '';
+            revokeAdminSessionBestEffort(checkingToken);
             showAccessDenied(me.customer?.email || me.user?.email || 'Logged In Account');
             return;
           }
