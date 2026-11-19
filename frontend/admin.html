@@ -1783,6 +1783,7 @@
         <button type="button" class="btn-close-drawer" id="btnCloseMobileSidebar" aria-label="Close navigation drawer">&times;</button>
       </div>
 
+            <div style="padding:8px 14px 11px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;font-weight:700;">Daily operations</div>
       <button type="button" class="nav-item-btn active" id="navBtnOverview">
         <div class="nav-item-left">
           <span class="nav-item-icon">
@@ -1793,78 +1794,7 @@
               <rect x="3" y="14" width="7" height="7"></rect>
             </svg>
           </span>
-          <span class="nav-item-text">Overview</span>
-        </div>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnDeliveries">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="1" y="3" width="15" height="13"></rect>
-              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
-              <circle cx="5.5" cy="18.5" r="2.5"></circle>
-              <circle cx="18.5" cy="18.5" r="2.5"></circle>
-            </svg>
-          </span>
-          <span class="nav-item-text">Daily Deliveries</span>
-        </div>
-        <span class="nav-badge" id="navCountDeliveries">0</span>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnSubscriptions">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="16" y1="2" x2="16" y2="6"></line>
-              <line x1="8" y1="2" x2="8" y2="6"></line>
-              <line x1="3" y1="10" x2="21" y2="10"></line>
-            </svg>
-          </span>
-          <span class="nav-item-text">Milk Subscriptions</span>
-        </div>
-        <span class="nav-badge" id="navCountSubs">0</span>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnOrders">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
-              <line x1="3" y1="6" x2="21" y2="6"></line>
-              <path d="M16 10a4 4 0 0 1-8 0"></path>
-            </svg>
-          </span>
-          <span class="nav-item-text">Customer Orders</span>
-        </div>
-        <span class="nav-badge" id="navCountOrders">0</span>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnRefunds">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="1 4 1 10 7 10"></polyline>
-              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
-            </svg>
-          </span>
-          <span class="nav-item-text">Refund Requests</span>
-        </div>
-        <span class="nav-badge badge-alert" id="navCountRefunds">0</span>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnCustomers">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-              <circle cx="9" cy="7" r="4"></circle>
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-            </svg>
-          </span>
-          <span class="nav-item-text">Customers</span>
+          <span class="nav-item-text">Dashboard</span>
         </div>
       </button>
 
@@ -1877,11 +1807,83 @@
               <line x1="6" y1="20" x2="6" y2="14"></line>
             </svg>
           </span>
-          <span class="nav-item-text">Inventory &amp; Demand</span>
+          <span class="nav-item-text">Milk Stock</span>
         </div>
       </button>
 
-      <button type="button" class="nav-item-btn" id="navBtnReports">
+      <button type="button" class="nav-item-btn" id="navBtnOrders">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <path d="M16 10a4 4 0 0 1-8 0"></path>
+            </svg>
+          </span>
+          <span class="nav-item-text">Orders</span>
+        </div>
+        <span class="nav-badge" id="navCountOrders">0</span>
+      </button>
+
+      <button type="button" class="nav-item-btn" id="navBtnSubscriptions">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+          </span>
+          <span class="nav-item-text">Subscriptions</span>
+        </div>
+        <span class="nav-badge" id="navCountSubs">0</span>
+      </button>
+
+      <button type="button" class="nav-item-btn" id="navBtnDeliveries">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="1" y="3" width="15" height="13"></rect>
+              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+              <circle cx="5.5" cy="18.5" r="2.5"></circle>
+              <circle cx="18.5" cy="18.5" r="2.5"></circle>
+            </svg>
+          </span>
+          <span class="nav-item-text">Deliveries</span>
+        </div>
+        <span class="nav-badge" id="navCountDeliveries">0</span>
+      </button>
+
+      <button type="button" class="nav-item-btn" id="navBtnRefunds">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1 4 1 10 7 10"></polyline>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+            </svg>
+          </span>
+          <span class="nav-item-text">Refunds</span>
+        </div>
+        <span class="nav-badge badge-alert" id="navCountRefunds">0</span>
+      </button>
+
+      <details id="adminMoreTools" class="admin-more-tools" style="margin-top:10px;padding:4px;border-top:1px solid #e2e8f0;">
+        <summary style="padding:12px 14px;cursor:pointer;font-size:0.82rem;font-weight:650;color:#475569;">More options</summary>
+        <button type="button" class="nav-item-btn" id="navBtnCustomers">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+              <circle cx="9" cy="7" r="4"></circle>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+            </svg>
+          </span>
+          <span class="nav-item-text">Customers</span>
+        </div>
+      </button>
+        <button type="button" class="nav-item-btn" id="navBtnReports">
         <div class="nav-item-left">
           <span class="nav-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1895,6 +1897,7 @@
           <span class="nav-item-text">Reports</span>
         </div>
       </button>
+      </details>
 
       <div class="sidebar-footer">
         <!-- Desktop Collapse Sidebar Button -->
@@ -1911,6 +1914,13 @@
       <!-- SECTION 1: OVERVIEW DASHBOARD -->
       <section id="overviewSection">
         <div id="overviewDataStatus" role="status" aria-live="polite" class="overview-status-banner">Dashboard values are placeholders until verified backend metrics load.</div>
+        <div class="admin-simple-quicklinks" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px;">
+          <button type="button" class="btn-filter-preset" data-admin-go="demand">🥛 Update Milk Stock</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="orders">📦 View Orders</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="subscriptions">🔄 Subscriptions</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="deliveries">🚚 Deliveries</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="refunds">↩ Refund Requests</button>
+        </div>
         <div class="filter-bar">
           <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Target Date:</span>
           <button type="button" class="btn-filter-preset active" id="btnDateToday">Today</button>
@@ -3088,7 +3098,7 @@
       let deliveryPendingAddressFilterActive = false;
       const productState = {
         search: '',
-        category: 'all',
+        category: 'Fresh Milk',
         products: [],
         total: 0
       };
@@ -4701,10 +4711,14 @@
           productState.products = Array.isArray(data.products) ? data.products : [];
           productState.total = data.totalProducts || productState.products.length;
 
-          document.getElementById('kpiTotalProducts').textContent = String(data.totalProducts || 0);
-          document.getElementById('kpiLowStockCount').textContent = String(data.lowStockCount || 0);
-          document.getElementById('kpiOutOfStockCount').textContent = String(data.outOfStockCount || 0);
-          document.getElementById('kpiTotalReserved').textContent = String(data.totalReservedUnits || 0);
+          // Launch dashboard: headline metrics describe milk stock only.
+          // Other products remain in the database for a future catalog rollout.
+          const milk = productState.products.filter(p => p.category === 'Fresh Milk');
+          const available = p => Number(p.available_stock ?? (Number(p.stock_quantity || 0) - Number(p.reserved_stock || 0)));
+          document.getElementById('kpiTotalProducts').textContent = String(milk.length);
+          document.getElementById('kpiLowStockCount').textContent = String(milk.filter(p => available(p) > 0 && available(p) <= Number(p.low_stock_threshold ?? 5)).length);
+          document.getElementById('kpiOutOfStockCount').textContent = String(milk.filter(p => available(p) <= 0).length);
+          document.getElementById('kpiTotalReserved').textContent = String(milk.reduce((n,p)=> n + Number(p.reserved_stock || 0), 0));
 
           renderProductsTable();
         } catch (err) {
@@ -4966,6 +4980,11 @@
           if (accountDropdownMenu && !accountDropdownMenu.contains(e.target) && e.target !== btnAccountToggle) {
             closeAccountMenu();
           }
+        });
+
+        // One-click tasks for operators who only need everyday essentials.
+        document.querySelectorAll('[data-admin-go]').forEach(btn => {
+          btn.addEventListener('click', () => switchTab(btn.dataset.adminGo));
         });
 
         // Navigation buttons
@@ -5657,9 +5676,9 @@
         }
         document.getElementById('btnResetProductFilters')?.addEventListener('click', () => {
           productState.search = '';
-          productState.category = 'all';
+          productState.category = 'Fresh Milk';
           if (prodSearch) prodSearch.value = '';
-          if (prodCat) prodCat.value = 'all';
+          if (prodCat) prodCat.value = 'Fresh Milk';
           renderProductsTable();
         });
 
