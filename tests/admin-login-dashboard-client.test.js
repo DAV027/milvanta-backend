@@ -41,6 +41,7 @@ function bootContext() {
     },
     showLogin: (message) => events.push('login:' + message),
     showAccessDenied: (email) => events.push('denied:' + email),
+    revokeAdminSessionBestEffort: token => events.push('revoke:' + token),
     showDashboard: () => events.push('dashboard'),
     switchTab: (name) => events.push('tab:' + name),
     refreshManager: { start: () => events.push('refresh') },
@@ -84,6 +85,7 @@ test('role revoked between visits drops stored admin session', async () => {
   await ui.runBoot();
   assert.ok(ui.events.includes('remove:milvanta-admin-token'));
   assert.ok(ui.events.includes('denied:demoted@milvanta.test'));
+  assert.ok(ui.events.includes('revoke:admin-token-1'));
   assert.equal(ui.events.includes('dashboard'),false);
   assert.equal(ui.currentToken, '', 'Role revocation clears the token');
 });
