@@ -77,6 +77,13 @@ describe('Razorpay Subscription Creation & Plan Reuse Suite', () => {
       );
     }
     productId = prodRes.rows[0].id;
+
+    // Explicitly configure and confirm stock for expected successful checkout cases
+    await pool.query(
+      `UPDATE milk_capacity_defaults
+       SET is_confirmed = TRUE, daily_litres = 500, confirmed_at = NOW(), confirmed_by = $1`,
+      [customerId]
+    );
   });
 
   after(async () => {

@@ -6,9 +6,83 @@
  * across one-time orders and recurring subscription deliveries.
  */
 
-import { parseMilkVolumeInLitres } from '../server.js';
 import { parseLitresFromSize } from '../pricing.js';
-import { getTomorrowDeliveryDateYMD } from './deliveryEngine.js';
+
+/**
+ * Returns tomorrow's delivery date in Asia/Kolkata (IST) timezone formatted as YYYY-MM-DD.
+ * Zero external module dependencies to avoid circular imports.
+ */
+export function getTomorrowDeliveryDateYMD() {
+  const now = new Date();
+  const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+  const utcMs = now.getTime() + (now.getTimezoneOffset() * 60 * 1000);
+  const istNow = new Date(utcMs + istOffsetMs);
+  istNow.setDate(istNow.getDate() + 1);
+  const y = istNow.getFullYear();
+  const m = String(istNow.getMonth() + 1).padStart(2, '0');
+  const d = String(istNow.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Pure milk volume parser (in Litres) supporting 500ml, 1L, 1.5L, 2 Litre, etc.
+ * Zero external module dependencies.
+ */
+export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1, options = {}) {
+  const qNum = Math.max(1, Number(quantityNum) || 1);
+  const returnObj = Boolean(options.returnObject || options.returnMetadata);
+  if (!quantityStr || typeof quantityStr !== 'string') {
+    if (options.strict) throw new Error('invalid_quantity_unit: empty or non-string quantity');
+    return returnObj ? { litres: 0, recognized: false, unit: quantityStr || '' } : 0;
+  }
+
+  const str = quantityStr.trim().toLowerCase();
+
+  // 1. Millilitres (e.g., 250ml, 500ml, 1000ml, 1500ml)
+  const mlMatch = str.match(/^(\d+(?:\.\d+)?)\s*ml(?:\s*(?:pouch|bottle|pack))?$/i) ||
+                  str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
+  if (mlMatch) {
+    const ml = parseFloat(mlMatch[1]);
+    if (!isNaN(ml) && ml > 0) {
+      const litres = (ml / 1000) * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
+  }
+
+  // 2. Litres (e.g., 1L, 1.5L, 2 Litre, 2.5 Litres, 0.5 Litre, 5 Litre)
+  const lMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)(?:\s*(?:bottle|pouch|pack))?$/i) ||
+                 str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
+  if (lMatch) {
+    const l = parseFloat(lMatch[1]);
+    if (!isNaN(l) && l > 0) {
+      const litres = l * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
+  }
+
+  // 3. Known text fractions (e.g., "half litre", "1/2 litre")
+  if (str.includes('half') || str.includes('1/2')) {
+    const litres = 0.5 * qNum;
+    return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+  }
+
+  // 4. Raw numeric values
+  const numMatch = str.match(/^(\d+(?:\.\d+)?)$/);
+  if (numMatch) {
+    const val = parseFloat(numMatch[1]);
+    if (val >= 100) {
+      const litres = (val / 1000) * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
+    if (val > 0) {
+      const litres = val * qNum;
+      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
+    }
+  }
+
+  if (options.strict) throw new Error(`unrecognized_milk_volume_unit: "${quantityStr}"`);
+  return returnObj ? { litres: 0, recognized: false, unit: quantityStr } : 0;
+}
 
 /**
  * Determine milk type from product name or metadata
@@ -262,12 +336,20 @@ export async function getMilkCapacity(poolOrClient, targetDate) {
       ? JSON.parse(pending.notes || '{}')
       : (pending.notes || {});
 
-    const pStart = notes.startDate || (pending.created_at ? new Date(pending.created_at).toISOString().slice(0, 10) : dateStr);
-    const pDays = Number(notes.days) || (Number(notes.months) || 1) * 30;
+    // Derive actual subscription delivery start date (subscriptions deliver starting tomorrow morning or future date)
+    let pStart = notes.startDate || notes.start_date;
+    if (!pStart && notes.start_at && Number.isFinite(Number(notes.start_at))) {
+      pStart = new Date(Number(notes.start_at) * 1000).toISOString().slice(0, 10);
+    }
+    if (!pStart) {
+      pStart = getTomorrowDeliveryDateYMD();
+    }
+    const pDays = Math.max(1, Number(notes.days) || (Number(notes.months) || 1) * 30);
 
-    // Check if targetDate falls within pending subscription window
+    // Check if targetDate falls within pending subscription window [startYMD, endYMD]
     const [sy, sm, sd] = pStart.split('-').map(Number);
     const startDt = new Date(Date.UTC(sy, sm - 1, sd));
+    // Final delivery day of the continuous plan is startDt + (pDays - 1) days
     const endDt = new Date(Date.UTC(sy, sm - 1, sd + pDays - 1));
     const startYMD = startDt.toISOString().slice(0, 10);
     const endYMD = endDt.toISOString().slice(0, 10);

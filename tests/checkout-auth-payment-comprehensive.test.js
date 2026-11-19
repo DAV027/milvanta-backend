@@ -2,7 +2,8 @@ import {
   testDbConfig,
   assertTestDatabaseConfigured,
   setupDisposableTestSchema,
-  cleanupDisposableTestSchema
+  cleanupDisposableTestSchema,
+  confirmTestMilkCapacity
 } from './helpers/testDbGuard.js';
 import 'dotenv/config';
 import { describe, it, before, after } from 'node:test';
@@ -159,6 +160,9 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
        RETURNING *`
     );
     lowStockProduct = low;
+
+    // Explicitly configure and confirm stock for expected successful checkout cases
+    await confirmTestMilkCapacity(pool, { cowLitres: 500, buffaloLitres: 500, confirmedBy: adminCustomer.id });
   });
 
   after(async () => {
@@ -439,6 +443,29 @@ describe('Milvanta Checkout Authentication, Payment Lifecycle & Duplicate Preven
       });
       assert.equal(res.statusCode, 409);
       assert.equal(res.json().error, 'insufficient_stock');
+    });
+
+    it('blocks checkout with HTTP 409 unconfirmed_capacity when farm supply is not confirmed', async () => {
+      // Temporarily mark defaults as unconfirmed
+      await pool.query('UPDATE milk_capacity_defaults SET is_confirmed = FALSE');
+      try {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/v1/orders',
+          headers: { Authorization: `Bearer ${tokenA}` },
+          payload: {
+            address: validHydAddress,
+            items: [{ productId: Number(cowMilkProduct.id), quantity: 1 }],
+            idempotencyKey: crypto.randomUUID()
+          }
+        });
+        assert.equal(res.statusCode, 409);
+        const body = res.json();
+        assert.equal(body.error, 'unconfirmed_capacity');
+      } finally {
+        // Re-confirm for subsequent tests
+        await confirmTestMilkCapacity(pool, { cowLitres: 500, buffaloLitres: 500, confirmedBy: adminCustomer.id });
+      }
     });
 
     it('creates exact ₹230 order (1L Cow Milk ₹110 + 500ml Buffalo Milk ₹70 + ₹50 Delivery = 23,000 paise)', async (t) => {

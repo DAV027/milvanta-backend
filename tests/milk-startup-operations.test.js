@@ -605,15 +605,18 @@ describe('5. Subscription Lifecycle: Pause, Resume, Cancellation, Renewal', () =
       payload: { pauseStartDate: '2026-11-20', pauseEndDate: '2026-11-25' }
     });
 
-    // 2. Set capacity on tomorrow's date to 0.0 Litres
-    const { getTomorrowDeliveryDateYMD } = await import('../src/services/deliveryEngine.js');
-    const tomorrowYMD = getTomorrowDeliveryDateYMD();
+    // 2. Set capacity on the post-resume delivery date to 0.0 Litres
+    const { getNowInIST, formatDateYMD } = await import('../src/services/subscriptionService.js');
+    const istNow = getNowInIST();
+    const resumeTargetDate = istNow.getHours() >= 20
+      ? formatDateYMD(new Date(istNow.getTime() + 2 * 86400000))
+      : formatDateYMD(new Date(istNow.getTime() + 86400000));
 
     await app.inject({
       method: 'POST',
       url: '/api/v1/admin/milk-capacity/overrides',
       headers: { Authorization: `Bearer ${adminToken}` },
-      payload: { deliveryDate: tomorrowYMD, cowLitres: 0.0, buffaloLitres: 0.0, notes: 'Full date' }
+      payload: { deliveryDate: resumeTargetDate, cowLitres: 0.0, buffaloLitres: 0.0, notes: 'Full date' }
     });
 
     // 3. Attempt to resume
@@ -626,12 +629,12 @@ describe('5. Subscription Lifecycle: Pause, Resume, Cancellation, Renewal', () =
     assert.equal(res.statusCode, 409);
     assert.equal(res.json().error, 'insufficient_capacity_to_resume');
 
-    // 4. Restore capacity on tomorrow's date
+    // 4. Restore capacity on post-resume delivery date
     await app.inject({
       method: 'POST',
       url: '/api/v1/admin/milk-capacity/overrides',
       headers: { Authorization: `Bearer ${adminToken}` },
-      payload: { deliveryDate: tomorrowYMD, cowLitres: 50.0, buffaloLitres: 50.0, notes: 'Restored capacity' }
+      payload: { deliveryDate: resumeTargetDate, cowLitres: 50.0, buffaloLitres: 50.0, notes: 'Restored capacity' }
     });
   });
 
@@ -660,6 +663,181 @@ describe('5. Subscription Lifecycle: Pause, Resume, Cancellation, Renewal', () =
 
     const check = await pool.query('SELECT status FROM customer_subscriptions WHERE id = $1', [subId]);
     assert.equal(check.rows[0].status, 'cancelled');
+  });
+});
+
+describe('5B. Advanced Reservation Concurrency, Cross-Date Safety & Resumption Competition', () => {
+  it('prevents overbooking when two concurrent subscription purchases compete for remaining capacity', async () => {
+    const { checkSubscriptionCapacity } = await import('../src/services/milkCapacityService.js');
+    const testStartDate = '2026-12-10';
+
+    // Set confirmed capacity for cow milk to 40L baseline
+    await pool.query('UPDATE milk_capacity_defaults SET is_confirmed = TRUE, daily_litres = 40');
+
+    const client1 = await pool.connect();
+    const client2 = await pool.connect();
+    let client1Result = null;
+    let client2Result = null;
+    let client1Error = null;
+    let client2Error = null;
+
+    try {
+      // Simulate two concurrent checkouts, each requesting 30L/day for 3 days
+      const p1 = (async () => {
+        try {
+          await client1.query('BEGIN');
+          client1Result = await checkSubscriptionCapacity(client1, {
+            startDate: testStartDate,
+            durationDays: 3,
+            milkType: 'cow',
+            litresPerDay: 30
+          });
+          // Commit reservation
+          await client1.query(`
+            INSERT INTO customer_subscriptions (
+              customer_id, product_name, quantity, quantity_num, cost_per_day_paise, status, next_delivery, notes
+            ) VALUES (
+              $1, 'Pure Fresh Cow Milk', '30 Litre', 30, 315000, 'active', 'Tomorrow, 6:00 AM',
+              $2::jsonb
+            )
+          `, [customerA.user.id, JSON.stringify({ startDate: testStartDate, days: 3, paidThroughDate: '2026-12-12' })]);
+          await client1.query('COMMIT');
+        } catch (e) {
+          await client1.query('ROLLBACK').catch(() => {});
+          client1Error = e;
+        }
+      })();
+
+      const p2 = (async () => {
+        try {
+          await client2.query('BEGIN');
+          client2Result = await checkSubscriptionCapacity(client2, {
+            startDate: testStartDate,
+            durationDays: 3,
+            milkType: 'cow',
+            litresPerDay: 30
+          });
+          await client2.query(`
+            INSERT INTO customer_subscriptions (
+              customer_id, product_name, quantity, quantity_num, cost_per_day_paise, status, next_delivery, notes
+            ) VALUES (
+              $1, 'Pure Fresh Cow Milk', '30 Litre', 30, 315000, 'active', 'Tomorrow, 6:00 AM',
+              $2::jsonb
+            )
+          `, [customerB.user.id, JSON.stringify({ startDate: testStartDate, days: 3, paidThroughDate: '2026-12-12' })]);
+          await client2.query('COMMIT');
+        } catch (e) {
+          await client2.query('ROLLBACK').catch(() => {});
+          client2Error = e;
+        }
+      })();
+
+      await Promise.all([p1, p2]);
+
+      // Exactly one must succeed and one must fail with INSUFFICIENT_CAPACITY
+      const successCount = (client1Result?.ok ? 1 : 0) + (client2Result?.ok ? 1 : 0);
+      assert.equal(successCount, 1, 'Exactly one concurrent subscription purchase must win the capacity');
+      const winningError = client1Error || client2Error;
+      assert.ok(winningError, 'The competing checkout must receive an error');
+      assert.equal(winningError.code, 'INSUFFICIENT_CAPACITY');
+    } finally {
+      client1.release();
+      client2.release();
+    }
+  });
+
+  it('resumed subscription competes transactionally with a new order and prevents overbooking', async () => {
+    const testDate = '2027-02-01';
+
+    // Set capacity to 30L for testDate
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/milk-capacity/overrides',
+      headers: { Authorization: `Bearer ${adminToken}` },
+      payload: { deliveryDate: testDate, cowLitres: 30.0, buffaloLitres: 30.0, notes: 'Competition test' }
+    });
+
+    // 1. Create a paused 10L subscription for Customer B
+    const subQ = await pool.query(`
+      INSERT INTO customer_subscriptions (
+        customer_id, product_name, quantity, quantity_num, cost_per_day_paise, status, next_delivery, notes
+      ) VALUES (
+        $1, 'Pure Fresh Cow Milk', '10 Litre', 10, 105000, 'paused', '2027-02-01, 6:00 AM – 7:00 AM',
+        $2::jsonb
+      ) RETURNING id
+    `, [customerB.user.id, JSON.stringify({ startDate: testDate, days: 1, paidThroughDate: testDate })]);
+    const competingSubId = subQ.rows[0].id;
+
+    // 2. Customer A places a one-time order for 22 Litres (leaving only 8L remaining, which is < 10L)
+    const orderRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/orders',
+      headers: { Authorization: `Bearer ${tokenA}` },
+      payload: {
+        address: validAddressA,
+        deliveryDate: testDate,
+        items: [{ productId: 101, name: 'Pure Fresh Cow Milk', quantity: 22, unitPricePaise: 11000, size: '1 Litre' }],
+        idempotencyKey: crypto.randomUUID()
+      }
+    });
+    assert.equal(orderRes.statusCode, 201, 'Order for 22L should succeed');
+
+    // 3. Customer B attempts to resume the 10L subscription on testDate
+    const resumeRes = await app.inject({
+      method: 'POST',
+      url: `/api/v1/subscriptions/${competingSubId}/resume`,
+      headers: { Authorization: `Bearer ${tokenB}` }
+    });
+
+    // Must be rejected because only 8L remains (requires 10L)
+    assert.equal(resumeRes.statusCode, 409);
+    assert.equal(resumeRes.json().error, 'insufficient_capacity_to_resume');
+  });
+
+  it('temporary pending-authorization reservations hold capacity across delivery start and final day', async () => {
+    const { getMilkCapacity } = await import('../src/services/milkCapacityService.js');
+    const day1YMD = '2027-01-15';
+    const day2YMD = '2027-01-16';
+    const day3YMD = '2027-01-17';
+    const day4YMD = '2027-01-18';
+
+    // Set baseline capacity of 100L
+    await pool.query('UPDATE milk_capacity_defaults SET is_confirmed = TRUE, daily_litres = 100');
+
+    // Insert a pending_authorization subscription for 3 days starting 2027-01-15 (duration = 3 days, 15L/day)
+    const pendingQ = await pool.query(`
+      INSERT INTO customer_subscriptions (
+        customer_id, product_name, quantity, quantity_num, cost_per_day_paise, status, next_delivery, notes, created_at
+      ) VALUES (
+        $1, 'Pure Fresh Cow Milk', '15 Litre', 15, 157500, 'pending_authorization', 'Tomorrow, 6:00 AM',
+        $2::jsonb, NOW()
+      ) RETURNING id
+    `, [customerA.user.id, JSON.stringify({ startDate: day1YMD, days: 3 })]);
+    const pendingId = pendingQ.rows[0].id;
+
+    try {
+      // Day 1 (start date): must hold 15L reservation
+      const cap1 = await getMilkCapacity(pool, day1YMD);
+      assert.equal(cap1.cow.subscriptionLitres, 15.0);
+      assert.equal(cap1.cow.remainingLitres, 85.0);
+
+      // Day 2 (middle date): must hold 15L reservation
+      const cap2 = await getMilkCapacity(pool, day2YMD);
+      assert.equal(cap2.cow.subscriptionLitres, 15.0);
+      assert.equal(cap2.cow.remainingLitres, 85.0);
+
+      // Day 3 (final delivery day): must hold 15L reservation
+      const cap3 = await getMilkCapacity(pool, day3YMD);
+      assert.equal(cap3.cow.subscriptionLitres, 15.0);
+      assert.equal(cap3.cow.remainingLitres, 85.0);
+
+      // Day 4 (beyond final day): must NOT hold reservation
+      const cap4 = await getMilkCapacity(pool, day4YMD);
+      assert.equal(cap4.cow.subscriptionLitres, 0.0);
+      assert.equal(cap4.cow.remainingLitres, 100.0);
+    } finally {
+      await pool.query('DELETE FROM customer_subscriptions WHERE id = $1', [pendingId]);
+    }
   });
 });
 

@@ -184,6 +184,21 @@ export async function setupDisposableTestSchema() {
 }
 
 /**
+ * Explicitly configures and confirms daily farm milk capacity in disposable test schemas
+ * for tests expecting successful checkout/order creation.
+ */
+export async function confirmTestMilkCapacity(poolOrClient, { cowLitres = 500, buffaloLitres = 500, confirmedBy = null } = {}) {
+  await poolOrClient.query(
+    `UPDATE milk_capacity_defaults
+     SET is_confirmed = TRUE,
+         daily_litres = CASE WHEN milk_type = 'cow' THEN $1::numeric ELSE $2::numeric END,
+         confirmed_at = NOW(),
+         confirmed_by = $3`,
+    [Number(cowLitres), Number(buffaloLitres), confirmedBy]
+  );
+}
+
+/**
  * Cleans up and drops the disposable test schema, and independently verifies its removal.
  */
 export async function cleanupDisposableTestSchema(pool, schemaName) {

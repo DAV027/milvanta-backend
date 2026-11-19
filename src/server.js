@@ -1664,7 +1664,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           totalAmount: calculatedTotalAmountPaise,
           dailyRate: dailyRatePaise / 100,
           totalDays,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD(),
           startOffset: offset,
           planId: oldSub.razorpay_plan_id
         };
@@ -1782,7 +1782,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           months,
           days: totalDays,
           startOffset: offset,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD(),
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
@@ -4786,70 +4786,10 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
 });
 
 /**
- * Authoritative Milk Volume Parser in Litres
+ * Re-export pure milk volume parser from milkCapacityService
  * Supports 500ml, 1L, 1.5L, 2L, etc., normalized with quantityNum
  */
-export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1, options = {}) {
-  const qNum = Math.max(1, Number(quantityNum) || 1);
-  const returnObj = Boolean(options.returnObject || options.returnMetadata);
-  if (!quantityStr || typeof quantityStr !== 'string') {
-    if (options.strict) throw new Error('invalid_quantity_unit: empty or non-string quantity');
-    return returnObj ? { litres: 0, recognized: false, unit: quantityStr || '' } : 0;
-  }
-
-  const str = quantityStr.trim().toLowerCase();
-
-  // 1. Millilitres (e.g., 250ml, 500ml, 1000ml, 1500ml)
-  const mlMatch = str.match(/^(\d+(?:\.\d+)?)\s*ml(?:\s*(?:pouch|bottle|pack))?$/i) ||
-                  str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
-  if (mlMatch) {
-    const ml = parseFloat(mlMatch[1]);
-    if (!isNaN(ml) && ml > 0) {
-      const litres = (ml / 1000) * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // 2. Litres (e.g., 1L, 1.5L, 2 Litre, 2.5 Litres, 0.5 Litre, 5 Litre)
-  const lMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)(?:\s*(?:bottle|pouch|pack))?$/i) ||
-                 str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
-  if (lMatch) {
-    const l = parseFloat(lMatch[1]);
-    if (!isNaN(l) && l > 0) {
-      const litres = l * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // 3. Known text fractions (e.g., "half litre", "1/2 litre")
-  if (str.includes('half') || str.includes('1/2')) {
-    const litres = 0.5 * qNum;
-    return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-  }
-
-  // 4. Raw numeric values
-  const numMatch = str.match(/^(\d+(?:\.\d+)?)$/);
-  if (numMatch) {
-    const val = parseFloat(numMatch[1]);
-    if (val >= 100) {
-      const litres = (val / 1000) * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-    if (val > 0) {
-      const litres = val * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // Unrecognized unit: DO NOT silently assume 500ml!
-  if (options.strict) {
-    const err = new Error(`unrecognized_milk_pack_format / unit: "${quantityStr}"`);
-    err.statusCode = 400;
-    throw err;
-  }
-
-  return returnObj ? { litres: 0, recognized: false, unit: quantityStr } : 0;
-}
+export { parseMilkVolumeInLitres } from './services/milkCapacityService.js';
 
 // ---------- Admin Customer Management ----------
 app.get('/api/v1/admin/customers', { preHandler: app.requireAdmin }, async (request, reply) => {

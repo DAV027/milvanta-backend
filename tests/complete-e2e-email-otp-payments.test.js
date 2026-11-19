@@ -95,6 +95,13 @@ describe('MILVANTA COMPLETE END-TO-END VERIFICATION: EMAIL, OTP, PAYMENTS & SUBS
     });
     assert.equal(adminLoginRes.statusCode, 200);
     adminToken = JSON.parse(adminLoginRes.body).token;
+
+    // Explicitly configure and confirm stock for checkout integration cases
+    await pool.query(
+      `UPDATE milk_capacity_defaults
+       SET is_confirmed = TRUE, daily_litres = 500, confirmed_at = NOW(), confirmed_by = $1`,
+      [adminUser.id]
+    );
   });
 
   after(async () => {
