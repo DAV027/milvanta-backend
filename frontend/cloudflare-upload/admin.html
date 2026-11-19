@@ -2716,8 +2716,9 @@
           if (this.activeController) {
             this.activeController.abort();
           }
-          this.activeController = new AbortController();
-          const signal = this.activeController.signal;
+          const controller = new AbortController();
+          this.activeController = controller;
+          const signal = controller.signal;
 
           this.syncing = true;
           this.state = 'syncing';
@@ -2734,11 +2735,13 @@
               await loadActiveTabData(signal);
             }
 
+            // A replaced, aborted or signed-out refresh must not report success.
+            if (signal.aborted || this.activeController !== controller) return;
             this.lastSuccessTime = formatISTTimeOnly();
             this.state = 'idle';
             this.secondsLeft = 30;
           } catch (err) {
-            if (err.name === 'AbortError') return;
+            if (signal.aborted || this.activeController !== controller || err.name === 'AbortError') return;
             if (err.message && (err.message.includes('Session expired') || err.message.includes('Access denied'))) {
               this.onAuthExpired();
               return;
@@ -2746,9 +2749,12 @@
             console.error('Auto-refresh cycle error:', err);
             this.state = 'error';
           } finally {
-            this.syncing = false;
-            this.activeController = null;
-            this.updateUI();
+            // Old concurrent refreshes may finish later; preserve the newest.
+            if (this.activeController === controller) {
+              this.syncing = false;
+              this.activeController = null;
+              this.updateUI();
+            }
           }
         }
       };
