@@ -1,10 +1,7 @@
+// Small-startup launch catalog: only fresh milk is offered for new orders.
+const MILK_ONLY_STOREFRONT = true;
 const categories = [
-  { name: 'All', image: '' },
-  { name: 'Fresh Milk', label: 'Pure Fresh Milk', image: 'assets/milvanta-cow-milk.jpg' },
-  { name: 'Dairy Products', image: 'assets/milvanta-paneer.jpg' },
-  { name: 'Baking Essentials', image: 'assets/walnut-raagi-brownie.jpg' },
-  { name: 'Healthy Living', image: 'assets/raagi-cookies.jpg' },
-  { name: 'Indian Pickles', image: 'assets/vegetarian-pickles-menu.jpg' }
+  { name: 'Fresh Milk', label: 'Pure Fresh Milk', image: 'assets/milvanta-cow-milk.jpg' }
 ];
 
 // Rich fallback catalog with complete photography, dietary flags, and ratings
@@ -1074,14 +1071,11 @@ async function loadCatalog() {
   }
   try {
     const data = await apiRequest('/api/v1/products');
-    if (!Array.isArray(data.products) || data.products.length === 0) throw new Error('Live catalog empty');
+    if (!Array.isArray(data.products)) throw new Error('Invalid live catalog');
     
     // Merge live DB products with rich client metadata (excluding any bone-in pickles)
     const liveProducts = data.products
-      .filter((product) => {
-        const pName = String(product.name || '').toLowerCase();
-        return !pName.includes('(bone)') || pName.includes('boneless');
-      })
+      .filter((product) => isFreshMilkProduct(product))
       .map((product) => {
         const id = Number(product.id);
         const pricePaise = Number(product.price_paise);
@@ -1104,7 +1098,7 @@ async function loadCatalog() {
         description: product.description || existing.description || '',
         ingredients: existing.ingredients || [],
         image: existing.image || product.image_url || 'assets/milvanta-cow-milk.jpg',
-        stockQuantity: isNaN(stockQuantity) ? 50 : stockQuantity,
+        stockQuantity: Number.isFinite(stockQuantity) ? Math.max(0, stockQuantity) : 0,
         variants: existing.variants || null,
         isVeg: existing.isVeg !== undefined ? existing.isVeg : true,
         rating: existing.rating || 4.8,
@@ -1114,11 +1108,16 @@ async function loadCatalog() {
       };
     });
 
-    const liveNames = new Set(liveProducts.map(p => p.name.toLowerCase()));
-    const missingFallbacks = products.filter(p => !liveNames.has(p.name.toLowerCase()));
-
+    // Never restore products absent from the live catalog or deactivated by admin.
     state.catalogConnected = true;
-    products = [...liveProducts, ...missingFallbacks];
+    products = liveProducts;
+    const allowedIds = new Set(liveProducts.map(product => Number(product.id)));
+    const oldCount = state.cart.length;
+    state.cart = state.cart.filter(item => allowedIds.has(Number(item.id)));
+    if (state.cart.length !== oldCount) {
+      saveCart();
+      state.checkoutNotice = 'Your cart now includes only milk currently sold by Milvanta.';
+    }
     window.products = products;
     $('#storeNotice')?.classList.add('hidden');
     renderCategories();
@@ -1212,6 +1211,7 @@ function getCartItemQuantity(productId, variantSize = '') {
 function visibleProducts() {
   const term = state.searchTerm.trim().toLowerCase();
   let list = products.filter((p) => {
+    if (MILK_ONLY_STOREFRONT && !isFreshMilkProduct(p)) return false;
     const matchesCat = state.selectedCategory === 'All' || p.category === state.selectedCategory;
     const matchesDiet = state.dietaryFilter === 'all' || (state.dietaryFilter === 'veg' && p.isVeg) || (state.dietaryFilter === 'non-veg' && !p.isVeg);
     const searchString = `${p.name} ${p.shortName || ''} ${p.category} ${p.description || ''} ${(p.ingredients || []).join(' ')}`.toLowerCase();
@@ -1770,7 +1770,7 @@ function openProductModal(id, initialMode = 'onetime') {
   }
 
   // Stock availability badge & Add to Cart button state
-  const stock = p.stockQuantity !== undefined ? p.stockQuantity : 50;
+  const stock = Number.isFinite(Number(p.stockQuantity)) ? Number(p.stockQuantity) : 0;
   const stockBadge = $('#modalStock');
   const addBtn = $('#modalAddToCart');
 
@@ -1964,10 +1964,22 @@ function closeRecipeModal() {
 function addToCart(id, quantity = 1, variant = null) {
   const p = findProductById(id);
   if (!p) return;
+  if (MILK_ONLY_STOREFRONT && !isFreshMilkProduct(p)) {
+    state.checkoutNotice = 'Only Pure Fresh Milk is available to order right now.';
+    renderCart();
+    setCartOpen(true);
+    return;
+  }
+  if (!state.catalogConnected) {
+    state.checkoutNotice = 'Live milk availability is temporarily unavailable. Please retry shortly.';
+    renderCart();
+    setCartOpen(true);
+    return;
+  }
   const numId = Number(p.id);
 
   // Prevent adding out-of-stock items
-  const stock = p.stockQuantity !== undefined ? p.stockQuantity : 50;
+  const stock = Number.isFinite(Number(p.stockQuantity)) ? Number(p.stockQuantity) : 0;
   if (stock <= 0) {
     state.checkoutNotice = `${p.name} is currently out of stock.`;
     renderCart();
@@ -2919,11 +2931,8 @@ function checkSubscriptionReturn() {
   const urlParams = new URLSearchParams(window.location.search);
   const catParam = urlParams.get('category');
   if (catParam) {
-    if (catParam.toLowerCase() === 'milk' || catParam.toLowerCase() === 'fresh milk') {
-      state.selectedCategory = 'Fresh Milk';
-    } else {
-      state.selectedCategory = catParam;
-    }
+    // Legacy category URLs cannot reveal hidden launch products.
+    state.selectedCategory = 'Fresh Milk';
     renderCategories();
     renderCatalog();
   }
@@ -3225,7 +3234,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } else {
       state.viewMode = 'grid';
-      state.selectedCategory = 'All';
+      state.selectedCategory = 'Fresh Milk';
       state.searchTerm = '';
       if ($('#searchInput')) $('#searchInput').value = '';
     }
@@ -3569,7 +3578,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Reset filters
     if (event.target.closest('[data-reset-filter]')) {
-      state.selectedCategory = 'All';
+      state.selectedCategory = 'Fresh Milk';
       state.dietaryFilter = 'all';
       state.searchTerm = '';
       state.carouselIndex = 1;
