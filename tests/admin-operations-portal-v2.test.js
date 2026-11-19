@@ -135,7 +135,8 @@ describe('Milvanta Admin Operations Portal V2 Suite', () => {
       '/api/v1/admin/demand-forecast',
       '/api/v1/admin/demand-forecast/export',
       '/api/v1/admin/reports',
-      '/api/v1/admin/reports/export'
+      '/api/v1/admin/reports/export',
+      '/api/v1/admin/whatsapp/overview'
     ];
 
     for (const ep of protectedGetEndpoints) {
@@ -171,6 +172,26 @@ describe('Milvanta Admin Operations Portal V2 Suite', () => {
       });
       assert.equal(res.statusCode, 403);
     });
+  });
+
+  it('admin sees secret-safe WhatsApp readiness without sending anything', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/whatsapp/overview',
+      headers: getAuthHeaders(adminToken)
+    });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['cache-control'], 'no-store');
+    const body = response.json();
+    assert.equal(body.readOnly, true);
+    assert.equal(body.channel, 'whatsapp');
+    assert.equal(typeof body.enabled, 'boolean');
+    assert.equal(body.metaPhoneRegistered, 'not_checked');
+    assert.ok(body.outbox);
+    assert.equal(typeof body.outbox.available, 'boolean');
+    assert.equal(JSON.stringify(body).includes('WHATSAPP_ACCESS_TOKEN'), false);
+    assert.equal(JSON.stringify(body).includes('WHATSAPP_APP_SECRET'), false);
+    assert.equal(JSON.stringify(body).includes('WHATSAPP_VERIFY_TOKEN'), false);
   });
 
   describe('2. Daily Deliveries Preview, Generation & Manifest Export', () => {
