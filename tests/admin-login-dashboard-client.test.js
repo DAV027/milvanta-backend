@@ -120,3 +120,102 @@ test('overview marks metrics stale instead of silently displaying previous figur
   assert.match(page, /Metrics unavailable\. Displayed values may be stale/);
   assert.match(page, /await loadOverview\(signal\) === false/);
 });
+
+
+test('admin row-action helpers register real click handlers without HTML attributes', () => {
+  const calls = [];
+  class FakeNode {
+    constructor(tag) {
+      this.tag = tag;
+      this.style = {};
+      this.attrs = {};
+      this.children = [];
+    }
+    setAttribute(key, value) { this.attrs[key] = String(value); }
+    addEventListener(event, callback) { calls.push({ event, callback }); }
+    appendChild(node) { this.children.push(node); }
+  }
+  const context = {
+    Node: FakeNode,
+    document: {
+      createElement: tag => new FakeNode(tag),
+      createTextNode: text => ({ value: text })
+    }
+  };
+  vm.createContext(context);
+  vm.runInContext(extract('      function el(tag, attrs = {}, children = []) {',
+    '      function empty(node) {') + '\nglobalThis.makeNode = el;', context);
+  let clicks = 0;
+  const button = context.makeNode('button', {
+    className: 'btn-row-action',
+    textContent: '<img src=x onerror=alert(1)>',
+    addEventListener: ['click', () => { clicks++; }]
+  });
+  assert.equal(button.textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(button.attrs.addEventListener, undefined, 'Must not serialize a callback into markup');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].event, 'click');
+  calls[0].callback();
+  assert.equal(clicks, 1, 'The button must actually run its handler');
+  assert.throws(() => context.makeNode('a', {addEventListener:['click','evil string']}), /Invalid admin DOM event handler/);
+});
+
+test('old admin API response after account switch cannot return data to the new session', async () => {
+  const ui = {
+    API_BASE: 'https://milvanta.test',
+    currentToken: 'old-token',
+    adminAuthEpoch: 1,
+    FormData: class MockFormData {},
+    refreshManager: {state:'idle', updateUI() {}, onAuthExpired() {}}
+  };
+  vm.createContext(ui);
+  vm.runInContext(extract('      async function apiRequest(endpoint, options = {}) {',
+    '      // UI View state switches') + '\nglobalThis.runAPI = apiRequest;', ui);
+  let resolveFetch;
+  ui.fetch = () => new Promise(resolve => { resolveFetch = resolve; });
+  const pending = ui.runAPI('/api/v1/admin/stats');
+  ui.currentToken = 'new-token';
+  ui.adminAuthEpoch = 2;
+  resolveFetch({
+    ok: true, status:200,
+    headers: {get:()=>'application/json'},
+    json:async()=>({totalRevenuePaise:500000})
+  });
+  await assert.rejects(pending, error => error.name === 'AbortError');
+  assert.equal(ui.refreshManager.state, 'idle');
+});
+
+test('overlapping forced dashboard refresh cannot let earlier request clear newer state', async () => {
+  const pendingLoads = [];
+  const elements = new Map();
+  const ui = {
+    currentToken: 'admin-token',
+    activeTab: 'overview',
+    formatISTTimeOnly: () => '12:00 IST',
+    document: { getElementById(id) {
+      if (!elements.has(id)) elements.set(id,{textContent:'',className:''});
+      return elements.get(id);
+    }},
+    loadOverview(signal) {
+      return new Promise(resolve => { pendingLoads.push({resolve,signal}); });
+    }
+  };
+  vm.createContext(ui);
+  vm.runInContext(extract('      const refreshManager = {',
+    '      // API Request helper') + '\nglobalThis.manager = refreshManager;', ui);
+  const first = ui.manager.executeSync(true);
+  assert.equal(pendingLoads.length, 1);
+  const second = ui.manager.executeSync(true);
+  assert.equal(pendingLoads.length, 2);
+  assert.equal(pendingLoads[0].signal.aborted, true);
+  pendingLoads[0].resolve(true);
+  await first;
+  assert.equal(ui.manager.state,'syncing');
+  assert.equal(ui.manager.syncing,true);
+  assert.equal(ui.manager.activeController.signal, pendingLoads[1].signal);
+  pendingLoads[1].resolve(true);
+  await second;
+  assert.equal(ui.manager.state,'idle');
+  assert.equal(ui.manager.syncing,false);
+  assert.equal(ui.manager.lastSuccessTime,'12:00 IST');
+});
