@@ -31,6 +31,83 @@ async function seedCustomer(email, isAdmin) {
   return { customer, password };
 }
 
+describe('Dedicated administrator authentication: real role, no customer session leakage', () => {
+  it('accepts admin credentials, provides no-store response, and revokes on logout', async () => {
+    const { customer, password } = await seedCustomer('admin-only-login@milvanta.test', true);
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/auth/login',
+      payload: { email: customer.email.toUpperCase(), password }
+    });
+    assert.equal(login.statusCode, 200, login.payload);
+    assert.match(login.headers['cache-control'], /no-store/);
+    const { token, user, customer: responseCustomer } = login.json();
+    assert.equal(user.is_admin, true);
+    assert.equal(responseCustomer.is_admin, true);
+    assert.equal(typeof token, 'string');
+    const active = await app.inject({
+      method:'GET',url:'/api/v1/admin/stats',
+      headers:{Authorization:'Bearer ' + token}
+    });
+    assert.equal(active.statusCode,200,active.payload);
+    const logout = await app.inject({
+      method:'POST',url:'/api/v1/auth/logout',
+      headers:{Authorization:'Bearer ' + token}
+    });
+    assert.equal(logout.statusCode,200,logout.payload);
+    const afterLogout = await app.inject({
+      method:'GET',url:'/api/v1/auth/me',
+      headers:{Authorization:'Bearer ' + token}
+    });
+    assert.equal(afterLogout.statusCode,401,afterLogout.payload);
+  });
+
+  it('rejects correct customer credentials without creating an admin session', async () => {
+    const { customer, password } = await seedCustomer('customer-no-admin-token@milvanta.test', false);
+    const count = async () => Number((await fixture.pool.query(
+      'SELECT count(*) AS n FROM customer_sessions WHERE customer_id = $1', [customer.id]
+    )).rows[0].n);
+    const before = await count();
+    const res = await app.inject({
+      method:'POST',url:'/api/v1/admin/auth/login',
+      payload:{email:customer.email,password}
+    });
+    assert.equal(res.statusCode,403,res.payload);
+    assert.equal(res.json().error,'forbidden_admin_required');
+    assert.equal('token' in res.json(),false);
+    assert.equal(await count(),before,'Denied login must not create a session');
+  });
+
+  it('wrong credentials and unknown users never create sessions or disclose a token', async () => {
+    const { customer } = await seedCustomer('wrong-admin-password@milvanta.test', true);
+    for(const email of [customer.email,'missing-admin@milvanta.test']){
+      const response = await app.inject({
+        method:'POST',url:'/api/v1/admin/auth/login',
+        payload:{email,password:'incorrect password'}
+      });
+      assert.equal(response.statusCode,401,response.payload);
+      assert.equal(response.json().error,'invalid_email_or_password');
+      assert.equal('token' in response.json(),false);
+    }
+  });
+
+  it('immediately rejects admin requests when an operator loses the role', async () => {
+    const { customer, password } = await seedCustomer('revoked-admin@milvanta.test',true);
+    const login = await app.inject({
+      method:'POST',url:'/api/v1/admin/auth/login',
+      payload:{email:customer.email,password}
+    });
+    assert.equal(login.statusCode,200,login.payload);
+    const token=login.json().token;
+    await fixture.pool.query('UPDATE customers SET is_admin = FALSE WHERE id = $1',[customer.id]);
+    const denied=await app.inject({
+      method:'GET',url:'/api/v1/admin/stats',
+      headers:{Authorization:'Bearer ' + token}
+    });
+    assert.equal(denied.statusCode,403,denied.payload);
+  });
+});
+
 describe('Admin login reads the authoritative PostgreSQL role', () => {
   it('returns admin role on login and allows the protected admin endpoint', async () => {
     const { customer, password } = await seedCustomer('admin-login-fixture@milvanta.test', true);
