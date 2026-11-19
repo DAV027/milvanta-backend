@@ -9,6 +9,13 @@ on:
       - 'tests/email-receipt-amount-validation.test.js'
       - 'scripts/preview-email-templates.mjs'
       - 'src/server.js'
+      - 'frontend/index.html'
+      - 'frontend/cloudflare-upload/index.html'
+      - 'frontend/js/script.js'
+      - 'frontend/cloudflare-upload/js/script.js'
+      - 'frontend/js/profile.js'
+      - 'frontend/cloudflare-upload/js/profile.js'
+      - 'tests/milk-launch-order-refund-status.test.js'
       - 'frontend/admin.html'
       - 'frontend/cloudflare-upload/admin.html'
       - 'tests/admin-login-dashboard-client.test.js'
@@ -58,6 +65,9 @@ jobs:
           node --check tests/branded-email-templates.test.js
           node --check tests/email-receipt-amount-validation.test.js
           node --check src/server.js
+          node --check frontend/js/script.js
+          node --check frontend/js/profile.js
+          node --check tests/milk-launch-order-refund-status.test.js
           node --check tests/admin-login-dashboard-client.test.js
           node --check tests/admin-login-role-projection.test.js
           node --check src/services/deliveryEngine.js
@@ -269,3 +279,41 @@ jobs:
           node --test --test-concurrency=1 \
             tests/admin-login-role-projection.test.js \
             tests/admin-login-dashboard-client.test.js
+
+  # Startup milk-only storefront and customer refund status, test database only.
+  milk-launch-refund-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: milvanta_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d milvanta_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      NODE_ENV: test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/milvanta_test
+      DATABASE_SSL: 'false'
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v4
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Confirm isolated disposable database
+        run: |
+          node --input-type=module -e "import {testDbConfig,assertTestDatabaseConfigured} from './tests/helpers/testDbGuard.js';assertTestDatabaseConfigured();if(process.env.NODE_ENV!=='test'||testDbConfig.dbName!=='milvanta_test'||!['127.0.0.1','localhost'].includes(testDbConfig.hostname))process.exit(1)"
+      - name: Test customer refunds, milk category launch, and admin parity
+        run: node --test --test-concurrency=1 tests/milk-launch-order-refund-status.test.js
