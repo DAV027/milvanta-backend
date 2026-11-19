@@ -220,3 +220,40 @@ test('overlapping forced dashboard refresh cannot let earlier request clear newe
   assert.equal(ui.manager.syncing,false);
   assert.equal(ui.manager.lastSuccessTime,'12:00 IST');
 });
+
+
+test('report export begun in an old admin session is discarded after logout', async () => {
+  let resolveFetch;
+  let downloaded = false;
+  const alerts = [];
+  const ui = {
+    currentToken: 'admin-one',
+    adminAuthEpoch: 2,
+    API_BASE: 'https://milvanta.test',
+    URL: {
+      createObjectURL() { return 'blob:fake'; },
+      revokeObjectURL() {}
+    },
+    document: {
+      createElement() { return {click() { downloaded = true; }}; },
+      body: {appendChild() {},removeChild() {}}
+    },
+    alert: message => alerts.push(message)
+  };
+  vm.createContext(ui);
+  vm.runInContext(extract('      async function downloadExportFile(endpoint, filename) {',
+    '      // Check auth and bootstrap'), ui);
+  vm.runInContext('globalThis.runExport=downloadExportFile;', ui);
+  ui.fetch = () => new Promise(resolve => { resolveFetch = resolve; });
+  const operation = ui.runExport('/api/v1/admin/reports/export','report.csv');
+  ui.currentToken = '';
+  ui.adminAuthEpoch++;
+  resolveFetch({
+    ok:true,
+    status:200,
+    blob:async()=>({some:'private admin data'})
+  });
+  await operation;
+  assert.equal(downloaded,false);
+  assert.deepEqual(alerts,[]);
+});
