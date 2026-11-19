@@ -1291,10 +1291,10 @@
         <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; color: #991b1b; text-align: left;">
           <div style="font-weight: 700; font-size: 1rem; margin-bottom: 6px;">🚫 Administrator Access Required</div>
           <p style="font-size: 0.825rem; margin: 0 0 10px; line-height: 1.4;">
-            Your account (<strong id="deniedUserEmail">current user</strong>) is signed in as a customer, but does not have administrator authorization (<code style="background: #fee2e2; padding: 2px 4px; border-radius: 4px;">is_admin = TRUE</code>).
+            This account (<strong id="deniedUserEmail">current user</strong>) does not have administrator privileges. Customer and admin access are separate.
           </p>
           <p style="font-size: 0.8rem; margin: 0; color: #7f1d1d;">
-            To promote this account, run <code style="background: #fee2e2; padding: 2px 4px; border-radius: 4px;">node scripts/promote-admin.js &lt;email&gt;</code> with operator approval.
+            If you should have administrator access, contact the Milvanta account owner. Never share your password or an administrator token.
           </p>
         </div>
         <button type="button" class="btn-reset" id="btnSwitchAccount" style="width: 100%; margin-top: 14px; padding: 10px;">Sign in with different account</button>
@@ -2530,6 +2530,15 @@
           if (k === 'className') element.className = v;
           else if (k === 'textContent') element.textContent = v;
           else if (k === 'style' && typeof v === 'object') Object.assign(element.style, v);
+          else if (k === 'addEventListener') {
+            // Bind actual click handlers instead of serializing a callback
+            // array into a nonfunctional HTML attribute.
+            if (!Array.isArray(v) || v.length !== 2 ||
+                typeof v[0] !== 'string' || typeof v[1] !== 'function') {
+              throw new TypeError('Invalid admin DOM event handler');
+            }
+            element.addEventListener(v[0], v[1]);
+          }
           else if (k.startsWith('data-')) element.setAttribute(k, v);
           else element.setAttribute(k, v);
         }
@@ -2746,10 +2755,18 @@
 
       // API Request helper
       async function apiRequest(endpoint, options = {}) {
+        const requestToken = currentToken;
+        const requestEpoch = adminAuthEpoch;
+        if (!requestToken) throw new Error('Admin sign-in required');
+        const assertCurrentAdmin = () => {
+          if (requestEpoch !== adminAuthEpoch || requestToken !== currentToken) {
+            const stale = new Error('Aborted stale administrator request');
+            stale.name = 'AbortError';
+            throw stale;
+          }
+        };
         const headers = { ...options.headers };
-        if (currentToken) {
-          headers['Authorization'] = 'Bearer ' + currentToken;
-        }
+        headers['Authorization'] = 'Bearer ' + requestToken;
         if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
           headers['Content-Type'] = 'application/json';
           options.body = JSON.stringify(options.body);
@@ -2762,6 +2779,7 @@
         let res;
         try {
           res = await fetch(API_BASE + endpoint, fetchOptions);
+          assertCurrentAdmin();
         } catch (fetchErr) {
           if (fetchErr.name === 'AbortError') throw fetchErr;
           refreshManager.state = 'error';
@@ -2771,6 +2789,7 @@
 
         if (res.status === 401 || res.status === 403) {
           const errData = await res.json().catch(() => ({}));
+          assertCurrentAdmin();
           refreshManager.onAuthExpired();
           ++adminAuthEpoch;
           sessionStorage.removeItem(ADMIN_TOKEN_KEY);
@@ -2785,14 +2804,14 @@
 
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
+          assertCurrentAdmin();
           throw new Error(err.message || err.error || ('HTTP ' + res.status));
         }
 
         const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('text/csv')) {
-          return res.text();
-        }
-        return res.json();
+        const result = contentType.includes('text/csv') ? await res.text() : await res.json();
+        assertCurrentAdmin();
+        return result;
       }
 
       // UI View state switches
