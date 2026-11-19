@@ -35,7 +35,7 @@ before(async () => {
   const stranger=await customer('milk-stranger@milvanta.test','9876543312');
   ownerId=owner.id;ownerToken=owner.token;strangerToken=stranger.token;
   const result=await pool.query(
-    "INSERT INTO customer_orders(order_number,customer_id,idempotency_key,address,items,subtotal_paise,delivery_charge_paise,total_paise,order_status,payment_status,razorpay_payment_id) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,6000,0,6000,'delivered','paid','pay_test_stub') RETURNING id",
+    "INSERT INTO customer_orders(order_number,customer_id,idempotency_key,address,items,subtotal_paise,delivery_charge_paise,total_paise,order_status,payment_status) VALUES($1,$2,$3,$4::jsonb,$5::jsonb,6000,0,6000,'delivered','paid') RETURNING id",
     [number,ownerId,'idem-milk-refund-test',
       JSON.stringify({city:'Hyderabad',street:'Sample Address',pincode:'500081'}),
       JSON.stringify([{name:'Cow Milk',quantity:1,unitPricePaise:6000,lineTotalPaise:6000}])]
