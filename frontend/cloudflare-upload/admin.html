@@ -1784,18 +1784,19 @@
       </div>
 
             <div style="padding:8px 14px 11px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;font-weight:700;">Daily operations</div>
-      <button type="button" class="nav-item-btn active" id="navBtnOverview">
+      <button type="button" class="nav-item-btn active" id="navBtnDeliveries">
         <div class="nav-item-left">
           <span class="nav-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="7" height="7"></rect>
-              <rect x="14" y="3" width="7" height="7"></rect>
-              <rect x="14" y="14" width="7" height="7"></rect>
-              <rect x="3" y="14" width="7" height="7"></rect>
+              <rect x="1" y="3" width="15" height="13"></rect>
+              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+              <circle cx="5.5" cy="18.5" r="2.5"></circle>
+              <circle cx="18.5" cy="18.5" r="2.5"></circle>
             </svg>
           </span>
-          <span class="nav-item-text">Dashboard</span>
+          <span class="nav-item-text">Today's Deliveries</span>
         </div>
+        <span class="nav-badge" id="navCountDeliveries">0</span>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnDemand">
@@ -1840,21 +1841,6 @@
         <span class="nav-badge" id="navCountSubs">0</span>
       </button>
 
-      <button type="button" class="nav-item-btn" id="navBtnDeliveries">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="1" y="3" width="15" height="13"></rect>
-              <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
-              <circle cx="5.5" cy="18.5" r="2.5"></circle>
-              <circle cx="18.5" cy="18.5" r="2.5"></circle>
-            </svg>
-          </span>
-          <span class="nav-item-text">Deliveries</span>
-        </div>
-        <span class="nav-badge" id="navCountDeliveries">0</span>
-      </button>
-
       <button type="button" class="nav-item-btn" id="navBtnRefunds">
         <div class="nav-item-left">
           <span class="nav-item-icon">
@@ -1870,6 +1856,19 @@
 
       <details id="adminMoreTools" class="admin-more-tools" style="margin-top:10px;padding:4px;border-top:1px solid #e2e8f0;">
         <summary style="padding:12px 14px;cursor:pointer;font-size:0.82rem;font-weight:650;color:#475569;">More options</summary>
+        <button type="button" class="nav-item-btn" id="navBtnOverview">
+          <div class="nav-item-left">
+            <span class="nav-item-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+            </span>
+            <span class="nav-item-text">Analytics &amp; Overview</span>
+          </div>
+        </button>
         <button type="button" class="nav-item-btn" id="navBtnCustomers">
         <div class="nav-item-left">
           <span class="nav-item-icon">
@@ -1912,7 +1911,7 @@
     <div class="admin-main-content">
 
       <!-- SECTION 1: OVERVIEW DASHBOARD -->
-      <section id="overviewSection">
+      <section id="overviewSection" class="hidden">
         <div id="overviewDataStatus" role="status" aria-live="polite" class="overview-status-banner">Dashboard values are placeholders until verified backend metrics load.</div>
         <div class="admin-simple-quicklinks" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px;">
           <button type="button" class="btn-filter-preset" data-admin-go="demand">🥛 Update Milk Stock</button>
@@ -2135,7 +2134,7 @@
       </section>
 
       <!-- SECTION 2: DAILY DELIVERIES -->
-      <section id="deliveriesSection" class="hidden">
+      <section id="deliveriesSection">
         <!-- Operations Summary Bar -->
         <div class="delivery-summary-bar">
           <div class="del-stat-box">
@@ -2425,14 +2424,14 @@
 
       <!-- SECTION 7: INVENTORY & DEMAND FORECAST -->
       <section id="demandSection" class="hidden">
-        <!-- Sub-Navigation: Store Products vs Milk Procurement Demand -->
+        <!-- Sub-Navigation: Daily Milk Capacity & Demand vs Packaged Unit Stock -->
         <div class="sub-nav-bar" style="display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">
-          <button type="button" class="btn-sub-tab active" id="btnSubTabProducts" style="background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">📦 Store Products &amp; Stock</button>
-          <button type="button" class="btn-sub-tab" id="btnSubTabMilkDemand" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">🥛 Daily Milk Procurement Demand</button>
+          <button type="button" class="btn-sub-tab active" id="btnSubTabMilkDemand" style="background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">🥛 Daily Milk Stock &amp; Capacity</button>
+          <button type="button" class="btn-sub-tab" id="btnSubTabProducts" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">📦 Packaged Unit Stock</button>
         </div>
 
         <!-- Sub-View 1: Store Products & Inventory Management -->
-        <div id="subViewStoreProducts">
+        <div id="subViewStoreProducts" class="hidden">
           <div class="kpi-grid" style="margin-bottom: 16px;">
             <div class="kpi-card">
               <div class="kpi-label">Total Store Products</div>
@@ -2496,17 +2495,61 @@
           </div>
         </div>
 
-        <!-- Sub-View 2: Daily Milk Procurement Demand -->
-        <div id="subViewMilkDemand" class="hidden">
+        <!-- Sub-View 2: Daily Milk Procurement Demand & Capacity Management -->
+        <div id="subViewMilkDemand">
         <div class="filter-bar">
           <div class="filter-group">
-            <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Forecast Target Date:</span>
+            <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Operations Date:</span>
             <input type="date" class="filter-input" id="demandDatePicker" aria-label="Demand forecast date" />
           </div>
           <button type="button" class="btn-export" id="btnExportDemand">⬇ Export Forecast (CSV)</button>
         </div>
 
         <div class="alerts-container" id="demandAlertsContainer"></div>
+
+        <!-- Real Daily Milk Capacity Status Cards -->
+        <div class="kpi-grid" style="margin-top: 12px; margin-bottom: 20px;">
+          <div class="kpi-card" style="border-left: 4px solid var(--admin-navy);">
+            <div class="kpi-label">Cow Milk Available Capacity</div>
+            <div class="kpi-value" id="capCowAvailable">100.00 L</div>
+            <div class="kpi-sub" id="capCowSub">Committed: <strong id="capCowCommitted">0.00 L</strong> | Remaining: <strong id="capCowRemaining" style="color: #16a34a;">100.00 L</strong></div>
+          </div>
+          <div class="kpi-card" style="border-left: 4px solid var(--admin-purple);">
+            <div class="kpi-label">Buffalo Milk Available Capacity</div>
+            <div class="kpi-value" id="capBuffaloAvailable">80.00 L</div>
+            <div class="kpi-sub" id="capBuffaloSub">Committed: <strong id="capBuffaloCommitted">0.00 L</strong> | Remaining: <strong id="capBuffaloRemaining" style="color: #16a34a;">80.00 L</strong></div>
+          </div>
+        </div>
+
+        <!-- Quick Milk Capacity Adjustment Form -->
+        <div class="card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #0f172a;">⚡ Daily Milk Capacity Management</h3>
+              <p style="margin: 4px 0 0; font-size: 0.825rem; color: #64748b;">Set daily available volume in Litres. Transactional checks prevent overselling during checkout and subscriptions.</p>
+            </div>
+            <span id="capSourceBadge" style="font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: #e0f2fe; color: #0369a1;">Baseline Default</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; align-items: end;">
+            <div>
+              <label for="inputCowCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Cow Milk Daily (Litres)</label>
+              <input type="number" id="inputCowCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="100.00" />
+            </div>
+            <div>
+              <label for="inputBuffaloCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Buffalo Milk Daily (Litres)</label>
+              <input type="number" id="inputBuffaloCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="80.00" />
+            </div>
+            <div>
+              <label for="inputCapacityNotes" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Adjustment Reason / Notes</label>
+              <input type="text" id="inputCapacityNotes" class="filter-input" style="width: 100%;" placeholder="e.g. Festival morning extra supply" />
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="btn-primary-ops" id="btnSaveCapacityOverride" style="flex: 1; white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;">Save for Date</button>
+              <button type="button" class="btn-export" id="btnSaveCapacityDefaults" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;" title="Save as permanent baseline default">Set as Default</button>
+            </div>
+          </div>
+          <div id="capacityFeedbackMsg" style="margin-top: 10px; font-size: 0.825rem; font-weight: 600; display: none;"></div>
+        </div>
 
         <div class="kpi-grid">
           <div class="kpi-card">
@@ -3094,7 +3137,7 @@
       let pendingCancelOrderId = null;
       let selectedAdjustProduct = null;
       let selectedEditProduct = null;
-      let demandActiveSubTab = 'products';
+      let demandActiveSubTab = 'milk_demand';
       let deliveryPendingAddressFilterActive = false;
       const productState = {
         search: '',
@@ -3151,7 +3194,7 @@
         document.getElementById('modalDeliveryCancel').classList.remove('hidden');
       }
 
-      let activeTab = 'overview';
+      let activeTab = 'deliveries';
       let isSidebarCollapsed = false;
 
       // Safe DOM construction helpers (Zero innerHTML assignments)
@@ -3488,13 +3531,13 @@
 
       // Tab Switching
       const tabs = [
-        { id: 'overview', navBtn: 'navBtnOverview', section: 'overviewSection' },
         { id: 'deliveries', navBtn: 'navBtnDeliveries', section: 'deliveriesSection' },
-        { id: 'subscriptions', navBtn: 'navBtnSubscriptions', section: 'subscriptionsSection' },
-        { id: 'orders', navBtn: 'navBtnOrders', section: 'ordersSection' },
-        { id: 'refunds', navBtn: 'navBtnRefunds', section: 'refundsSection' },
-        { id: 'customers', navBtn: 'navBtnCustomers', section: 'customersSection' },
         { id: 'demand', navBtn: 'navBtnDemand', section: 'demandSection' },
+        { id: 'orders', navBtn: 'navBtnOrders', section: 'ordersSection' },
+        { id: 'subscriptions', navBtn: 'navBtnSubscriptions', section: 'subscriptionsSection' },
+        { id: 'refunds', navBtn: 'navBtnRefunds', section: 'refundsSection' },
+        { id: 'overview', navBtn: 'navBtnOverview', section: 'overviewSection' },
+        { id: 'customers', navBtn: 'navBtnCustomers', section: 'customersSection' },
         { id: 'reports', navBtn: 'navBtnReports', section: 'reportsSection' }
       ];
 
@@ -4656,6 +4699,49 @@
           document.getElementById('demandBuffaloLitres').textContent = (data.buffaloMilkLitres || 0).toFixed(2) + ' L';
           document.getElementById('demandTotalDeliveries').textContent = String(data.totalDeliveries || 0);
 
+          if (data.capacity) {
+            const cap = data.capacity;
+            const cowAvail = cap.cow ? Number(cap.cow.total || 0) : 100;
+            const cowComm = cap.cow ? Number(cap.cow.committedTotal || 0) : 0;
+            const cowRem = cap.cow ? Number(cap.cow.remaining || 0) : 100;
+            const bufAvail = cap.buffalo ? Number(cap.buffalo.total || 0) : 80;
+            const bufComm = cap.buffalo ? Number(cap.buffalo.committedTotal || 0) : 0;
+            const bufRem = cap.buffalo ? Number(cap.buffalo.remaining || 0) : 80;
+
+            const elCowAvail = document.getElementById('capCowAvailable');
+            if (elCowAvail) elCowAvail.textContent = cowAvail.toFixed(2) + ' L';
+            const elCowComm = document.getElementById('capCowCommitted');
+            if (elCowComm) elCowComm.textContent = cowComm.toFixed(2) + ' L';
+            const elCowRem = document.getElementById('capCowRemaining');
+            if (elCowRem) {
+              elCowRem.textContent = cowRem.toFixed(2) + ' L';
+              elCowRem.style.color = cowRem <= 0 ? '#dc2626' : (cowRem < 15 ? '#d97706' : '#16a34a');
+            }
+
+            const elBufAvail = document.getElementById('capBuffaloAvailable');
+            if (elBufAvail) elBufAvail.textContent = bufAvail.toFixed(2) + ' L';
+            const elBufComm = document.getElementById('capBuffaloCommitted');
+            if (elBufComm) elBufComm.textContent = bufComm.toFixed(2) + ' L';
+            const elBufRem = document.getElementById('capBuffaloRemaining');
+            if (elBufRem) {
+              elBufRem.textContent = bufRem.toFixed(2) + ' L';
+              elBufRem.style.color = bufRem <= 0 ? '#dc2626' : (bufRem < 15 ? '#d97706' : '#16a34a');
+            }
+
+            const inputCow = document.getElementById('inputCowCapacity');
+            if (inputCow && !inputCow.matches(':focus')) inputCow.value = cowAvail;
+            const inputBuf = document.getElementById('inputBuffaloCapacity');
+            if (inputBuf && !inputBuf.matches(':focus')) inputBuf.value = bufAvail;
+
+            const badge = document.getElementById('capSourceBadge');
+            if (badge) {
+              const isOverride = cap.cow?.source === 'override' || cap.buffalo?.source === 'override';
+              badge.textContent = isOverride ? 'Date-Specific Override' : 'Baseline Default';
+              badge.style.background = isOverride ? '#fef3c7' : '#e0f2fe';
+              badge.style.color = isOverride ? '#92400e' : '#0369a1';
+            }
+          }
+
           if (data.hasUnrecognizedUnits) {
             alertBox.appendChild(el('div', { className: 'alert-banner alert-warning' }, [
               el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
@@ -5652,6 +5738,75 @@
             document.getElementById('subViewMilkDemand').classList.remove('hidden');
             document.getElementById('subViewStoreProducts').classList.add('hidden');
             loadDemand();
+          });
+        }
+
+        // Daily Milk Capacity Adjustment Form Handlers
+        const btnSaveCapOverride = document.getElementById('btnSaveCapacityOverride');
+        const btnSaveCapDefaults = document.getElementById('btnSaveCapacityDefaults');
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+
+        function showCapFeedback(msg, isError) {
+          if (!capFeedback) return;
+          capFeedback.textContent = msg;
+          capFeedback.style.color = isError ? '#dc2626' : '#16a34a';
+          capFeedback.style.display = 'block';
+          setTimeout(() => { if (capFeedback) capFeedback.style.display = 'none'; }, 4000);
+        }
+
+        if (btnSaveCapOverride) {
+          btnSaveCapOverride.addEventListener('click', async () => {
+            const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
+            const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
+            const notes = document.getElementById('inputCapacityNotes')?.value || '';
+            const targetDate = demandState.date;
+            if (isNaN(cowVal) || isNaN(bufVal)) {
+              showCapFeedback('Please enter valid numeric capacity for both Cow and Buffalo milk.', true);
+              return;
+            }
+            try {
+              btnSaveCapOverride.disabled = true;
+              btnSaveCapOverride.textContent = 'Saving...';
+              await apiRequest('/api/v1/admin/milk-capacity/overrides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deliveryDate: targetDate, cowLitres: cowVal, buffaloLitres: bufVal, notes })
+              });
+              showCapFeedback('Daily capacity updated for ' + targetDate + '!', false);
+              await loadDemand();
+            } catch (err) {
+              showCapFeedback('Error updating capacity: ' + err.message, true);
+            } finally {
+              btnSaveCapOverride.disabled = false;
+              btnSaveCapOverride.textContent = 'Save for Date';
+            }
+          });
+        }
+
+        if (btnSaveCapDefaults) {
+          btnSaveCapDefaults.addEventListener('click', async () => {
+            const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
+            const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
+            if (isNaN(cowVal) || isNaN(bufVal)) {
+              showCapFeedback('Please enter valid numeric capacity for both Cow and Buffalo milk.', true);
+              return;
+            }
+            try {
+              btnSaveCapDefaults.disabled = true;
+              btnSaveCapDefaults.textContent = 'Saving...';
+              await apiRequest('/api/v1/admin/milk-capacity/defaults', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cowLitres: cowVal, buffaloLitres: bufVal })
+              });
+              showCapFeedback('Baseline default capacities updated!', false);
+              await loadDemand();
+            } catch (err) {
+              showCapFeedback('Error saving defaults: ' + err.message, true);
+            } finally {
+              btnSaveCapDefaults.disabled = false;
+              btnSaveCapDefaults.textContent = 'Set as Default';
+            }
           });
         }
 

@@ -1666,18 +1666,38 @@ function renderCatalog() {
         <div class="card-feature-pills">
           ${featuresHtml}
         </div>
+        ${isMilkProduct ? `
+        <div class="card-milk-choices" style="display: flex; gap: 8px; margin-top: 12px;">
+          <button type="button" class="btn-milk-choice btn-milk-buy-once" data-milk-action="onetime" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: 1.5px solid #0a3d66; background: #ffffff; color: #0a3d66; cursor: pointer; transition: all 0.2s ease;">Buy Once</button>
+          <button type="button" class="btn-milk-choice btn-milk-sub" data-milk-action="subscription" data-product-id="${p.id}" style="flex: 1; padding: 7px 8px; font-size: 0.8rem; font-weight: 700; border-radius: 8px; border: none; background: #0a3d66; color: #ffffff; cursor: pointer; transition: all 0.2s ease;">Daily Subscription</button>
+        </div>
+        ` : ''}
       </div>
     `;
 
+    // Dual purchase choices on milk card
+    card.querySelectorAll('.btn-milk-choice').forEach((choiceBtn) => {
+      choiceBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const mode = choiceBtn.dataset.milkAction || 'onetime';
+        const idx = Number(card.dataset.index);
+        if (!isNaN(idx)) {
+          state.carouselIndex = idx;
+          updateCarouselPositions();
+        }
+        openProductModal(p.id, mode);
+      });
+    });
+
     // Clicking anywhere on product card opens product detail modal
     card.addEventListener('click', (event) => {
-      if (event.target.closest('.card-round-cart-btn')) return;
+      if (event.target.closest('.card-round-cart-btn') || event.target.closest('.btn-milk-choice')) return;
       const idx = Number(card.dataset.index);
       if (!isNaN(idx)) {
         state.carouselIndex = idx;
         updateCarouselPositions();
       }
-      openProductModal(p.id);
+      openProductModal(p.id, 'onetime');
     });
 
     container.append(card);

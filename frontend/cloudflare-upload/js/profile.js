@@ -937,15 +937,17 @@ function formatIstDateTime(isoStr) {
             </div>
             <div class="order-actions-group">
               ${!isSubOrder && order.refundStatus ? `
-                <span class="order-refund-status" role="status" style="display:inline-block;padding:7px 11px;border-radius:8px;background:#eff6ff;color:#1e40af;font-size:0.8rem;font-weight:600;">
+                <span class="order-refund-status" role="status" style="display:inline-block;padding:7px 11px;border-radius:8px;background:${order.refundStatus === 'processed' || order.refundStatus === 'refunded' ? '#dcfce7;color:#15803d;' : (order.refundStatus === 'rejected' || order.refundStatus === 'failed' ? '#fee2e2;color:#b91c1c;' : '#eff6ff;color:#1e40af;')};font-size:0.8rem;font-weight:600;">
                   Refund: ${({
-                    pending:'Requested · awaiting review',
-                    approved:'Approved · awaiting payout confirmation',
-                    processing:'Being processed',
-                    processed:'Processed',
-                    rejected:'Request declined',
-                    failed:'Processing failed · contact support'
-                  })[order.refundStatus] || 'Under review'}
+                    pending:'Requested',
+                    under_review:'Under Review',
+                    approved:'Approved',
+                    processing:'Processing',
+                    processed:'Refunded',
+                    refunded:'Refunded',
+                    rejected:'Rejected',
+                    failed:'Failed'
+                  })[order.refundStatus] || 'Requested'}
                   ${order.refundRequestNumber ? ' · #' + escapeHtml(String(order.refundRequestNumber)) : ''}
                 </span>
               ` : ''}
