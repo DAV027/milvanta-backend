@@ -83,7 +83,7 @@ test('role revoked between visits drops stored admin session', async () => {
   assert.ok(ui.events.includes('remove:milvanta-admin-token'));
   assert.ok(ui.events.includes('denied:demoted@milvanta.test'));
   assert.equal(ui.events.includes('dashboard'),false);
-  assert.equal(ui.currentToken, 'admin-token-1', 'VM lexical binding is distinct from fixture property');
+  assert.equal(ui.currentToken, '', 'Role revocation clears the token');
 });
 
 test('expired session redirects to sign-in instead of displaying dashboard', async () => {
@@ -95,9 +95,13 @@ test('expired session redirects to sign-in instead of displaying dashboard', asy
 });
 
 test('overview marks metrics stale instead of silently displaying previous figures', async () => {
+  const elements = new Map();
   const ui = {
     overviewState:{date:'2026-11-19'},
-    document:{ getElementById: id => ({ textContent: '', appendChild(){} }) },
+    document:{ getElementById: id => {
+      if (!elements.has(id)) elements.set(id,{textContent:'',appendChild(){}});
+      return elements.get(id);
+    } },
     apiRequest:async () => {throw new Error('backend unavailable')},
     el:() => ({}),
     empty: () => {},
@@ -108,6 +112,7 @@ test('overview marks metrics stale instead of silently displaying previous figur
     '\nglobalThis.runOverview = loadOverview;', ui);
   const result=await ui.runOverview();
   assert.equal(result,false);
+  assert.match(elements.get('overviewDataStatus').textContent, /may be stale/);
   assert.match(page, /Metrics unavailable\. Displayed values may be stale/);
   assert.match(page, /await loadOverview\(signal\) === false/);
 });
