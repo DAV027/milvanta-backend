@@ -3717,13 +3717,27 @@ app.post('/api/v1/orders', {
   }
 });
 
+// Include the customer's latest refund request beside every order so Order
+// History can show its status without exposing internal review notes or making
+// the browser fetch admin-only refund records.
+const CUSTOMER_ORDER_WITH_REFUND = `
+  SELECT co.order_number, co.items, co.address, co.subtotal_paise, co.delivery_charge_paise, co.total_paise,
+         co.order_status, co.payment_status, co.courier_name, co.tracking_number, co.estimated_delivery, co.created_at,
+         rr.request_number AS refund_request_number, rr.status AS refund_status,
+         rr.requested_amount_paise AS refund_requested_amount_paise, rr.created_at AS refund_requested_at
+  FROM customer_orders co
+  LEFT JOIN LATERAL (
+    SELECT request_number, status, requested_amount_paise, created_at
+    FROM refund_requests
+    WHERE order_id = co.id AND customer_id = $1 AND request_type = 'order'
+    ORDER BY created_at DESC, id DESC LIMIT 1
+  ) rr ON TRUE`;
+
 app.get('/api/v1/orders', { preHandler: app.authenticate }, async (request) => {
   const { rows } = await pool.query(
-    `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise,
-            order_status, payment_status, courier_name, tracking_number, estimated_delivery, created_at
-     FROM customer_orders
-     WHERE customer_id = $1 AND order_status != 'cancelled'
-     ORDER BY created_at DESC LIMIT 50`,
+    CUSTOMER_ORDER_WITH_REFUND + `
+     WHERE co.customer_id = $1
+     ORDER BY co.created_at DESC LIMIT 50`,
     [request.customer.id]
   );
   return { orders: rows };
@@ -3731,9 +3745,8 @@ app.get('/api/v1/orders', { preHandler: app.authenticate }, async (request) => {
 
 app.get('/api/v1/orders/:orderNumber', { preHandler: app.authenticate }, async (request, reply) => {
   const { rows } = await pool.query(
-    `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise,
-            order_status, payment_status, courier_name, tracking_number, estimated_delivery, created_at
-     FROM customer_orders WHERE customer_id = $1 AND order_number = $2`,
+    CUSTOMER_ORDER_WITH_REFUND + `
+     WHERE co.customer_id = $1 AND co.order_number = $2`,
     [request.customer.id, request.params.orderNumber]
   );
   if (!rows[0]) return reply.code(404).send({ error: 'order_not_found' });
