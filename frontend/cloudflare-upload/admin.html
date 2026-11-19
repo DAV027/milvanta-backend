@@ -5669,6 +5669,7 @@
         }
         const prodCat = document.getElementById('productCategoryFilter');
         if (prodCat) {
+          prodCat.value = 'Fresh Milk';
           prodCat.addEventListener('change', () => {
             productState.category = prodCat.value;
             renderProductsTable();
