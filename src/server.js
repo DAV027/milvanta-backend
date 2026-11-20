@@ -84,7 +84,8 @@ import {
   reserveMilkCapacityForOrder,
   checkSubscriptionCapacity,
   calculateItemMilkLitres,
-  identifyMilkType
+  identifyMilkType,
+  parseMilkVolumeInLitres
 } from './services/milkCapacityService.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 
