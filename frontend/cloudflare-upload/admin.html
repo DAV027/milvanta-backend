@@ -2521,13 +2521,13 @@
         <div class="kpi-grid" style="margin-top: 12px; margin-bottom: 20px;">
           <div class="kpi-card" style="border-left: 4px solid var(--admin-navy);">
             <div class="kpi-label">Cow Milk Available Capacity</div>
-            <div class="kpi-value" id="capCowAvailable">100.00 L</div>
-            <div class="kpi-sub" id="capCowSub">Committed: <strong id="capCowCommitted">0.00 L</strong> | Remaining: <strong id="capCowRemaining" style="color: #16a34a;">100.00 L</strong></div>
+            <div class="kpi-value" id="capCowAvailable">--</div>
+            <div class="kpi-sub" id="capCowSub">Committed: <strong id="capCowCommitted">--</strong> | Remaining: <strong id="capCowRemaining" style="color: #64748b;">--</strong></div>
           </div>
           <div class="kpi-card" style="border-left: 4px solid var(--admin-purple);">
             <div class="kpi-label">Buffalo Milk Available Capacity</div>
-            <div class="kpi-value" id="capBuffaloAvailable">80.00 L</div>
-            <div class="kpi-sub" id="capBuffaloSub">Committed: <strong id="capBuffaloCommitted">0.00 L</strong> | Remaining: <strong id="capBuffaloRemaining" style="color: #16a34a;">80.00 L</strong></div>
+            <div class="kpi-value" id="capBuffaloAvailable">--</div>
+            <div class="kpi-sub" id="capBuffaloSub">Committed: <strong id="capBuffaloCommitted">--</strong> | Remaining: <strong id="capBuffaloRemaining" style="color: #64748b;">--</strong></div>
           </div>
         </div>
 
@@ -2538,25 +2538,25 @@
               <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #0f172a;">⚡ Daily Milk Capacity Management</h3>
               <p style="margin: 4px 0 0; font-size: 0.825rem; color: #64748b;">Set daily available volume in Litres. Transactional checks prevent overselling during checkout and subscriptions.</p>
             </div>
-            <span id="capSourceBadge" style="font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: #e0f2fe; color: #0369a1;">Baseline Default</span>
+            <span id="capSourceBadge" style="font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: #f1f5f9; color: #64748b;">Checking…</span>
           </div>
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; align-items: end;">
             <div>
               <label for="inputCowCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Cow Milk Daily (Litres)</label>
-              <input type="number" id="inputCowCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="100.00" />
+              <input type="number" id="inputCowCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="--" disabled />
             </div>
             <div>
               <label for="inputBuffaloCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Buffalo Milk Daily (Litres)</label>
-              <input type="number" id="inputBuffaloCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="80.00" />
+              <input type="number" id="inputBuffaloCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="--" disabled />
             </div>
             <div>
               <label for="inputCapacityNotes" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Adjustment Reason / Notes</label>
-              <input type="text" id="inputCapacityNotes" class="filter-input" style="width: 100%;" placeholder="e.g. Festival morning extra supply" />
+              <input type="text" id="inputCapacityNotes" class="filter-input" style="width: 100%;" placeholder="e.g. Festival morning extra supply" disabled />
             </div>
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button type="button" class="btn-primary-ops" id="btnSaveCapacityOverride" style="flex: 1; white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;">Save for Date</button>
-              <button type="button" class="btn-export" id="btnSaveCapacityDefaults" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;" title="Save as permanent baseline default">Set as Default</button>
-              <button type="button" class="btn-export" id="btnConfirmSupply" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem;" title="Confirm baseline farm capacity to open sales">Confirm Baseline</button>
+              <button type="button" class="btn-primary-ops" id="btnSaveCapacityOverride" style="flex: 1; white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" disabled>Save for Date</button>
+              <button type="button" class="btn-export" id="btnSaveCapacityDefaults" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" title="Save as permanent baseline default" disabled>Set as Default</button>
+              <button type="button" class="btn-export" id="btnConfirmSupply" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" title="Confirm baseline farm capacity to open sales" disabled>Confirm Baseline</button>
             </div>
           </div>
           <div id="capacityFeedbackMsg" style="margin-top: 10px; font-size: 0.825rem; font-weight: 600; display: none;"></div>
@@ -3308,6 +3308,7 @@
       const customerState = { page: 0, limit: 50, total: 0, search: '' };
       const demandState = { date: getTomorrowYMD() };
       const reportState = { from: '', to: getTodayYMD(), type: 'overview' };
+      let capacityApiAvailable = false;
 
       // Consolidated Reliable Auto-Refresh Manager
       const refreshManager = {
@@ -3329,15 +3330,19 @@
             if (syncDot) syncDot.className = 'live-dot dot-expired';
             if (syncLabel) syncLabel.textContent = 'Auth required';
           } else if (this.state === 'error') {
-            timerLabel.textContent = 'Backend unavailable';
+            timerLabel.textContent = (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) ? 'Capacity API unavailable' : 'Backend unavailable';
             if (syncDot) syncDot.className = 'live-dot dot-error';
-            if (syncLabel) syncLabel.textContent = 'Click to retry';
+            if (syncLabel) syncLabel.textContent = (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) ? 'Capacity unavailable' : 'Click to retry';
           } else if (this.state === 'syncing') {
             timerLabel.textContent = 'Syncing...';
             if (syncDot) syncDot.className = 'live-dot dot-syncing';
           } else if (this.state === 'paused') {
             timerLabel.textContent = 'Auto-refresh paused';
             if (syncDot) syncDot.className = 'live-dot dot-paused';
+          } else if (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) {
+            timerLabel.textContent = 'Capacity API unavailable';
+            if (syncDot) syncDot.className = 'live-dot dot-error';
+            if (syncLabel) syncLabel.textContent = 'Capacity unavailable';
           } else {
             timerLabel.textContent = 'Auto-refresh (' + this.secondsLeft + 's)';
             if (syncDot) syncDot.className = 'live-dot';
@@ -3422,6 +3427,14 @@
 
             // A replaced, aborted or signed-out refresh must not report success.
             if (signal.aborted || this.activeController !== controller) return;
+
+            if (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) {
+              this.state = 'error';
+              this.secondsLeft = 30;
+              this.updateUI();
+              return;
+            }
+
             this.lastSuccessTime = formatISTTimeOnly();
             this.state = 'idle';
             this.secondsLeft = 30;
@@ -3496,7 +3509,10 @@
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           assertCurrentAdmin();
-          throw new Error(err.message || err.error || ('HTTP ' + res.status));
+          const apiErr = new Error(err.message || err.error || ('HTTP ' + res.status));
+          apiErr.status = res.status;
+          apiErr.data = err;
+          throw apiErr;
         }
 
         const contentType = res.headers.get('content-type') || '';
@@ -3581,6 +3597,8 @@
 
         // Close mobile drawer on navigation
         closeMobileSidebar();
+
+        refreshManager.updateUI();
 
         // Load active tab data
         loadActiveTabData();
@@ -4694,6 +4712,203 @@
         }
       }
 
+      function renderCapacityUnavailable(customMsg) {
+        capacityApiAvailable = false;
+        const msg = customMsg || 'Milk inventory management is not available on the deployed backend. Please contact the administrator.';
+
+        const elCowAvail = document.getElementById('capCowAvailable');
+        if (elCowAvail) elCowAvail.textContent = '--';
+        const elCowComm = document.getElementById('capCowCommitted');
+        if (elCowComm) elCowComm.textContent = '--';
+        const elCowRem = document.getElementById('capCowRemaining');
+        if (elCowRem) {
+          elCowRem.textContent = '--';
+          elCowRem.style.color = '#64748b';
+        }
+
+        const elBufAvail = document.getElementById('capBuffaloAvailable');
+        if (elBufAvail) elBufAvail.textContent = '--';
+        const elBufComm = document.getElementById('capBuffaloCommitted');
+        if (elBufComm) elBufComm.textContent = '--';
+        const elBufRem = document.getElementById('capBuffaloRemaining');
+        if (elBufRem) {
+          elBufRem.textContent = '--';
+          elBufRem.style.color = '#64748b';
+        }
+
+        const inputCow = document.getElementById('inputCowCapacity');
+        if (inputCow) {
+          inputCow.value = '';
+          inputCow.placeholder = '--';
+          inputCow.disabled = true;
+        }
+        const inputBuf = document.getElementById('inputBuffaloCapacity');
+        if (inputBuf) {
+          inputBuf.value = '';
+          inputBuf.placeholder = '--';
+          inputBuf.disabled = true;
+        }
+        const inputNotes = document.getElementById('inputCapacityNotes');
+        if (inputNotes) {
+          inputNotes.value = '';
+          inputNotes.placeholder = 'Milk inventory management is not available on the deployed backend';
+          inputNotes.disabled = true;
+        }
+
+        const btnOverride = document.getElementById('btnSaveCapacityOverride');
+        if (btnOverride) {
+          btnOverride.disabled = true;
+          btnOverride.title = msg;
+          btnOverride.style.opacity = '0.55';
+          btnOverride.style.cursor = 'not-allowed';
+        }
+        const btnDefaults = document.getElementById('btnSaveCapacityDefaults');
+        if (btnDefaults) {
+          btnDefaults.disabled = true;
+          btnDefaults.title = msg;
+          btnDefaults.style.opacity = '0.55';
+          btnDefaults.style.cursor = 'not-allowed';
+        }
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.disabled = true;
+          btnConfirm.title = msg;
+          btnConfirm.style.opacity = '0.55';
+          btnConfirm.style.cursor = 'not-allowed';
+        }
+
+        const badge = document.getElementById('capSourceBadge');
+        if (badge) {
+          badge.textContent = '⚠️ API Unavailable';
+          badge.style.background = '#fee2e2';
+          badge.style.color = '#b91c1c';
+        }
+
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+        if (capFeedback) {
+          capFeedback.textContent = msg;
+          capFeedback.style.color = '#dc2626';
+          capFeedback.style.display = 'block';
+        }
+
+        const alertBox = document.getElementById('demandAlertsContainer');
+        if (alertBox) {
+          let alertEl = document.getElementById('capacityUnavailableAlert');
+          if (!alertEl) {
+            alertEl = el('div', { id: 'capacityUnavailableAlert', className: 'alert-banner alert-danger', style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' } }, [
+              el('span', { style: { fontSize: '1.25rem' } }, ['⚠️']),
+              el('span', { style: { fontWeight: '600' }, textContent: msg })
+            ]);
+            alertBox.prepend(alertEl);
+          } else {
+            alertEl.lastChild.textContent = msg;
+          }
+        }
+
+        if (activeTab === 'demand' && demandActiveSubTab !== 'products') {
+          refreshManager.state = 'error';
+          refreshManager.updateUI();
+        }
+      }
+
+      function renderCapacityAvailable(cap) {
+        capacityApiAvailable = true;
+
+        const alertEl = document.getElementById('capacityUnavailableAlert');
+        if (alertEl) alertEl.remove();
+
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+        if (capFeedback && capFeedback.textContent.includes('not available')) {
+          capFeedback.style.display = 'none';
+        }
+
+        const cowAvail = cap.cow ? Number(cap.cow.total || 0) : 0;
+        const cowComm = cap.cow ? Number(cap.cow.committedTotal || 0) : 0;
+        const cowRem = cap.cow ? Number(cap.cow.remaining || 0) : 0;
+        const bufAvail = cap.buffalo ? Number(cap.buffalo.total || 0) : 0;
+        const bufComm = cap.buffalo ? Number(cap.buffalo.committedTotal || 0) : 0;
+        const bufRem = cap.buffalo ? Number(cap.buffalo.remaining || 0) : 0;
+
+        const elCowAvail = document.getElementById('capCowAvailable');
+        if (elCowAvail) elCowAvail.textContent = cowAvail.toFixed(2) + ' L';
+        const elCowComm = document.getElementById('capCowCommitted');
+        if (elCowComm) elCowComm.textContent = cowComm.toFixed(2) + ' L';
+        const elCowRem = document.getElementById('capCowRemaining');
+        if (elCowRem) {
+          elCowRem.textContent = cowRem.toFixed(2) + ' L';
+          elCowRem.style.color = cowRem <= 0 ? '#dc2626' : (cowRem < 15 ? '#d97706' : '#16a34a');
+        }
+
+        const elBufAvail = document.getElementById('capBuffaloAvailable');
+        if (elBufAvail) elBufAvail.textContent = bufAvail.toFixed(2) + ' L';
+        const elBufComm = document.getElementById('capBuffaloCommitted');
+        if (elBufComm) elBufComm.textContent = bufComm.toFixed(2) + ' L';
+        const elBufRem = document.getElementById('capBuffaloRemaining');
+        if (elBufRem) {
+          elBufRem.textContent = bufRem.toFixed(2) + ' L';
+          elBufRem.style.color = bufRem <= 0 ? '#dc2626' : (bufRem < 15 ? '#d97706' : '#16a34a');
+        }
+
+        const inputCow = document.getElementById('inputCowCapacity');
+        if (inputCow) {
+          inputCow.disabled = false;
+          inputCow.placeholder = '100.00';
+          if (!inputCow.matches(':focus')) inputCow.value = cowAvail;
+        }
+        const inputBuf = document.getElementById('inputBuffaloCapacity');
+        if (inputBuf) {
+          inputBuf.disabled = false;
+          inputBuf.placeholder = '80.00';
+          if (!inputBuf.matches(':focus')) inputBuf.value = bufAvail;
+        }
+        const inputNotes = document.getElementById('inputCapacityNotes');
+        if (inputNotes) {
+          inputNotes.disabled = false;
+          inputNotes.placeholder = 'e.g. Festival morning extra supply';
+        }
+
+        const btnOverride = document.getElementById('btnSaveCapacityOverride');
+        if (btnOverride) {
+          btnOverride.disabled = false;
+          btnOverride.title = '';
+          btnOverride.style.opacity = '1';
+          btnOverride.style.cursor = 'pointer';
+        }
+        const btnDefaults = document.getElementById('btnSaveCapacityDefaults');
+        if (btnDefaults) {
+          btnDefaults.disabled = false;
+          btnDefaults.title = 'Save as permanent baseline default';
+          btnDefaults.style.opacity = '1';
+          btnDefaults.style.cursor = 'pointer';
+        }
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.disabled = false;
+          btnConfirm.title = 'Confirm baseline farm capacity to open sales';
+          btnConfirm.style.opacity = '1';
+          btnConfirm.style.cursor = 'pointer';
+        }
+
+        const badge = document.getElementById('capSourceBadge');
+        if (badge) {
+          const isOverride = cap.cow?.source === 'override' || cap.buffalo?.source === 'override';
+          const isConfirmed = cap.cow?.isConfirmed && cap.buffalo?.isConfirmed;
+          if (isOverride) {
+            badge.textContent = 'Date-Specific Override';
+            badge.style.background = '#fef3c7';
+            badge.style.color = '#92400e';
+          } else if (isConfirmed) {
+            badge.textContent = '✓ Confirmed Farm Supply';
+            badge.style.background = '#dcfce7';
+            badge.style.color = '#15803d';
+          } else {
+            badge.textContent = '⚠️ Unconfirmed Baseline (Set as Default to Confirm)';
+            badge.style.background = '#fee2e2';
+            badge.style.color = '#b91c1c';
+          }
+        }
+      }
+
       // Demand forecast loader
       async function loadDemand(signal) {
         const tbody = document.getElementById('demandTableBody');
@@ -4703,109 +4918,65 @@
 
         tbody.appendChild(el('tr', {}, [el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px' }, textContent: 'Forecasting dairy inventory requirement...' })]));
 
+        let data;
         try {
-          const data = await apiRequest('/api/v1/admin/demand-forecast?date=' + demandState.date, { signal });
-          document.getElementById('demandTotalLitres').textContent = (data.totalLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandCowLitres').textContent = (data.cowMilkLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandBuffaloLitres').textContent = (data.buffaloMilkLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandTotalDeliveries').textContent = String(data.totalDeliveries || 0);
-
-          if (data.capacity) {
-            const cap = data.capacity;
-            const cowAvail = cap.cow ? Number(cap.cow.total || 0) : 100;
-            const cowComm = cap.cow ? Number(cap.cow.committedTotal || 0) : 0;
-            const cowRem = cap.cow ? Number(cap.cow.remaining || 0) : 100;
-            const bufAvail = cap.buffalo ? Number(cap.buffalo.total || 0) : 80;
-            const bufComm = cap.buffalo ? Number(cap.buffalo.committedTotal || 0) : 0;
-            const bufRem = cap.buffalo ? Number(cap.buffalo.remaining || 0) : 80;
-
-            const elCowAvail = document.getElementById('capCowAvailable');
-            if (elCowAvail) elCowAvail.textContent = cowAvail.toFixed(2) + ' L';
-            const elCowComm = document.getElementById('capCowCommitted');
-            if (elCowComm) elCowComm.textContent = cowComm.toFixed(2) + ' L';
-            const elCowRem = document.getElementById('capCowRemaining');
-            if (elCowRem) {
-              elCowRem.textContent = cowRem.toFixed(2) + ' L';
-              elCowRem.style.color = cowRem <= 0 ? '#dc2626' : (cowRem < 15 ? '#d97706' : '#16a34a');
-            }
-
-            const elBufAvail = document.getElementById('capBuffaloAvailable');
-            if (elBufAvail) elBufAvail.textContent = bufAvail.toFixed(2) + ' L';
-            const elBufComm = document.getElementById('capBuffaloCommitted');
-            if (elBufComm) elBufComm.textContent = bufComm.toFixed(2) + ' L';
-            const elBufRem = document.getElementById('capBuffaloRemaining');
-            if (elBufRem) {
-              elBufRem.textContent = bufRem.toFixed(2) + ' L';
-              elBufRem.style.color = bufRem <= 0 ? '#dc2626' : (bufRem < 15 ? '#d97706' : '#16a34a');
-            }
-
-            const inputCow = document.getElementById('inputCowCapacity');
-            if (inputCow && !inputCow.matches(':focus')) inputCow.value = cowAvail;
-            const inputBuf = document.getElementById('inputBuffaloCapacity');
-            if (inputBuf && !inputBuf.matches(':focus')) inputBuf.value = bufAvail;
-
-            const badge = document.getElementById('capSourceBadge');
-            if (badge) {
-              const isOverride = cap.cow?.source === 'override' || cap.buffalo?.source === 'override';
-              const isConfirmed = cap.cow?.isConfirmed && cap.buffalo?.isConfirmed;
-              if (isOverride) {
-                badge.textContent = 'Date-Specific Override';
-                badge.style.background = '#fef3c7';
-                badge.style.color = '#92400e';
-              } else if (isConfirmed) {
-                badge.textContent = '✓ Confirmed Farm Supply';
-                badge.style.background = '#dcfce7';
-                badge.style.color = '#15803d';
-              } else {
-                badge.textContent = '⚠️ Unconfirmed Baseline (Set as Default to Confirm)';
-                badge.style.background = '#fee2e2';
-                badge.style.color = '#b91c1c';
-              }
-            }
-          }
-
-          if (data.hasUnrecognizedUnits) {
-            alertBox.appendChild(el('div', { className: 'alert-banner alert-warning' }, [
-              el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
-              el('span', { textContent: 'Warning: Some orders contain unrecognized pack sizes. Please inspect procurement rows.' })
-            ]));
-          }
-
-          empty(tbody);
-          const packKeys = Object.keys(data.packBreakdown || {});
-          if (!packKeys.length) {
-            tbody.appendChild(el('tr', {}, [
-              el('td', { colSpan: '4', style: { padding: '0' } }, [
-                el('div', { className: 'empty-state' }, [
-                  el('div', { className: 'empty-icon' }, ['📈']),
-                  el('div', { className: 'empty-title' }, ['No demand scheduled']),
-                  el('div', { className: 'empty-desc' }, ['No milk subscriptions scheduled for ' + demandState.date + '.'])
-                ])
-              ])
-            ]));
-            return;
-          }
-
-          packKeys.forEach(k => {
-            const count = data.packBreakdown[k];
-            const pName = k.split(' (')[0] || k;
-            const sizeStr = k.match(/\(([^)]+)\)/)?.[1] || 'Standard';
-
-            const tr = el('tr', {}, [
-              el('td', { 'data-col': 'Product', style: { fontWeight: '600' }, textContent: pName }),
-              el('td', { 'data-col': 'Pack Size', textContent: sizeStr }),
-              el('td', { 'data-col': 'Units Scheduled', style: { fontWeight: '700' }, textContent: String(count) }),
-              el('td', { 'data-col': 'Total Volume', textContent: 'Included in daily totals' })
-            ]);
-            tbody.appendChild(tr);
-          });
+          data = await apiRequest('/api/v1/admin/demand-forecast?date=' + demandState.date, { signal });
         } catch (err) {
-          if (err.name === 'AbortError') return;
+          if (err.name === 'AbortError') throw err;
+          renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
           empty(tbody);
           tbody.appendChild(el('tr', {}, [
-            el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading demand: ' + err.message })
+            el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Failed to load demand forecast: ' + err.message })
+          ]));
+          throw err;
+        }
+
+        document.getElementById('demandTotalLitres').textContent = (data.totalLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandCowLitres').textContent = (data.cowMilkLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandBuffaloLitres').textContent = (data.buffaloMilkLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandTotalDeliveries').textContent = String(data.totalDeliveries || 0);
+
+        if (data.capacity && typeof data.capacity === 'object' && (data.capacity.cow || data.capacity.buffalo)) {
+          renderCapacityAvailable(data.capacity);
+        } else {
+          renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+        }
+
+        if (data.hasUnrecognizedUnits) {
+          alertBox.appendChild(el('div', { className: 'alert-banner alert-warning' }, [
+            el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
+            el('span', { textContent: 'Warning: Some orders contain unrecognized pack sizes. Please inspect procurement rows.' })
           ]));
         }
+
+        empty(tbody);
+        const packKeys = Object.keys(data.packBreakdown || {});
+        if (!packKeys.length) {
+          tbody.appendChild(el('tr', {}, [
+            el('td', { colSpan: '4', style: { padding: '0' } }, [
+              el('div', { className: 'empty-state' }, [
+                el('div', { className: 'empty-icon' }, ['📈']),
+                el('div', { className: 'empty-title' }, ['No demand scheduled']),
+                el('div', { className: 'empty-desc' }, ['No milk subscriptions scheduled for ' + demandState.date + '.'])
+              ])
+            ])
+          ]));
+          return;
+        }
+
+        packKeys.forEach(k => {
+          const count = data.packBreakdown[k];
+          const pName = k.split(' (')[0] || k;
+          const sizeStr = k.match(/\(([^)]+)\)/)?.[1] || 'Standard';
+
+          const tr = el('tr', {}, [
+            el('td', { 'data-col': 'Product', style: { fontWeight: '600' }, textContent: pName }),
+            el('td', { 'data-col': 'Pack Size', textContent: sizeStr }),
+            el('td', { 'data-col': 'Units Scheduled', style: { fontWeight: '700' }, textContent: String(count) }),
+            el('td', { 'data-col': 'Total Volume', textContent: 'Included in daily totals' })
+          ]);
+          tbody.appendChild(tr);
+        });
       }
 
 // Store Products & Practical Inventory Management
@@ -5747,6 +5918,7 @@
             btnSubTabMilkDemand.style.color = '#475569';
             document.getElementById('subViewStoreProducts').classList.remove('hidden');
             document.getElementById('subViewMilkDemand').classList.add('hidden');
+            refreshManager.updateUI();
             loadProducts();
           });
         }
@@ -5759,6 +5931,7 @@
             btnSubTabProducts.style.color = '#475569';
             document.getElementById('subViewMilkDemand').classList.remove('hidden');
             document.getElementById('subViewStoreProducts').classList.add('hidden');
+            refreshManager.updateUI();
             loadDemand();
           });
         }
@@ -5773,11 +5946,19 @@
           capFeedback.textContent = msg;
           capFeedback.style.color = isError ? '#dc2626' : '#16a34a';
           capFeedback.style.display = 'block';
-          setTimeout(() => { if (capFeedback) capFeedback.style.display = 'none'; }, 4000);
+          if (!isError || capacityApiAvailable) {
+            setTimeout(() => {
+              if (capFeedback && capacityApiAvailable) capFeedback.style.display = 'none';
+            }, 4000);
+          }
         }
 
         if (btnSaveCapOverride) {
           btnSaveCapOverride.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
             const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
             const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
             const notes = document.getElementById('inputCapacityNotes')?.value || '';
@@ -5797,9 +5978,14 @@
               showCapFeedback('Daily capacity updated for ' + targetDate + '!', false);
               await loadDemand();
             } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
               showCapFeedback('Error updating capacity: ' + err.message, true);
             } finally {
-              btnSaveCapOverride.disabled = false;
+              if (capacityApiAvailable) {
+                btnSaveCapOverride.disabled = false;
+              }
               btnSaveCapOverride.textContent = 'Save for Date';
             }
           });
@@ -5807,6 +5993,10 @@
 
         if (btnSaveCapDefaults) {
           btnSaveCapDefaults.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
             const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
             const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
             if (isNaN(cowVal) || isNaN(bufVal)) {
@@ -5824,9 +6014,14 @@
               showCapFeedback('Baseline default capacities updated and confirmed!', false);
               await loadDemand();
             } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
               showCapFeedback('Error saving defaults: ' + err.message, true);
             } finally {
-              btnSaveCapDefaults.disabled = false;
+              if (capacityApiAvailable) {
+                btnSaveCapDefaults.disabled = false;
+              }
               btnSaveCapDefaults.textContent = 'Set as Default';
             }
           });
@@ -5835,6 +6030,10 @@
         const btnConfirm = document.getElementById('btnConfirmSupply');
         if (btnConfirm) {
           btnConfirm.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
             try {
               btnConfirm.disabled = true;
               btnConfirm.textContent = 'Confirming...';
@@ -5842,9 +6041,14 @@
               showCapFeedback('Farm supply capacity baseline confirmed! Sales enabled.', false);
               await loadDemand();
             } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
               showCapFeedback('Error confirming capacity: ' + err.message, true);
             } finally {
-              btnConfirm.disabled = false;
+              if (capacityApiAvailable) {
+                btnConfirm.disabled = false;
+              }
               btnConfirm.textContent = 'Confirm Baseline';
             }
           });
