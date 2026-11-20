@@ -89,6 +89,13 @@ describe('Milvanta Real PostgreSQL Delivery Calendar & Concurrency Integration S
       ]
     );
     subscriptionId = subRes.rows[0].id;
+
+    // Vacation/resume tests model an owner-confirmed farm supply.
+    // Never bypass production capacity verification; seed only the
+    // isolated test schema so valid paid subscriptions can resume.
+    await pool.query(
+      "UPDATE milk_capacity_defaults SET is_confirmed = TRUE, confirmed_at = NOW(), daily_litres = 100 WHERE milk_type IN ('cow', 'buffalo')"
+    );
   });
 
   after(async () => {
