@@ -485,7 +485,7 @@ describe('Milvanta Operations Hardening & PostgreSQL Regression Suite', () => {
       assert.strictEqual(meta.recognized, false);
 
       // Strict mode throws
-      assert.throws(() => parseMilkVolumeInLitres('3 cartons', 1, { strict: true }), /unrecognized_milk_pack_format/);
+      assert.throws(() => parseMilkVolumeInLitres('3 cartons', 1, { strict: true }), /unrecognized_milk_volume_unit/);
     });
 
     it('GET /api/v1/admin/demand-forecast and /export flag orders with unrecognized units', async () => {
