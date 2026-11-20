@@ -79,6 +79,13 @@ import {
   updateDeliveryStatus,
   getTomorrowDeliveryDateYMD
 } from './services/deliveryEngine.js';
+import {
+  getMilkCapacity,
+  reserveMilkCapacityForOrder,
+  checkSubscriptionCapacity,
+  calculateItemMilkLitres,
+  identifyMilkType
+} from './services/milkCapacityService.js';
 import { getDeliveryCronTarget, isValidDeliveryWorkerSecret, verifyDeliveryWorkerSecret } from './services/deliveryCronPolicy.js';
 
 const { Pool } = pg;
@@ -1657,7 +1664,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           totalAmount: calculatedTotalAmountPaise,
           dailyRate: dailyRatePaise / 100,
           totalDays,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD(),
           startOffset: offset,
           planId: oldSub.razorpay_plan_id
         };
@@ -1668,6 +1675,33 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
         error: 'existing_subscription_pending_reconciliation',
         message: 'A previous subscription authorization is still pending. Please complete or resolve it with Milvanta support before starting another.'
       });
+    }
+
+    // Check daily milk subscription capacity across entire plan duration
+    try {
+      const subMilkType = identifyMilkType(product.name) || 'cow';
+      const litresPerDay = parseLitresFromSize(normalizedSize);
+      const subStartDate = offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD();
+      await checkSubscriptionCapacity(checkoutClient, {
+        startDate: subStartDate,
+        durationDays: totalDays,
+        milkType: subMilkType,
+        litresPerDay
+      });
+    } catch (capErr) {
+      await checkoutClient.query('ROLLBACK');
+      checkoutTransactionOpen = false;
+      if (capErr.code === 'INSUFFICIENT_CAPACITY' || capErr.code === 'UNCONFIRMED_CAPACITY') {
+        return reply.code(409).send({
+          error: capErr.code === 'UNCONFIRMED_CAPACITY' ? 'unconfirmed_capacity' : 'insufficient_capacity',
+          milkType: capErr.milkType,
+          requested: capErr.requested,
+          remaining: capErr.remaining,
+          exhaustedDate: capErr.exhaustedDate,
+          message: capErr.message
+        });
+      }
+      throw capErr;
     }
 
     subscriptionCreationStage = 'plan_create';
@@ -1748,7 +1782,7 @@ app.post('/api/v1/subscriptions/razorpay-checkout', { preHandler: app.authentica
           months,
           days: totalDays,
           startOffset: offset,
-          startDate: offset > 0 ? futureStartDateYMD : null,
+          startDate: offset > 0 ? futureStartDateYMD : getTomorrowDeliveryDateYMD(),
           start_at: startAtTimestamp,
           dailyRatePaise,
           amountPerMonthPaise,
@@ -3228,18 +3262,7 @@ app.post('/api/v1/subscriptions/:id/pause', { preHandler: app.authenticate }, as
     return reply.code(result.statusCode || 400).send(result);
   }
 
-  const { rows: [deliveryRow] } = await pool.query(
-    'SELECT * FROM subscription_delivery_orders WHERE id = $1',
-    [deliveryOrderId]
-  );
-  if (deliveryRow && deliveryRow.failed_reason) {
-    deliveryRow.failure_reason = deliveryRow.failed_reason;
-  }
-
-  return reply.send({
-    ...result,
-    delivery: deliveryRow
-  });
+  return reply.send(result);
 });
 
 app.post('/api/v1/subscriptions/:id/resume', { preHandler: app.authenticate }, async (request, reply) => {
@@ -3256,15 +3279,7 @@ app.post('/api/v1/subscriptions/:id/resume', { preHandler: app.authenticate }, a
     return reply.code(result.statusCode || 400).send(result);
   }
 
-  const { rows: [deliveryRow] } = await pool.query(
-    'SELECT * FROM subscription_delivery_orders WHERE id = $1',
-    [deliveryOrderId]
-  );
-
-  return reply.send({
-    ...result,
-    delivery: deliveryRow
-  });
+  return reply.send(result);
 });
 
 app.post('/api/v1/subscriptions/:id/skip-date', { preHandler: app.authenticate }, async (request, reply) => {
@@ -3506,6 +3521,7 @@ app.post('/api/v1/orders', {
   }
   const address = safeAddress(request.body?.address);
   const items = request.body?.items;
+  const rawDeliveryDate = request.body?.deliveryDate || request.body?.delivery_date;
   if (!address || !Array.isArray(items) || items.length < 1 || items.length > 50) return reply.code(400).send({ error: 'invalid_checkout' });
   const idempotencyKey = request.headers['idempotency-key'] || request.body?.idempotencyKey;
   if (typeof idempotencyKey !== 'string' || !/^[0-9a-f-]{36}$/i.test(idempotencyKey)) return reply.code(400).send({ error: 'missing_idempotency_key' });
@@ -3639,10 +3655,43 @@ app.post('/api/v1/orders', {
       return reply.code(400).send({ error: 'invalid_order_total' });
     }
 
+    // Real milk daily capacity check & transactional reservation
+    let capacityReservation;
+    try {
+      capacityReservation = await reserveMilkCapacityForOrder(client, {
+        deliveryDate: rawDeliveryDate,
+        items: orderLines.map(l => {
+          const product = productById.get(l.productId);
+          return {
+            productId: l.productId,
+            quantity: l.quantity,
+            size: l.metadata?.variant?.size || l.metadata?.size || product?.selling_unit,
+            unit: l.metadata?.variant?.size || l.metadata?.size || product?.selling_unit,
+            name: l.metadata?.name || product?.name || '',
+            category: l.metadata?.category || product?.category || ''
+          };
+        })
+      });
+    } catch (capErr) {
+      await client.query('ROLLBACK');
+      if (capErr.code === 'INSUFFICIENT_CAPACITY' || capErr.code === 'UNCONFIRMED_CAPACITY') {
+        return reply.code(409).send({
+          error: capErr.code === 'UNCONFIRMED_CAPACITY' ? 'unconfirmed_capacity' : 'insufficient_capacity',
+          milkType: capErr.milkType,
+          requested: capErr.requested,
+          remaining: capErr.remaining,
+          deliveryDate: capErr.deliveryDate,
+          message: capErr.message
+        });
+      }
+      throw capErr;
+    }
+    const orderDeliveryDate = capacityReservation?.deliveryDate || null;
+
     const inserted = await client.query(
-      `INSERT INTO customer_orders (customer_id, idempotency_key, address, items, subtotal_paise, delivery_charge_paise, total_paise, reservation_expires_at)
-       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, NOW() + INTERVAL '15 minutes') RETURNING id, created_at`,
-      [request.customer.id, idempotencyKey, JSON.stringify(address), JSON.stringify(orderItems), subtotal, finalDeliveryCharge, total]
+      `INSERT INTO customer_orders (customer_id, idempotency_key, address, items, subtotal_paise, delivery_charge_paise, total_paise, delivery_date, reservation_expires_at)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6, $7, $8, NOW() + INTERVAL '15 minutes') RETURNING id, created_at`,
+      [request.customer.id, idempotencyKey, JSON.stringify(address), JSON.stringify(orderItems), subtotal, finalDeliveryCharge, total, orderDeliveryDate]
     );
     const row = inserted.rows[0];
     const addressFingerprint = digest(JSON.stringify(address));
@@ -3717,13 +3766,27 @@ app.post('/api/v1/orders', {
   }
 });
 
+// Include the customer's latest refund request beside every order so Order
+// History can show its status without exposing internal review notes or making
+// the browser fetch admin-only refund records.
+const CUSTOMER_ORDER_WITH_REFUND = `
+  SELECT co.order_number, co.items, co.address, co.subtotal_paise, co.delivery_charge_paise, co.total_paise,
+         co.order_status, co.payment_status, co.courier_name, co.tracking_number, co.estimated_delivery, co.delivery_date::text AS delivery_date, co.created_at,
+         rr.request_number AS refund_request_number, rr.status AS refund_status,
+         rr.requested_amount_paise AS refund_requested_amount_paise, rr.created_at AS refund_requested_at
+  FROM customer_orders co
+  LEFT JOIN LATERAL (
+    SELECT request_number, status, requested_amount_paise, created_at
+    FROM refund_requests
+    WHERE order_id = co.id AND customer_id = $1 AND request_type = 'order'
+    ORDER BY created_at DESC, id DESC LIMIT 1
+  ) rr ON TRUE`;
+
 app.get('/api/v1/orders', { preHandler: app.authenticate }, async (request) => {
   const { rows } = await pool.query(
-    `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise,
-            order_status, payment_status, courier_name, tracking_number, estimated_delivery, created_at
-     FROM customer_orders
-     WHERE customer_id = $1 AND order_status != 'cancelled'
-     ORDER BY created_at DESC LIMIT 50`,
+    CUSTOMER_ORDER_WITH_REFUND + `
+     WHERE co.customer_id = $1
+     ORDER BY co.created_at DESC LIMIT 50`,
     [request.customer.id]
   );
   return { orders: rows };
@@ -3731,9 +3794,8 @@ app.get('/api/v1/orders', { preHandler: app.authenticate }, async (request) => {
 
 app.get('/api/v1/orders/:orderNumber', { preHandler: app.authenticate }, async (request, reply) => {
   const { rows } = await pool.query(
-    `SELECT order_number, items, address, subtotal_paise, delivery_charge_paise, total_paise,
-            order_status, payment_status, courier_name, tracking_number, estimated_delivery, created_at
-     FROM customer_orders WHERE customer_id = $1 AND order_number = $2`,
+    CUSTOMER_ORDER_WITH_REFUND + `
+     WHERE co.customer_id = $1 AND co.order_number = $2`,
     [request.customer.id, request.params.orderNumber]
   );
   if (!rows[0]) return reply.code(404).send({ error: 'order_not_found' });
@@ -4724,70 +4786,10 @@ app.get('/api/v1/admin/stats', { preHandler: app.requireAdmin }, async (request,
 });
 
 /**
- * Authoritative Milk Volume Parser in Litres
+ * Re-export pure milk volume parser from milkCapacityService
  * Supports 500ml, 1L, 1.5L, 2L, etc., normalized with quantityNum
  */
-export function parseMilkVolumeInLitres(quantityStr, quantityNum = 1, options = {}) {
-  const qNum = Math.max(1, Number(quantityNum) || 1);
-  const returnObj = Boolean(options.returnObject || options.returnMetadata);
-  if (!quantityStr || typeof quantityStr !== 'string') {
-    if (options.strict) throw new Error('invalid_quantity_unit: empty or non-string quantity');
-    return returnObj ? { litres: 0, recognized: false, unit: quantityStr || '' } : 0;
-  }
-
-  const str = quantityStr.trim().toLowerCase();
-
-  // 1. Millilitres (e.g., 250ml, 500ml, 1000ml, 1500ml)
-  const mlMatch = str.match(/^(\d+(?:\.\d+)?)\s*ml(?:\s*(?:pouch|bottle|pack))?$/i) ||
-                  str.match(/(\d+(?:\.\d+)?)\s*ml\b/i);
-  if (mlMatch) {
-    const ml = parseFloat(mlMatch[1]);
-    if (!isNaN(ml) && ml > 0) {
-      const litres = (ml / 1000) * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // 2. Litres (e.g., 1L, 1.5L, 2 Litre, 2.5 Litres, 0.5 Litre, 5 Litre)
-  const lMatch = str.match(/^(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)(?:\s*(?:bottle|pouch|pack))?$/i) ||
-                 str.match(/(\d+(?:\.\d+)?)\s*(?:l\b|litre|liter|ltr)/i);
-  if (lMatch) {
-    const l = parseFloat(lMatch[1]);
-    if (!isNaN(l) && l > 0) {
-      const litres = l * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // 3. Known text fractions (e.g., "half litre", "1/2 litre")
-  if (str.includes('half') || str.includes('1/2')) {
-    const litres = 0.5 * qNum;
-    return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-  }
-
-  // 4. Raw numeric values
-  const numMatch = str.match(/^(\d+(?:\.\d+)?)$/);
-  if (numMatch) {
-    const val = parseFloat(numMatch[1]);
-    if (val >= 100) {
-      const litres = (val / 1000) * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-    if (val > 0) {
-      const litres = val * qNum;
-      return returnObj ? { litres, recognized: true, unit: quantityStr } : litres;
-    }
-  }
-
-  // Unrecognized unit: DO NOT silently assume 500ml!
-  if (options.strict) {
-    const err = new Error(`unrecognized_milk_pack_format / unit: "${quantityStr}"`);
-    err.statusCode = 400;
-    throw err;
-  }
-
-  return returnObj ? { litres: 0, recognized: false, unit: quantityStr } : 0;
-}
+export { parseMilkVolumeInLitres } from './services/milkCapacityService.js';
 
 // ---------- Admin Customer Management ----------
 app.get('/api/v1/admin/customers', { preHandler: app.requireAdmin }, async (request, reply) => {
@@ -5117,6 +5119,8 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     }
   }
 
+  const capacity = await getMilkCapacity(pool, targetDate);
+
   return reply.send({
     date: targetDate,
     isPreGenerated,
@@ -5127,7 +5131,8 @@ app.get('/api/v1/admin/demand-forecast', { preHandler: app.requireAdmin }, async
     packBreakdown,
     unrecognizedUnits,
     hasUnrecognizedUnits: unrecognizedUnits.length > 0,
-    items: itemsList
+    items: itemsList,
+    capacity
   });
 });
 
@@ -5193,6 +5198,137 @@ app.get('/api/v1/admin/demand-forecast/export', { preHandler: app.requireAdmin }
     .header('Content-Type', 'text/csv; charset=utf-8')
     .header('Content-Disposition', `attachment; filename="milvanta-demand-forecast-${targetDate}.csv"`)
     .send(csvRows.join('\r\n'));
+});
+
+// ---------- Admin Milk Capacity Management Endpoints ----------
+app.get('/api/v1/admin/milk-capacity', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { date } = request.query || {};
+  const capacity = await getMilkCapacity(pool, date);
+  return reply.send({ success: true, capacity });
+});
+
+app.post('/api/v1/admin/milk-capacity/defaults', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { cowLitres, buffaloLitres } = request.body || {};
+  const adminId = request.customer?.id || null;
+
+  if (cowLitres != null) {
+    const cowVal = Math.max(0, Number(cowLitres) || 0);
+    await pool.query(
+      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, is_confirmed, confirmed_at, confirmed_by, updated_at)
+       VALUES ('cow', $1, TRUE, NOW(), $2, NOW())
+       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = EXCLUDED.confirmed_by, updated_at = NOW()`,
+      [cowVal, adminId]
+    );
+  }
+  if (buffaloLitres != null) {
+    const bufVal = Math.max(0, Number(buffaloLitres) || 0);
+    await pool.query(
+      `INSERT INTO milk_capacity_defaults (milk_type, daily_litres, is_confirmed, confirmed_at, confirmed_by, updated_at)
+       VALUES ('buffalo', $1, TRUE, NOW(), $2, NOW())
+       ON CONFLICT (milk_type) DO UPDATE SET daily_litres = EXCLUDED.daily_litres, is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = EXCLUDED.confirmed_by, updated_at = NOW()`,
+      [bufVal, adminId]
+    );
+  }
+  const updated = await getMilkCapacity(pool);
+  return reply.send({ success: true, capacity: updated });
+});
+
+app.post('/api/v1/admin/milk-capacity/confirm', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const adminId = request.customer?.id || null;
+  await pool.query(
+    `UPDATE milk_capacity_defaults SET is_confirmed = TRUE, confirmed_at = NOW(), confirmed_by = $1`,
+    [adminId]
+  );
+  const updated = await getMilkCapacity(pool);
+  return reply.send({ success: true, capacity: updated, message: 'Milk capacity baseline confirmed.' });
+});
+
+app.post('/api/v1/admin/milk-capacity/overrides', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { deliveryDate, milkType, dailyLitres, cowLitres, buffaloLitres, notes } = request.body || {};
+  if (!deliveryDate || !/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) {
+    return reply.code(400).send({ error: 'invalid_delivery_date', message: 'Delivery date must be YYYY-MM-DD' });
+  }
+
+  if (cowLitres != null) {
+    const litres = Math.max(0, Number(cowLitres) || 0);
+    await pool.query(
+      `INSERT INTO milk_daily_capacity_overrides (delivery_date, milk_type, daily_litres, notes, updated_at)
+       VALUES ($1, 'cow', $2, $3, NOW())
+       ON CONFLICT (delivery_date, milk_type) DO UPDATE
+         SET daily_litres = EXCLUDED.daily_litres, notes = EXCLUDED.notes, updated_at = NOW()`,
+      [deliveryDate, litres, notes || null]
+    );
+  }
+  if (buffaloLitres != null) {
+    const litres = Math.max(0, Number(buffaloLitres) || 0);
+    await pool.query(
+      `INSERT INTO milk_daily_capacity_overrides (delivery_date, milk_type, daily_litres, notes, updated_at)
+       VALUES ($1, 'buffalo', $2, $3, NOW())
+       ON CONFLICT (delivery_date, milk_type) DO UPDATE
+         SET daily_litres = EXCLUDED.daily_litres, notes = EXCLUDED.notes, updated_at = NOW()`,
+      [deliveryDate, litres, notes || null]
+    );
+  }
+  if (milkType && dailyLitres != null) {
+    const type = String(milkType).toLowerCase();
+    if (type !== 'cow' && type !== 'buffalo') {
+      return reply.code(400).send({ error: 'invalid_milk_type', message: 'Milk type must be cow or buffalo' });
+    }
+    const litres = Math.max(0, Number(dailyLitres) || 0);
+    await pool.query(
+      `INSERT INTO milk_daily_capacity_overrides (delivery_date, milk_type, daily_litres, notes, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (delivery_date, milk_type) DO UPDATE
+         SET daily_litres = EXCLUDED.daily_litres, notes = EXCLUDED.notes, updated_at = NOW()`,
+      [deliveryDate, type, litres, notes || null]
+    );
+  }
+  const updatedCapacity = await getMilkCapacity(pool, deliveryDate);
+  return reply.send({ success: true, capacity: updatedCapacity });
+});
+
+app.delete('/api/v1/admin/milk-capacity/overrides/:id', { preHandler: app.requireAdmin }, async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const id = Number(request.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return reply.code(400).send({ error: 'invalid_id' });
+
+  const del = await pool.query('DELETE FROM milk_daily_capacity_overrides WHERE id = $1 RETURNING delivery_date', [id]);
+  if (!del.rows.length) return reply.code(404).send({ error: 'override_not_found' });
+
+  const updatedCapacity = await getMilkCapacity(pool, del.rows[0].delivery_date);
+  return reply.send({ success: true, capacity: updatedCapacity });
+});
+
+// Public read-only milk capacity check for storefront & checkout
+app.get('/api/v1/milk-capacity/available', async (request, reply) => {
+  if (!pool) return reply.code(503).send({ error: 'database_not_configured' });
+  const { date } = request.query || {};
+  const cap = await getMilkCapacity(pool, date);
+  const cowConfirmed = Boolean(cap.cow.isConfirmed);
+  const buffaloConfirmed = Boolean(cap.buffalo.isConfirmed);
+
+  return reply.send({
+    success: true,
+    date: cap.date,
+    capacity: cap,
+    cow: {
+      availableLitres: cap.cow.availableLitres,
+      remainingLitres: cowConfirmed ? cap.cow.remainingLitres : 0,
+      isAvailable: cowConfirmed && cap.cow.remainingLitres > 0,
+      isConfirmed: cowConfirmed
+    },
+    buffalo: {
+      availableLitres: cap.buffalo.availableLitres,
+      remainingLitres: buffaloConfirmed ? cap.buffalo.remainingLitres : 0,
+      isAvailable: buffaloConfirmed && cap.buffalo.remainingLitres > 0,
+      isConfirmed: buffaloConfirmed
+    },
+    totalRemainingLitres: (cowConfirmed ? cap.cow.remainingLitres : 0) + (buffaloConfirmed ? cap.buffalo.remainingLitres : 0)
+  });
 });
 
 // ---------- Admin Business Reports ----------

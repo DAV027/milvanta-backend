@@ -212,12 +212,22 @@
     });
   }
 
+  function getTomorrowDateString() {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    const yr = d.getFullYear();
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    const da = String(d.getDate()).padStart(2, '0');
+    return `${yr}-${mo}-${da}`;
+  }
+
   const state = {
     currentStep: 1,
     cart: [],
     customer: null,
     savedAddresses: [],
     selectedAddressId: null,
+    deliveryDate: getTomorrowDateString(),
     addressDraft: {
       name: '',
       phone: '',
@@ -746,6 +756,16 @@
             <input type="text" class="form-input" id="addrPincode" name="pincode" value="${escapeHtml(state.addressDraft.pincode)}" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" required />
             <div id="pincodeNotice" style="margin-top: 8px;"></div>
           </div>
+
+          <div class="form-group full-width" style="margin-top: 10px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px 14px;">
+            <label class="form-label" for="addrDeliveryDate" style="color: #166534; font-weight: 700; display: block; margin-bottom: 6px;">
+              🥛 Fresh Milk Delivery Date <span style="color:#dc2626;">*</span>
+            </label>
+            <input type="date" class="form-input" id="addrDeliveryDate" name="deliveryDate" value="${escapeHtml(state.deliveryDate || getTomorrowDateString())}" min="${getTomorrowDateString()}" style="background:#fff; max-width: 240px;" required />
+            <span style="font-size: 0.8rem; color: #15803d; display: block; margin-top: 6px;">
+              Direct from farm, chilled below 4°C and delivered fresh between 6:00 AM – 7:00 AM.
+            </span>
+          </div>
         </div>
 
         <p id="step2ErrorMsg" style="color: #b91c1c; font-size: 0.85rem; margin: 4px 0 12px; font-weight: 600;"></p>
@@ -829,6 +849,7 @@
       state.addressDraft.city = 'Hyderabad';
       state.addressDraft.state = 'Telangana';
       state.addressDraft.pincode = pin;
+      state.deliveryDate = $('#addrDeliveryDate')?.value.trim() || getTomorrowDateString();
 
       localStorage.setItem('milvanta-pincode', pin);
       updateHeaderLocation();
@@ -1202,6 +1223,10 @@
           <span class="recap-label">Drop Address</span>
           <span class="recap-val">${escapeHtml(addr.house)}, ${escapeHtml(addr.building)}, ${escapeHtml(addr.street)}${addr.landmark ? `, ${escapeHtml(addr.landmark)}` : ''}, ${escapeHtml(addr.city)} - ${escapeHtml(addr.pincode)}</span>
           <button type="button" class="recap-edit-btn" id="editAddrBtn">Edit</button>
+        </div>
+        <div class="recap-row">
+          <span class="recap-label">Delivery Date</span>
+          <span class="recap-val"><strong>${escapeHtml(state.deliveryDate || getTomorrowDateString())}</strong> · Morning 6:00 AM – 7:00 AM</span>
         </div>
       </div>
 
@@ -1635,6 +1660,7 @@
       // NORMAL PAYMENT: Custom Days Plan or Regular Products
       const orderBody = {
         address: state.addressDraft,
+        deliveryDate: state.deliveryDate || getTomorrowDateString(),
         // Resolve against the authoritative live catalog before reserving stock.
         items: await resolveCheckoutCartAgainstServer()
       };

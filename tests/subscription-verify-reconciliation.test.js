@@ -91,6 +91,13 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
          ($3, $4, 'csrf_b', NOW() + INTERVAL '1 day')`,
       [tokenHashA, customerAId, tokenHashB, customerBId]
     );
+
+    // Explicitly configure and confirm stock for expected successful checkout cases
+    await pool.query(
+      `UPDATE milk_capacity_defaults
+       SET is_confirmed = TRUE, daily_litres = 500, confirmed_at = NOW(), confirmed_by = $1`,
+      [customerAId]
+    );
   });
 
   after(async () => {
@@ -2031,9 +2038,13 @@ describe('Milvanta Subscription Verification, Payment Integrity & Schema Reconci
       let callCount = 0;
       globalThis.fetch = async (url, opts) => {
         if (typeof url === 'string' && url.includes('resend')) {
-          callCount++;
-          await new Promise(r => setTimeout(r, 60));
-          return { ok: true, json: async () => ({ id: `re_concurrent_${Date.now()}` }) };
+          const bodyStr = typeof opts?.body === 'string' ? opts.body : '';
+          if (bodyStr.includes(testPayId)) {
+            callCount++;
+            await new Promise(r => setTimeout(r, 60));
+            return { ok: true, json: async () => ({ id: `re_concurrent_${Date.now()}` }) };
+          }
+          return { ok: true, json: async () => ({ id: `re_other_${Date.now()}` }) };
         }
         return originalFetch(url, opts);
       };

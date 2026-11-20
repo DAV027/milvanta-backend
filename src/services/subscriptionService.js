@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
  */
 
 import { queueNotification } from './notificationService.js';
+import { getMilkCapacity, identifyMilkType, extractSubscriptionDailyLitres, getTomorrowDeliveryDateYMD } from './milkCapacityService.js';
 
 // Cutoff time in IST (20:00 / 8:00 PM)
 export const DAILY_DELIVERY_CUTOFF_HOUR_IST = 20;
@@ -666,6 +667,108 @@ export async function resumeSubscription(pool, { subscriptionId, customerId }) {
 
     // Calculate next delivery date
     const nextDelivery = await calculateNextDeliveryDate(client, subscriptionId);
+
+    // Verify daily capacity before resuming across all applicable remaining delivery dates
+    const datePart = nextDelivery ? nextDelivery.split(',')[0].trim() : null;
+    const targetDateYMD = (datePart && /^\d{4}-\d{2}-\d{2}$/.test(datePart))
+      ? datePart
+      : (datePart === 'Tomorrow' ? formatDateYMD(new Date(istNow.getTime() + 86400000)) : getTomorrowDeliveryDateYMD());
+
+    const milkType = identifyMilkType(sub.product_name) || 'cow';
+    const subLitres = extractSubscriptionDailyLitres(sub.quantity, sub.quantity_num) || 1;
+
+    // Determine the effective paid-through end date of the subscription to verify all applicable remaining dates
+    const effectivePaidThrough = await getEffectivePaidThroughDate(client, sub);
+    const endDateYMD = (effectivePaidThrough && effectivePaidThrough >= targetDateYMD)
+      ? effectivePaidThrough
+      : targetDateYMD;
+
+    // Collect all consecutive remaining delivery dates from targetDateYMD to endDateYMD
+    const [sy, sm, sd] = targetDateYMD.split('-').map(Number);
+    const [ey, em, ed] = endDateYMD.split('-').map(Number);
+    const startDt = new Date(Date.UTC(sy, sm - 1, sd));
+    const endDt = new Date(Date.UTC(ey, em - 1, ed));
+    const diffDays = Math.max(0, Math.round((endDt - startDt) / (24 * 3600 * 1000)));
+    // Cap at 90 days to prevent runaway loops if end date is far in future
+    const checkDays = Math.min(diffDays + 1, 90);
+
+    const datesToCheck = [];
+    for (let i = 0; i < checkDays; i++) {
+      const d = new Date(Date.UTC(sy, sm - 1, sd + i));
+      datesToCheck.push(d.toISOString().slice(0, 10));
+    }
+
+    // Acquire transaction-scoped advisory locks on all dates in strictly ascending chronological order
+    // to eliminate deadlocks with concurrent checkouts and other resumptions
+    for (const dtStr of datesToCheck) {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [`milk_cap_${dtStr}_${milkType}`]
+      );
+    }
+
+    // Deduplication & Capacity Verification:
+    // Fetch any already skipped dates in this window
+    const { rows: skipRows } = await client.query(
+      `SELECT skip_date FROM subscription_skipped_dates
+       WHERE subscription_id = $1 AND skip_date = ANY($2::date[])`,
+      [subscriptionId, datesToCheck]
+    );
+    const skippedSet = new Set(skipRows.map(r => r.skip_date instanceof Date ? r.skip_date.toISOString().slice(0, 10) : String(r.skip_date).slice(0, 10)));
+
+    // Fetch any already generated delivery orders in this window
+    const { rows: pregenRows } = await client.query(
+      `SELECT delivery_date FROM subscription_delivery_orders
+       WHERE subscription_id = $1
+         AND delivery_date = ANY($2::date[])
+         AND status NOT IN ('cancelled', 'failed')`,
+      [subscriptionId, datesToCheck]
+    );
+    const pregenSet = new Set(pregenRows.map(r => r.delivery_date instanceof Date ? r.delivery_date.toISOString().slice(0, 10) : String(r.delivery_date).slice(0, 10)));
+
+    // Verify each applicable remaining date
+    for (const dtStr of datesToCheck) {
+      // If customer explicitly skipped this date, no delivery will occur -> skip check
+      if (skippedSet.has(dtStr)) {
+        continue;
+      }
+
+      // If a delivery order is already generated for this subscription, its volume is ALREADY
+      // committed in subscription_delivery_orders and held in getMilkCapacity() -> no new capacity needed!
+      if (pregenSet.has(dtStr)) {
+        continue;
+      }
+
+      const cap = await getMilkCapacity(client, dtStr);
+
+      // 1. Farm supply must be confirmed by operations
+      if (!cap[milkType].isConfirmed) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'unconfirmed_capacity',
+          statusCode: 409,
+          milkType,
+          deliveryDate: dtStr,
+          message: `Cannot resume subscription: Daily ${milkType === 'buffalo' ? 'Buffalo' : 'Cow'} Milk supply capacity for ${dtStr} has not been confirmed by farm operations. Commitments are paused until verified.`
+        };
+      }
+
+      // 2. Remaining capacity must be sufficient
+      if (cap[milkType].remainingLitres < subLitres) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: 'insufficient_capacity_to_resume',
+          statusCode: 409,
+          milkType,
+          exhaustedDate: dtStr,
+          remainingLitres: cap[milkType].remainingLitres,
+          requiredLitres: subLitres,
+          message: `Cannot resume subscription: capacity on delivery date ${dtStr} is full (${cap[milkType].remainingLitres}L remaining, requires ${subLitres}L).`
+        };
+      }
+    }
 
     // Update status to active
     await client.query(

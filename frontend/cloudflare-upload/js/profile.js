@@ -772,7 +772,12 @@ function formatIstDateTime(isoStr) {
       recipientName,
       recipientPhone,
       address: addrStr,
-      paymentStatus: (row.payment_status || 'paid').toUpperCase(),
+      paymentStatus: (row.payment_status || row.paymentStatus || 'unknown').toUpperCase(),
+      // Only orders returned by the backend are eligible for a gateway refund.
+      isVerifiedStoreOrder: Boolean(row.order_number && row.payment_status === 'paid'),
+      refundStatus: typeof row.refund_status === 'string' ? row.refund_status : null,
+      refundRequestNumber: row.refund_request_number || null,
+      refundRequestedAmountPaise: Number(row.refund_requested_amount_paise) || 0,
       paymentMethod: row.paymentMethod || (isCustomOrder ? 'Paid Online via Razorpay (One-Time Upfront)' : isContinuousOrder ? 'Paid via Subscription Autopay (Razorpay Recurring)' : 'Paid Online via Razorpay'),
       courier: row.courier_name || row.courier || 'Milvanta Cold-Chain Express (Hafeezpet Hub)',
       trackingNum: row.tracking_number || row.trackingNum || `MLV-${id}`,
@@ -931,6 +936,21 @@ function formatIstDateTime(isoStr) {
               <span class="order-total-amount">₹${order.total.toLocaleString('en-IN')}</span>
             </div>
             <div class="order-actions-group">
+              ${!isSubOrder && order.refundStatus ? `
+                <span class="order-refund-status" role="status" style="display:inline-block;padding:7px 11px;border-radius:8px;background:${order.refundStatus === 'processed' || order.refundStatus === 'refunded' ? '#dcfce7;color:#15803d;' : (order.refundStatus === 'rejected' || order.refundStatus === 'failed' ? '#fee2e2;color:#b91c1c;' : '#eff6ff;color:#1e40af;')};font-size:0.8rem;font-weight:600;">
+                  Refund: ${({
+                    pending:'Requested',
+                    under_review:'Under Review',
+                    approved:'Approved',
+                    processing:'Processing',
+                    processed:'Refunded',
+                    refunded:'Refunded',
+                    rejected:'Rejected',
+                    failed:'Failed'
+                  })[order.refundStatus] || 'Requested'}
+                  ${order.refundRequestNumber ? ' · #' + escapeHtml(String(order.refundRequestNumber)) : ''}
+                </span>
+              ` : ''}
               ${isSubOrder ? `
                 <button type="button" class="btn-order-view-sub" data-go-sub-tab="true">
                   <span>📅 View Subscription &amp; Calendar →</span>
@@ -942,8 +962,8 @@ function formatIstDateTime(isoStr) {
                 <button type="button" class="btn-reorder" data-reorder-id="${order.id}">
                   <span>+ Re-order</span>
                 </button>
-                ${(order.paymentStatus === 'paid' || order.status === 'paid' || order.status === 'delivered') ? `
-                  <button type="button" class="btn-order-refund" data-order-refund="${order.id}">
+                ${order.isVerifiedStoreOrder && (!order.refundStatus || order.refundStatus === 'rejected') ? `
+                  <button type="button" class="btn-order-refund" data-order-refund="${escapeHtml(String(order.id))}">
                     <span>↩ Request Refund</span>
                   </button>
                 ` : ''}
@@ -2707,7 +2727,7 @@ function formatIstDateTime(isoStr) {
 
           recalculateOrderRefundTotal();
 
-          $('.refund-item-check').forEach((cb) => {
+          $$('.refund-item-check').forEach((cb) => {
             cb.addEventListener('change', () => {
               const row = cb.closest('.refund-item-row');
               if (row) row.classList.toggle('selected', cb.checked);
@@ -2726,7 +2746,7 @@ function formatIstDateTime(isoStr) {
 
     function recalculateOrderRefundTotal() {
       if (!activeOrderRefundEligibility) return;
-      const checks = $('.refund-item-check');
+      const checks = $$('.refund-item-check');
       let sumPaise = 0;
       checks.forEach((cb) => {
         if (cb.checked) {
@@ -2744,7 +2764,7 @@ function formatIstDateTime(isoStr) {
     }
 
     $('#btnSelectAllRefundItems')?.addEventListener('click', () => {
-      $('.refund-item-check').forEach((cb) => {
+      $$('.refund-item-check').forEach((cb) => {
         cb.checked = true;
         cb.closest('.refund-item-row')?.classList.add('selected');
       });
@@ -2765,7 +2785,7 @@ function formatIstDateTime(isoStr) {
       const notes = $('#orderRefundNotesInput')?.value || '';
 
       const selectedItems = [];
-      $('.refund-item-check').forEach((cb) => {
+      $$('.refund-item-check').forEach((cb) => {
         if (cb.checked) {
           const idx = Number(cb.dataset.itemIdx);
           const item = activeOrderRefundEligibility.items?.[idx];

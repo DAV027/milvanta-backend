@@ -1622,6 +1622,11 @@
       .auth-card {
         padding: 28px 20px 24px;
       }
+
+      .milk-capacity-card {
+        padding: 14px 14px 16px !important;
+        margin-bottom: 14px !important;
+      }
     }
 
     @media (max-width: 480px) {
@@ -1635,6 +1640,11 @@
 
       .modal-content {
         padding: 16px;
+      }
+
+      .milk-capacity-card {
+        padding: 12px 10px 14px !important;
+        margin-bottom: 12px !important;
       }
     }
   </style>
@@ -1783,21 +1793,8 @@
         <button type="button" class="btn-close-drawer" id="btnCloseMobileSidebar" aria-label="Close navigation drawer">&times;</button>
       </div>
 
-      <button type="button" class="nav-item-btn active" id="navBtnOverview">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="3" width="7" height="7"></rect>
-              <rect x="14" y="3" width="7" height="7"></rect>
-              <rect x="14" y="14" width="7" height="7"></rect>
-              <rect x="3" y="14" width="7" height="7"></rect>
-            </svg>
-          </span>
-          <span class="nav-item-text">Overview</span>
-        </div>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnDeliveries">
+            <div style="padding:8px 14px 11px;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;font-weight:700;">Daily operations</div>
+      <button type="button" class="nav-item-btn active" id="navBtnDeliveries">
         <div class="nav-item-left">
           <span class="nav-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1807,9 +1804,36 @@
               <circle cx="18.5" cy="18.5" r="2.5"></circle>
             </svg>
           </span>
-          <span class="nav-item-text">Daily Deliveries</span>
+          <span class="nav-item-text">Today's Deliveries</span>
         </div>
         <span class="nav-badge" id="navCountDeliveries">0</span>
+      </button>
+
+      <button type="button" class="nav-item-btn" id="navBtnDemand">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+          </span>
+          <span class="nav-item-text">Milk Stock</span>
+        </div>
+      </button>
+
+      <button type="button" class="nav-item-btn" id="navBtnOrders">
+        <div class="nav-item-left">
+          <span class="nav-item-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <path d="M16 10a4 4 0 0 1-8 0"></path>
+            </svg>
+          </span>
+          <span class="nav-item-text">Orders</span>
+        </div>
+        <span class="nav-badge" id="navCountOrders">0</span>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnSubscriptions">
@@ -1822,23 +1846,9 @@
               <line x1="3" y1="10" x2="21" y2="10"></line>
             </svg>
           </span>
-          <span class="nav-item-text">Milk Subscriptions</span>
+          <span class="nav-item-text">Subscriptions</span>
         </div>
         <span class="nav-badge" id="navCountSubs">0</span>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnOrders">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
-              <line x1="3" y1="6" x2="21" y2="6"></line>
-              <path d="M16 10a4 4 0 0 1-8 0"></path>
-            </svg>
-          </span>
-          <span class="nav-item-text">Customer Orders</span>
-        </div>
-        <span class="nav-badge" id="navCountOrders">0</span>
       </button>
 
       <button type="button" class="nav-item-btn" id="navBtnRefunds">
@@ -1849,12 +1859,27 @@
               <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
             </svg>
           </span>
-          <span class="nav-item-text">Refund Requests</span>
+          <span class="nav-item-text">Refunds</span>
         </div>
         <span class="nav-badge badge-alert" id="navCountRefunds">0</span>
       </button>
 
-      <button type="button" class="nav-item-btn" id="navBtnCustomers">
+      <details id="adminMoreTools" class="admin-more-tools" style="margin-top:10px;padding:4px;border-top:1px solid #e2e8f0;">
+        <summary style="padding:12px 14px;cursor:pointer;font-size:0.82rem;font-weight:650;color:#475569;">More options</summary>
+        <button type="button" class="nav-item-btn" id="navBtnOverview">
+          <div class="nav-item-left">
+            <span class="nav-item-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+              </svg>
+            </span>
+            <span class="nav-item-text">Analytics &amp; Overview</span>
+          </div>
+        </button>
+        <button type="button" class="nav-item-btn" id="navBtnCustomers">
         <div class="nav-item-left">
           <span class="nav-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1867,21 +1892,7 @@
           <span class="nav-item-text">Customers</span>
         </div>
       </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnDemand">
-        <div class="nav-item-left">
-          <span class="nav-item-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="18" y1="20" x2="18" y2="10"></line>
-              <line x1="12" y1="20" x2="12" y2="4"></line>
-              <line x1="6" y1="20" x2="6" y2="14"></line>
-            </svg>
-          </span>
-          <span class="nav-item-text">Inventory &amp; Demand</span>
-        </div>
-      </button>
-
-      <button type="button" class="nav-item-btn" id="navBtnReports">
+        <button type="button" class="nav-item-btn" id="navBtnReports">
         <div class="nav-item-left">
           <span class="nav-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1895,6 +1906,7 @@
           <span class="nav-item-text">Reports</span>
         </div>
       </button>
+      </details>
 
       <div class="sidebar-footer">
         <!-- Desktop Collapse Sidebar Button -->
@@ -1909,8 +1921,15 @@
     <div class="admin-main-content">
 
       <!-- SECTION 1: OVERVIEW DASHBOARD -->
-      <section id="overviewSection">
+      <section id="overviewSection" class="hidden">
         <div id="overviewDataStatus" role="status" aria-live="polite" class="overview-status-banner">Dashboard values are placeholders until verified backend metrics load.</div>
+        <div class="admin-simple-quicklinks" style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px;">
+          <button type="button" class="btn-filter-preset" data-admin-go="demand">🥛 Update Milk Stock</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="orders">📦 View Orders</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="subscriptions">🔄 Subscriptions</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="deliveries">🚚 Deliveries</button>
+          <button type="button" class="btn-filter-preset" data-admin-go="refunds">↩ Refund Requests</button>
+        </div>
         <div class="filter-bar">
           <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Target Date:</span>
           <button type="button" class="btn-filter-preset active" id="btnDateToday">Today</button>
@@ -2125,7 +2144,7 @@
       </section>
 
       <!-- SECTION 2: DAILY DELIVERIES -->
-      <section id="deliveriesSection" class="hidden">
+      <section id="deliveriesSection">
         <!-- Operations Summary Bar -->
         <div class="delivery-summary-bar">
           <div class="del-stat-box">
@@ -2415,14 +2434,14 @@
 
       <!-- SECTION 7: INVENTORY & DEMAND FORECAST -->
       <section id="demandSection" class="hidden">
-        <!-- Sub-Navigation: Store Products vs Milk Procurement Demand -->
+        <!-- Sub-Navigation: Daily Milk Capacity & Demand vs Packaged Unit Stock -->
         <div class="sub-nav-bar" style="display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">
-          <button type="button" class="btn-sub-tab active" id="btnSubTabProducts" style="background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">📦 Store Products &amp; Stock</button>
-          <button type="button" class="btn-sub-tab" id="btnSubTabMilkDemand" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">🥛 Daily Milk Procurement Demand</button>
+          <button type="button" class="btn-sub-tab active" id="btnSubTabMilkDemand" style="background: #0a3d66; color: #fff; border: none; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">🥛 Daily Milk Stock &amp; Capacity</button>
+          <button type="button" class="btn-sub-tab" id="btnSubTabProducts" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px 16px; font-weight: 700; cursor: pointer;">📦 Packaged Unit Stock</button>
         </div>
 
         <!-- Sub-View 1: Store Products & Inventory Management -->
-        <div id="subViewStoreProducts">
+        <div id="subViewStoreProducts" class="hidden">
           <div class="kpi-grid" style="margin-bottom: 16px;">
             <div class="kpi-card">
               <div class="kpi-label">Total Store Products</div>
@@ -2486,17 +2505,62 @@
           </div>
         </div>
 
-        <!-- Sub-View 2: Daily Milk Procurement Demand -->
-        <div id="subViewMilkDemand" class="hidden">
+        <!-- Sub-View 2: Daily Milk Procurement Demand & Capacity Management -->
+        <div id="subViewMilkDemand">
         <div class="filter-bar">
           <div class="filter-group">
-            <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Forecast Target Date:</span>
+            <span style="font-weight: 600; font-size: 0.85rem; color: #475569;">Operations Date:</span>
             <input type="date" class="filter-input" id="demandDatePicker" aria-label="Demand forecast date" />
           </div>
           <button type="button" class="btn-export" id="btnExportDemand">⬇ Export Forecast (CSV)</button>
         </div>
 
         <div class="alerts-container" id="demandAlertsContainer"></div>
+
+        <!-- Real Daily Milk Capacity Status Cards -->
+        <div class="kpi-grid" style="margin-top: 12px; margin-bottom: 20px;">
+          <div class="kpi-card" style="border-left: 4px solid var(--admin-navy);">
+            <div class="kpi-label">Cow Milk Available Capacity</div>
+            <div class="kpi-value" id="capCowAvailable">--</div>
+            <div class="kpi-sub" id="capCowSub">Committed: <strong id="capCowCommitted">--</strong> | Remaining: <strong id="capCowRemaining" style="color: #64748b;">--</strong></div>
+          </div>
+          <div class="kpi-card" style="border-left: 4px solid var(--admin-purple);">
+            <div class="kpi-label">Buffalo Milk Available Capacity</div>
+            <div class="kpi-value" id="capBuffaloAvailable">--</div>
+            <div class="kpi-sub" id="capBuffaloSub">Committed: <strong id="capBuffaloCommitted">--</strong> | Remaining: <strong id="capBuffaloRemaining" style="color: #64748b;">--</strong></div>
+          </div>
+        </div>
+
+        <!-- Quick Milk Capacity Adjustment Form -->
+        <div class="card milk-capacity-card" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
+            <div>
+              <h3 style="margin: 0; font-size: 1.05rem; font-weight: 700; color: #0f172a;">⚡ Daily Milk Capacity Management</h3>
+              <p style="margin: 4px 0 0; font-size: 0.825rem; color: #64748b;">Set daily available volume in Litres. Transactional checks prevent overselling during checkout and subscriptions.</p>
+            </div>
+            <span id="capSourceBadge" style="font-size: 0.75rem; font-weight: 600; padding: 4px 10px; border-radius: 9999px; background: #f1f5f9; color: #64748b;">Checking…</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; align-items: end;">
+            <div>
+              <label for="inputCowCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Cow Milk Daily (Litres)</label>
+              <input type="number" id="inputCowCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="--" disabled />
+            </div>
+            <div>
+              <label for="inputBuffaloCapacity" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Buffalo Milk Daily (Litres)</label>
+              <input type="number" id="inputBuffaloCapacity" step="0.5" min="0" class="filter-input" style="width: 100%; font-weight: 600;" placeholder="--" disabled />
+            </div>
+            <div>
+              <label for="inputCapacityNotes" style="display: block; font-size: 0.8rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Adjustment Reason / Notes</label>
+              <input type="text" id="inputCapacityNotes" class="filter-input" style="width: 100%;" placeholder="e.g. Festival morning extra supply" disabled />
+            </div>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button type="button" class="btn-primary-ops" id="btnSaveCapacityOverride" style="flex: 1; white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" disabled>Save for Date</button>
+              <button type="button" class="btn-export" id="btnSaveCapacityDefaults" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" title="Save as permanent baseline default" disabled>Set as Default</button>
+              <button type="button" class="btn-export" id="btnConfirmSupply" style="white-space: nowrap; padding: 9px 14px; font-size: 0.85rem; opacity: 0.55; cursor: not-allowed;" title="Confirm baseline farm capacity to open sales" disabled>Confirm Baseline</button>
+            </div>
+          </div>
+          <div id="capacityFeedbackMsg" style="margin-top: 10px; font-size: 0.825rem; font-weight: 600; display: none;"></div>
+        </div>
 
         <div class="kpi-grid">
           <div class="kpi-card">
@@ -3084,11 +3148,11 @@
       let pendingCancelOrderId = null;
       let selectedAdjustProduct = null;
       let selectedEditProduct = null;
-      let demandActiveSubTab = 'products';
+      let demandActiveSubTab = 'milk_demand';
       let deliveryPendingAddressFilterActive = false;
       const productState = {
         search: '',
-        category: 'all',
+        category: 'Fresh Milk',
         products: [],
         total: 0
       };
@@ -3141,7 +3205,7 @@
         document.getElementById('modalDeliveryCancel').classList.remove('hidden');
       }
 
-      let activeTab = 'overview';
+      let activeTab = 'deliveries';
       let isSidebarCollapsed = false;
 
       // Safe DOM construction helpers (Zero innerHTML assignments)
@@ -3244,6 +3308,7 @@
       const customerState = { page: 0, limit: 50, total: 0, search: '' };
       const demandState = { date: getTomorrowYMD() };
       const reportState = { from: '', to: getTodayYMD(), type: 'overview' };
+      let capacityApiAvailable = false;
 
       // Consolidated Reliable Auto-Refresh Manager
       const refreshManager = {
@@ -3265,15 +3330,19 @@
             if (syncDot) syncDot.className = 'live-dot dot-expired';
             if (syncLabel) syncLabel.textContent = 'Auth required';
           } else if (this.state === 'error') {
-            timerLabel.textContent = 'Backend unavailable';
+            timerLabel.textContent = (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) ? 'Capacity API unavailable' : 'Backend unavailable';
             if (syncDot) syncDot.className = 'live-dot dot-error';
-            if (syncLabel) syncLabel.textContent = 'Click to retry';
+            if (syncLabel) syncLabel.textContent = (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) ? 'Capacity unavailable' : 'Click to retry';
           } else if (this.state === 'syncing') {
             timerLabel.textContent = 'Syncing...';
             if (syncDot) syncDot.className = 'live-dot dot-syncing';
           } else if (this.state === 'paused') {
             timerLabel.textContent = 'Auto-refresh paused';
             if (syncDot) syncDot.className = 'live-dot dot-paused';
+          } else if (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) {
+            timerLabel.textContent = 'Capacity API unavailable';
+            if (syncDot) syncDot.className = 'live-dot dot-error';
+            if (syncLabel) syncLabel.textContent = 'Capacity unavailable';
           } else {
             timerLabel.textContent = 'Auto-refresh (' + this.secondsLeft + 's)';
             if (syncDot) syncDot.className = 'live-dot';
@@ -3358,6 +3427,14 @@
 
             // A replaced, aborted or signed-out refresh must not report success.
             if (signal.aborted || this.activeController !== controller) return;
+
+            if (activeTab === 'demand' && demandActiveSubTab !== 'products' && !capacityApiAvailable) {
+              this.state = 'error';
+              this.secondsLeft = 30;
+              this.updateUI();
+              return;
+            }
+
             this.lastSuccessTime = formatISTTimeOnly();
             this.state = 'idle';
             this.secondsLeft = 30;
@@ -3432,7 +3509,10 @@
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           assertCurrentAdmin();
-          throw new Error(err.message || err.error || ('HTTP ' + res.status));
+          const apiErr = new Error(err.message || err.error || ('HTTP ' + res.status));
+          apiErr.status = res.status;
+          apiErr.data = err;
+          throw apiErr;
         }
 
         const contentType = res.headers.get('content-type') || '';
@@ -3478,13 +3558,13 @@
 
       // Tab Switching
       const tabs = [
-        { id: 'overview', navBtn: 'navBtnOverview', section: 'overviewSection' },
         { id: 'deliveries', navBtn: 'navBtnDeliveries', section: 'deliveriesSection' },
-        { id: 'subscriptions', navBtn: 'navBtnSubscriptions', section: 'subscriptionsSection' },
-        { id: 'orders', navBtn: 'navBtnOrders', section: 'ordersSection' },
-        { id: 'refunds', navBtn: 'navBtnRefunds', section: 'refundsSection' },
-        { id: 'customers', navBtn: 'navBtnCustomers', section: 'customersSection' },
         { id: 'demand', navBtn: 'navBtnDemand', section: 'demandSection' },
+        { id: 'orders', navBtn: 'navBtnOrders', section: 'ordersSection' },
+        { id: 'subscriptions', navBtn: 'navBtnSubscriptions', section: 'subscriptionsSection' },
+        { id: 'refunds', navBtn: 'navBtnRefunds', section: 'refundsSection' },
+        { id: 'overview', navBtn: 'navBtnOverview', section: 'overviewSection' },
+        { id: 'customers', navBtn: 'navBtnCustomers', section: 'customersSection' },
         { id: 'reports', navBtn: 'navBtnReports', section: 'reportsSection' }
       ];
 
@@ -3517,6 +3597,8 @@
 
         // Close mobile drawer on navigation
         closeMobileSidebar();
+
+        refreshManager.updateUI();
 
         // Load active tab data
         loadActiveTabData();
@@ -4630,6 +4712,203 @@
         }
       }
 
+      function renderCapacityUnavailable(customMsg) {
+        capacityApiAvailable = false;
+        const msg = customMsg || 'Milk inventory management is not available on the deployed backend. Please contact the administrator.';
+
+        const elCowAvail = document.getElementById('capCowAvailable');
+        if (elCowAvail) elCowAvail.textContent = '--';
+        const elCowComm = document.getElementById('capCowCommitted');
+        if (elCowComm) elCowComm.textContent = '--';
+        const elCowRem = document.getElementById('capCowRemaining');
+        if (elCowRem) {
+          elCowRem.textContent = '--';
+          elCowRem.style.color = '#64748b';
+        }
+
+        const elBufAvail = document.getElementById('capBuffaloAvailable');
+        if (elBufAvail) elBufAvail.textContent = '--';
+        const elBufComm = document.getElementById('capBuffaloCommitted');
+        if (elBufComm) elBufComm.textContent = '--';
+        const elBufRem = document.getElementById('capBuffaloRemaining');
+        if (elBufRem) {
+          elBufRem.textContent = '--';
+          elBufRem.style.color = '#64748b';
+        }
+
+        const inputCow = document.getElementById('inputCowCapacity');
+        if (inputCow) {
+          inputCow.value = '';
+          inputCow.placeholder = '--';
+          inputCow.disabled = true;
+        }
+        const inputBuf = document.getElementById('inputBuffaloCapacity');
+        if (inputBuf) {
+          inputBuf.value = '';
+          inputBuf.placeholder = '--';
+          inputBuf.disabled = true;
+        }
+        const inputNotes = document.getElementById('inputCapacityNotes');
+        if (inputNotes) {
+          inputNotes.value = '';
+          inputNotes.placeholder = 'Milk inventory management is not available on the deployed backend';
+          inputNotes.disabled = true;
+        }
+
+        const btnOverride = document.getElementById('btnSaveCapacityOverride');
+        if (btnOverride) {
+          btnOverride.disabled = true;
+          btnOverride.title = msg;
+          btnOverride.style.opacity = '0.55';
+          btnOverride.style.cursor = 'not-allowed';
+        }
+        const btnDefaults = document.getElementById('btnSaveCapacityDefaults');
+        if (btnDefaults) {
+          btnDefaults.disabled = true;
+          btnDefaults.title = msg;
+          btnDefaults.style.opacity = '0.55';
+          btnDefaults.style.cursor = 'not-allowed';
+        }
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.disabled = true;
+          btnConfirm.title = msg;
+          btnConfirm.style.opacity = '0.55';
+          btnConfirm.style.cursor = 'not-allowed';
+        }
+
+        const badge = document.getElementById('capSourceBadge');
+        if (badge) {
+          badge.textContent = '⚠️ API Unavailable';
+          badge.style.background = '#fee2e2';
+          badge.style.color = '#b91c1c';
+        }
+
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+        if (capFeedback) {
+          capFeedback.textContent = msg;
+          capFeedback.style.color = '#dc2626';
+          capFeedback.style.display = 'block';
+        }
+
+        const alertBox = document.getElementById('demandAlertsContainer');
+        if (alertBox) {
+          let alertEl = document.getElementById('capacityUnavailableAlert');
+          if (!alertEl) {
+            alertEl = el('div', { id: 'capacityUnavailableAlert', className: 'alert-banner alert-danger', style: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' } }, [
+              el('span', { style: { fontSize: '1.25rem' } }, ['⚠️']),
+              el('span', { style: { fontWeight: '600' }, textContent: msg })
+            ]);
+            alertBox.prepend(alertEl);
+          } else {
+            alertEl.lastChild.textContent = msg;
+          }
+        }
+
+        if (activeTab === 'demand' && demandActiveSubTab !== 'products') {
+          refreshManager.state = 'error';
+          refreshManager.updateUI();
+        }
+      }
+
+      function renderCapacityAvailable(cap) {
+        capacityApiAvailable = true;
+
+        const alertEl = document.getElementById('capacityUnavailableAlert');
+        if (alertEl) alertEl.remove();
+
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+        if (capFeedback && capFeedback.textContent.includes('not available')) {
+          capFeedback.style.display = 'none';
+        }
+
+        const cowAvail = cap.cow ? Number(cap.cow.total || 0) : 0;
+        const cowComm = cap.cow ? Number(cap.cow.committedTotal || 0) : 0;
+        const cowRem = cap.cow ? Number(cap.cow.remaining || 0) : 0;
+        const bufAvail = cap.buffalo ? Number(cap.buffalo.total || 0) : 0;
+        const bufComm = cap.buffalo ? Number(cap.buffalo.committedTotal || 0) : 0;
+        const bufRem = cap.buffalo ? Number(cap.buffalo.remaining || 0) : 0;
+
+        const elCowAvail = document.getElementById('capCowAvailable');
+        if (elCowAvail) elCowAvail.textContent = cowAvail.toFixed(2) + ' L';
+        const elCowComm = document.getElementById('capCowCommitted');
+        if (elCowComm) elCowComm.textContent = cowComm.toFixed(2) + ' L';
+        const elCowRem = document.getElementById('capCowRemaining');
+        if (elCowRem) {
+          elCowRem.textContent = cowRem.toFixed(2) + ' L';
+          elCowRem.style.color = cowRem <= 0 ? '#dc2626' : (cowRem < 15 ? '#d97706' : '#16a34a');
+        }
+
+        const elBufAvail = document.getElementById('capBuffaloAvailable');
+        if (elBufAvail) elBufAvail.textContent = bufAvail.toFixed(2) + ' L';
+        const elBufComm = document.getElementById('capBuffaloCommitted');
+        if (elBufComm) elBufComm.textContent = bufComm.toFixed(2) + ' L';
+        const elBufRem = document.getElementById('capBuffaloRemaining');
+        if (elBufRem) {
+          elBufRem.textContent = bufRem.toFixed(2) + ' L';
+          elBufRem.style.color = bufRem <= 0 ? '#dc2626' : (bufRem < 15 ? '#d97706' : '#16a34a');
+        }
+
+        const inputCow = document.getElementById('inputCowCapacity');
+        if (inputCow) {
+          inputCow.disabled = false;
+          inputCow.placeholder = '100.00';
+          if (!inputCow.matches(':focus')) inputCow.value = cowAvail;
+        }
+        const inputBuf = document.getElementById('inputBuffaloCapacity');
+        if (inputBuf) {
+          inputBuf.disabled = false;
+          inputBuf.placeholder = '80.00';
+          if (!inputBuf.matches(':focus')) inputBuf.value = bufAvail;
+        }
+        const inputNotes = document.getElementById('inputCapacityNotes');
+        if (inputNotes) {
+          inputNotes.disabled = false;
+          inputNotes.placeholder = 'e.g. Festival morning extra supply';
+        }
+
+        const btnOverride = document.getElementById('btnSaveCapacityOverride');
+        if (btnOverride) {
+          btnOverride.disabled = false;
+          btnOverride.title = '';
+          btnOverride.style.opacity = '1';
+          btnOverride.style.cursor = 'pointer';
+        }
+        const btnDefaults = document.getElementById('btnSaveCapacityDefaults');
+        if (btnDefaults) {
+          btnDefaults.disabled = false;
+          btnDefaults.title = 'Save as permanent baseline default';
+          btnDefaults.style.opacity = '1';
+          btnDefaults.style.cursor = 'pointer';
+        }
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.disabled = false;
+          btnConfirm.title = 'Confirm baseline farm capacity to open sales';
+          btnConfirm.style.opacity = '1';
+          btnConfirm.style.cursor = 'pointer';
+        }
+
+        const badge = document.getElementById('capSourceBadge');
+        if (badge) {
+          const isOverride = cap.cow?.source === 'override' || cap.buffalo?.source === 'override';
+          const isConfirmed = cap.cow?.isConfirmed && cap.buffalo?.isConfirmed;
+          if (isOverride) {
+            badge.textContent = 'Date-Specific Override';
+            badge.style.background = '#fef3c7';
+            badge.style.color = '#92400e';
+          } else if (isConfirmed) {
+            badge.textContent = '✓ Confirmed Farm Supply';
+            badge.style.background = '#dcfce7';
+            badge.style.color = '#15803d';
+          } else {
+            badge.textContent = '⚠️ Unconfirmed Baseline (Set as Default to Confirm)';
+            badge.style.background = '#fee2e2';
+            badge.style.color = '#b91c1c';
+          }
+        }
+      }
+
       // Demand forecast loader
       async function loadDemand(signal) {
         const tbody = document.getElementById('demandTableBody');
@@ -4639,55 +4918,65 @@
 
         tbody.appendChild(el('tr', {}, [el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px' }, textContent: 'Forecasting dairy inventory requirement...' })]));
 
+        let data;
         try {
-          const data = await apiRequest('/api/v1/admin/demand-forecast?date=' + demandState.date, { signal });
-          document.getElementById('demandTotalLitres').textContent = (data.totalLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandCowLitres').textContent = (data.cowMilkLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandBuffaloLitres').textContent = (data.buffaloMilkLitres || 0).toFixed(2) + ' L';
-          document.getElementById('demandTotalDeliveries').textContent = String(data.totalDeliveries || 0);
-
-          if (data.hasUnrecognizedUnits) {
-            alertBox.appendChild(el('div', { className: 'alert-banner alert-warning' }, [
-              el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
-              el('span', { textContent: 'Warning: Some orders contain unrecognized pack sizes. Please inspect procurement rows.' })
-            ]));
-          }
-
-          empty(tbody);
-          const packKeys = Object.keys(data.packBreakdown || {});
-          if (!packKeys.length) {
-            tbody.appendChild(el('tr', {}, [
-              el('td', { colSpan: '4', style: { padding: '0' } }, [
-                el('div', { className: 'empty-state' }, [
-                  el('div', { className: 'empty-icon' }, ['📈']),
-                  el('div', { className: 'empty-title' }, ['No demand scheduled']),
-                  el('div', { className: 'empty-desc' }, ['No milk subscriptions scheduled for ' + demandState.date + '.'])
-                ])
-              ])
-            ]));
-            return;
-          }
-
-          packKeys.forEach(k => {
-            const count = data.packBreakdown[k];
-            const pName = k.split(' (')[0] || k;
-            const sizeStr = k.match(/\(([^)]+)\)/)?.[1] || 'Standard';
-
-            const tr = el('tr', {}, [
-              el('td', { 'data-col': 'Product', style: { fontWeight: '600' }, textContent: pName }),
-              el('td', { 'data-col': 'Pack Size', textContent: sizeStr }),
-              el('td', { 'data-col': 'Units Scheduled', style: { fontWeight: '700' }, textContent: String(count) }),
-              el('td', { 'data-col': 'Total Volume', textContent: 'Included in daily totals' })
-            ]);
-            tbody.appendChild(tr);
-          });
+          data = await apiRequest('/api/v1/admin/demand-forecast?date=' + demandState.date, { signal });
         } catch (err) {
-          if (err.name === 'AbortError') return;
+          if (err.name === 'AbortError') throw err;
+          renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
           empty(tbody);
           tbody.appendChild(el('tr', {}, [
-            el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Error loading demand: ' + err.message })
+            el('td', { colSpan: '4', style: { textAlign: 'center', padding: '24px', color: '#dc2626' }, textContent: 'Failed to load demand forecast: ' + err.message })
+          ]));
+          throw err;
+        }
+
+        document.getElementById('demandTotalLitres').textContent = (data.totalLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandCowLitres').textContent = (data.cowMilkLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandBuffaloLitres').textContent = (data.buffaloMilkLitres || 0).toFixed(2) + ' L';
+        document.getElementById('demandTotalDeliveries').textContent = String(data.totalDeliveries || 0);
+
+        if (data.capacity && typeof data.capacity === 'object' && (data.capacity.cow || data.capacity.buffalo)) {
+          renderCapacityAvailable(data.capacity);
+        } else {
+          renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+        }
+
+        if (data.hasUnrecognizedUnits) {
+          alertBox.appendChild(el('div', { className: 'alert-banner alert-warning' }, [
+            el('span', { style: { fontSize: '1.2rem' } }, ['⚠️']),
+            el('span', { textContent: 'Warning: Some orders contain unrecognized pack sizes. Please inspect procurement rows.' })
           ]));
         }
+
+        empty(tbody);
+        const packKeys = Object.keys(data.packBreakdown || {});
+        if (!packKeys.length) {
+          tbody.appendChild(el('tr', {}, [
+            el('td', { colSpan: '4', style: { padding: '0' } }, [
+              el('div', { className: 'empty-state' }, [
+                el('div', { className: 'empty-icon' }, ['📈']),
+                el('div', { className: 'empty-title' }, ['No demand scheduled']),
+                el('div', { className: 'empty-desc' }, ['No milk subscriptions scheduled for ' + demandState.date + '.'])
+              ])
+            ])
+          ]));
+          return;
+        }
+
+        packKeys.forEach(k => {
+          const count = data.packBreakdown[k];
+          const pName = k.split(' (')[0] || k;
+          const sizeStr = k.match(/\(([^)]+)\)/)?.[1] || 'Standard';
+
+          const tr = el('tr', {}, [
+            el('td', { 'data-col': 'Product', style: { fontWeight: '600' }, textContent: pName }),
+            el('td', { 'data-col': 'Pack Size', textContent: sizeStr }),
+            el('td', { 'data-col': 'Units Scheduled', style: { fontWeight: '700' }, textContent: String(count) }),
+            el('td', { 'data-col': 'Total Volume', textContent: 'Included in daily totals' })
+          ]);
+          tbody.appendChild(tr);
+        });
       }
 
 // Store Products & Practical Inventory Management
@@ -4701,10 +4990,14 @@
           productState.products = Array.isArray(data.products) ? data.products : [];
           productState.total = data.totalProducts || productState.products.length;
 
-          document.getElementById('kpiTotalProducts').textContent = String(data.totalProducts || 0);
-          document.getElementById('kpiLowStockCount').textContent = String(data.lowStockCount || 0);
-          document.getElementById('kpiOutOfStockCount').textContent = String(data.outOfStockCount || 0);
-          document.getElementById('kpiTotalReserved').textContent = String(data.totalReservedUnits || 0);
+          // Launch dashboard: headline metrics describe milk stock only.
+          // Other products remain in the database for a future catalog rollout.
+          const milk = productState.products.filter(p => p.category === 'Fresh Milk');
+          const available = p => Number(p.available_stock ?? (Number(p.stock_quantity || 0) - Number(p.reserved_stock || 0)));
+          document.getElementById('kpiTotalProducts').textContent = String(milk.length);
+          document.getElementById('kpiLowStockCount').textContent = String(milk.filter(p => available(p) > 0 && available(p) <= Number(p.low_stock_threshold ?? 5)).length);
+          document.getElementById('kpiOutOfStockCount').textContent = String(milk.filter(p => available(p) <= 0).length);
+          document.getElementById('kpiTotalReserved').textContent = String(milk.reduce((n,p)=> n + Number(p.reserved_stock || 0), 0));
 
           renderProductsTable();
         } catch (err) {
@@ -4968,6 +5261,11 @@
           }
         });
 
+        // One-click tasks for operators who only need everyday essentials.
+        document.querySelectorAll('[data-admin-go]').forEach(btn => {
+          btn.addEventListener('click', () => switchTab(btn.dataset.adminGo));
+        });
+
         // Navigation buttons
         tabs.forEach(t => {
           const btn = document.getElementById(t.navBtn);
@@ -5107,7 +5405,7 @@
             document.getElementById('accountDropdownEmail').textContent = adminUser.email || email;
 
             showDashboard();
-            switchTab('overview');
+            switchTab('deliveries');
             refreshManager.start();
           } catch (err) {
             if (loginEpoch !== adminAuthEpoch) return;
@@ -5620,6 +5918,7 @@
             btnSubTabMilkDemand.style.color = '#475569';
             document.getElementById('subViewStoreProducts').classList.remove('hidden');
             document.getElementById('subViewMilkDemand').classList.add('hidden');
+            refreshManager.updateUI();
             loadProducts();
           });
         }
@@ -5632,7 +5931,126 @@
             btnSubTabProducts.style.color = '#475569';
             document.getElementById('subViewMilkDemand').classList.remove('hidden');
             document.getElementById('subViewStoreProducts').classList.add('hidden');
+            refreshManager.updateUI();
             loadDemand();
+          });
+        }
+
+        // Daily Milk Capacity Adjustment Form Handlers
+        const btnSaveCapOverride = document.getElementById('btnSaveCapacityOverride');
+        const btnSaveCapDefaults = document.getElementById('btnSaveCapacityDefaults');
+        const capFeedback = document.getElementById('capacityFeedbackMsg');
+
+        function showCapFeedback(msg, isError) {
+          if (!capFeedback) return;
+          capFeedback.textContent = msg;
+          capFeedback.style.color = isError ? '#dc2626' : '#16a34a';
+          capFeedback.style.display = 'block';
+          if (!isError || capacityApiAvailable) {
+            setTimeout(() => {
+              if (capFeedback && capacityApiAvailable) capFeedback.style.display = 'none';
+            }, 4000);
+          }
+        }
+
+        if (btnSaveCapOverride) {
+          btnSaveCapOverride.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
+            const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
+            const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
+            const notes = document.getElementById('inputCapacityNotes')?.value || '';
+            const targetDate = demandState.date;
+            if (isNaN(cowVal) || isNaN(bufVal)) {
+              showCapFeedback('Please enter valid numeric capacity for both Cow and Buffalo milk.', true);
+              return;
+            }
+            try {
+              btnSaveCapOverride.disabled = true;
+              btnSaveCapOverride.textContent = 'Saving...';
+              await apiRequest('/api/v1/admin/milk-capacity/overrides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deliveryDate: targetDate, cowLitres: cowVal, buffaloLitres: bufVal, notes })
+              });
+              showCapFeedback('Daily capacity updated for ' + targetDate + '!', false);
+              await loadDemand();
+            } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
+              showCapFeedback('Error updating capacity: ' + err.message, true);
+            } finally {
+              if (capacityApiAvailable) {
+                btnSaveCapOverride.disabled = false;
+              }
+              btnSaveCapOverride.textContent = 'Save for Date';
+            }
+          });
+        }
+
+        if (btnSaveCapDefaults) {
+          btnSaveCapDefaults.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
+            const cowVal = parseFloat(document.getElementById('inputCowCapacity')?.value);
+            const bufVal = parseFloat(document.getElementById('inputBuffaloCapacity')?.value);
+            if (isNaN(cowVal) || isNaN(bufVal)) {
+              showCapFeedback('Please enter valid numeric capacity for both Cow and Buffalo milk.', true);
+              return;
+            }
+            try {
+              btnSaveCapDefaults.disabled = true;
+              btnSaveCapDefaults.textContent = 'Saving...';
+              await apiRequest('/api/v1/admin/milk-capacity/defaults', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cowLitres: cowVal, buffaloLitres: bufVal })
+              });
+              showCapFeedback('Baseline default capacities updated and confirmed!', false);
+              await loadDemand();
+            } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
+              showCapFeedback('Error saving defaults: ' + err.message, true);
+            } finally {
+              if (capacityApiAvailable) {
+                btnSaveCapDefaults.disabled = false;
+              }
+              btnSaveCapDefaults.textContent = 'Set as Default';
+            }
+          });
+        }
+
+        const btnConfirm = document.getElementById('btnConfirmSupply');
+        if (btnConfirm) {
+          btnConfirm.addEventListener('click', async () => {
+            if (!capacityApiAvailable) {
+              showCapFeedback('Milk inventory management is not available on the deployed backend. Please contact the administrator.', true);
+              return;
+            }
+            try {
+              btnConfirm.disabled = true;
+              btnConfirm.textContent = 'Confirming...';
+              await apiRequest('/api/v1/admin/milk-capacity/confirm', { method: 'POST' });
+              showCapFeedback('Farm supply capacity baseline confirmed! Sales enabled.', false);
+              await loadDemand();
+            } catch (err) {
+              if (err.status === 404 || (err.message && err.message.includes('404'))) {
+                renderCapacityUnavailable('Milk inventory management is not available on the deployed backend. Please contact the administrator.');
+              }
+              showCapFeedback('Error confirming capacity: ' + err.message, true);
+            } finally {
+              if (capacityApiAvailable) {
+                btnConfirm.disabled = false;
+              }
+              btnConfirm.textContent = 'Confirm Baseline';
+            }
           });
         }
 
@@ -5650,6 +6068,7 @@
         }
         const prodCat = document.getElementById('productCategoryFilter');
         if (prodCat) {
+          prodCat.value = 'Fresh Milk';
           prodCat.addEventListener('change', () => {
             productState.category = prodCat.value;
             renderProductsTable();
@@ -5657,9 +6076,9 @@
         }
         document.getElementById('btnResetProductFilters')?.addEventListener('click', () => {
           productState.search = '';
-          productState.category = 'all';
+          productState.category = 'Fresh Milk';
           if (prodSearch) prodSearch.value = '';
-          if (prodCat) prodCat.value = 'all';
+          if (prodCat) prodCat.value = 'Fresh Milk';
           renderProductsTable();
         });
 
@@ -5921,7 +6340,7 @@
           document.getElementById('accountDropdownEmail').textContent = adminUser.email || '';
 
           showDashboard();
-          switchTab('overview');
+          switchTab('deliveries');
           refreshManager.start();
         } catch {
           if (checkingToken !== currentToken || checkingEpoch !== adminAuthEpoch) return;

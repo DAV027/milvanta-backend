@@ -29,6 +29,11 @@ await fixture.pool.query(
    VALUES ($1, $2, 'fixture', NOW() + INTERVAL '1 hour')`,
   [crypto.createHash('sha256').update(token).digest('hex'), customer.id]
 );
+await fixture.pool.query(
+  `UPDATE milk_capacity_defaults
+   SET is_confirmed = TRUE, daily_litres = 500, confirmed_at = NOW(), confirmed_by = $1`,
+  [customer.id]
+);
 const {
   resolveItemPricing,
   getMilkDailySubscriptionRatePaise,
