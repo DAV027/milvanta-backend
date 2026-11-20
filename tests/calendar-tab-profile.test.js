@@ -732,6 +732,15 @@ describe('Milvanta Dedicated Delivery Calendar Tab Suite', () => {
       };
 
       const executeQuery = (sql, params = []) => {
+        // Owner-confirmed baseline only for this isolated transactional mock.
+        // Real resumption must keep rejecting unconfirmed stock.
+        if (sql.includes('FROM milk_capacity_defaults')) {
+          return { rows: [
+            { milk_type: 'cow', daily_litres: '100.00', is_confirmed: true },
+            { milk_type: 'buffalo', daily_litres: '100.00', is_confirmed: true }
+          ] };
+        }
+        if (sql.includes('FROM milk_daily_capacity_overrides')) return { rows: [] };
         // SELECT cs.*, c.phone, c.full_name, c.email FROM customer_subscriptions cs JOIN customers c ...
         if (sql.includes('FROM customer_subscriptions cs') && sql.includes('JOIN customers c')) {
           const sub = db.customer_subscriptions.find(s => s.id === params[0] && s.customer_id === params[1]);
